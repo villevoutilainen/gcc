@@ -2,8 +2,9 @@
 // distinct message, aggregate-paren-initialized exactly like
 // d4324-control-object-state.C's labeled("temp diagnostic") -- routes
 // its per-instance message to the real, replaceable
-// ::handle_contract_violation (via invoke_violation_handler) in place of
-// the predicate's own auto-derived condition text, when both
+// ::handle_contract_violation (via invoke_violation_handler) as
+// contract_violation::message, alongside the predicate's own condition
+// text in comment, when both
 // _GLIBCXX_ASSERTIONS and _GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER are
 // defined. The reported semantic is always enforce, regardless of this
 // TU's own -fcontract-evaluation-semantic=observe -- noexcept_assert has
@@ -23,7 +24,9 @@ void
 handle_contract_violation (const sc::contract_violation& v)
 {
   bool ok = v.semantic () == sc::evaluation_semantic::enforce
-	    && __builtin_strcmp (v.comment (), "custom message") == 0;
+	    && __builtin_strcmp (v.comment (), "x >= 0") == 0
+	    && v.message ()
+	    && __builtin_strcmp (v.message (), "custom message") == 0;
   std::exit (ok ? 0 : 1);
 }
 

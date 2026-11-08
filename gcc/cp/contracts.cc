@@ -6474,6 +6474,10 @@ maybe_replace_d4324_violation_handler_call (tree call_expr, tree fn)
   tree mode_arg = CALL_EXPR_ARG (call_expr, 2);
   tree comment_arg = CALL_EXPR_ARG (call_expr, 3);
   tree loc_arg = CALL_EXPR_ARG (call_expr, 4);
+  /* The control object's message, if any (assertion_info::message).  */
+  tree message_arg = (call_expr_nargs (call_expr) > 5
+		      ? CALL_EXPR_ARG (call_expr, 5)
+		      : build_zero_cst (const_string_type_node));
 
   /* Extract the real std::source_location argument's single pointer-typed
      field (named _M_impl in libstdc++) -- the same layout-compatible,
@@ -6502,15 +6506,17 @@ maybe_replace_d4324_violation_handler_call (tree call_expr, tree fn)
   tree f4 = next_aggregate_field (DECL_CHAIN (f3));
   tree f5 = next_aggregate_field (DECL_CHAIN (f4));
   tree f6 = next_aggregate_field (DECL_CHAIN (f5));
+  tree f7 = next_aggregate_field (DECL_CHAIN (f6));
   tree ctor = build_constructor_va
-    (builtin_contract_violation_type, 7,
-     f0, build_int_cst (uint16_type_node, 1), /* _M_version.  */
+    (builtin_contract_violation_type, 8,
+     f0, build_int_cst (uint16_type_node, 2), /* _M_version.  */
      f1, fold_convert (TREE_TYPE (f1), kind_arg),
      f2, fold_convert (TREE_TYPE (f2), semantic_arg),
      f3, fold_convert (TREE_TYPE (f3), mode_arg),
      f4, comment_arg,
      f5, fold_convert (TREE_TYPE (f5), src_loc_impl_ptr),
-     f6, build_zero_cst (nullptr_type_node)); /* __vendor_ext.  */
+     f6, build_zero_cst (nullptr_type_node), /* __vendor_ext.  */
+     f7, fold_convert (TREE_TYPE (f7), message_arg)); /* _M_message.  */
   TREE_READONLY (ctor) = true;
 
   /* Build the violation object on the stack; register it, the same way
@@ -6654,6 +6660,7 @@ get_contract_violation_fields ()
     const char* _M_comment;
     void *_M_src_loc_ptr;
     __vendor_ext* _M_ext;
+    const char* _M_message;	// version 2
   };
     If this changes, also update the initializer in
     build_contract_violation.  */
@@ -6663,7 +6670,8 @@ get_contract_violation_fields ()
 			 uint16_type_node,
 			 const_string_type_node,
 			 ptr_type_node,
-			 ptr_type_node
+			 ptr_type_node,
+			 const_string_type_node
 			};
  const char *names[] = { "_M_version",
 			 "_M_assertion_kind",
@@ -6672,6 +6680,7 @@ get_contract_violation_fields ()
 			 "_M_comment",
 			 "_M_src_loc_ptr",
 			 "_M_ext",
+			 "_M_message",
 			};
   unsigned n = 0;
   for (tree type : types)
@@ -6898,7 +6907,9 @@ static tree
 build_contract_violation_ctor (tree contract)
 {
   bool can_be_const = true;
-  uint16_t version = 1;
+  /* Version 2 has _M_message (a control object's message, which a plain
+     contract has none of).  */
+  uint16_t version = 2;
   /* Default CDM_PREDICATE_FALSE. */
   uint16_t detection_mode = CDM_PREDICATE_FALSE;
 
@@ -6943,15 +6954,17 @@ build_contract_violation_ctor (tree contract)
   tree f4 = next_aggregate_field (DECL_CHAIN (f3));
   tree f5 = next_aggregate_field (DECL_CHAIN (f4));
   tree f6 = next_aggregate_field (DECL_CHAIN (f5));
+  tree f7 = next_aggregate_field (DECL_CHAIN (f6));
   tree ctor = build_constructor_va
-    (builtin_contract_violation_type, 7,
+    (builtin_contract_violation_type, 8,
      f0, build_int_cst (uint16_type_node, version),
      f1, assertion_kind,
      f2, eval_semantic,
      f3, build_int_cst (uint16_type_node, detection_mode),
      f4, comment,
      f5, std_src_loc_impl_ptr,
-     f6, build_zero_cst (nullptr_type_node)); // __vendor_ext
+     f6, build_zero_cst (nullptr_type_node), // __vendor_ext
+     f7, build_zero_cst (const_string_type_node)); // _M_message
 
   TREE_READONLY (ctor) = true;
   if (can_be_const)
@@ -7292,15 +7305,23 @@ contract_static_info_virtual (tree fn, contract_check_side side,
   *is_virtual = DECL_VIRTUAL_P (fn) || *overrides;
 }
 
+/* The comment (predicate text) of the contract whose checks or control
+   object queries are being built (contract_config_scope), for
+   assertion_static_info::comment; null outside one.  */
+
+tree contract_static_info_comment;
+
 static tree
 build_assertion_static_info_value (contract_check_side side, tree info_type,
-				   tree fn = NULL_TREE)
+				   tree fn = NULL_TREE,
+				   tree comment_value = NULL_TREE)
 {
   tree f0 = next_aggregate_field (TYPE_FIELDS (info_type));
   tree f1 = next_aggregate_field (DECL_CHAIN (f0));
   tree f2 = next_aggregate_field (DECL_CHAIN (f1));
   tree f3 = next_aggregate_field (DECL_CHAIN (f2));
   tree f4 = next_aggregate_field (DECL_CHAIN (f3));
+  tree f5 = next_aggregate_field (DECL_CHAIN (f4));
 
   /* Matches std::contracts::assertion_check_side's enumerator values
      exactly (see the library header).  */
@@ -7316,13 +7337,25 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
   bool is_virtual, overrides;
   contract_static_info_virtual (fn, side, &is_virtual, &overrides);
 
+  /* COMMENT_VALUE: the comment the assertion_context built with this
+     carries (omitted when the control object omits it); otherwise the
+     predicate text of the contract being processed
+     (contract_static_info_comment), or null outside one.  */
+  tree comment = (comment_value
+		  ? fold_convert (TREE_TYPE (f5), comment_value)
+		  : contract_static_info_comment
+		    && contract_static_info_comment != error_mark_node
+		    && flag_contract_violation_information
+		  ? fold_convert (TREE_TYPE (f5), contract_static_info_comment)
+		  : build_zero_cst (TREE_TYPE (f5)));
   return build_constructor_va
-    (info_type, 5,
+    (info_type, 6,
      f0, build_int_cst (TREE_TYPE (f0), contract_evaluation_semantic_value ()),
      f1, build_int_cst (TREE_TYPE (f1), side_val),
      f2, constant_boolean_node (is_virtual, TREE_TYPE (f2)),
      f3, constant_boolean_node (overrides, TREE_TYPE (f3)),
-     f4, build_group_rules_value (TREE_TYPE (f4)));
+     f4, build_group_rules_value (TREE_TYPE (f4)),
+     f5, comment);
 }
 
 /* Constant-evaluate CTRL::NAME(info) for the current translation unit's
@@ -29981,7 +30014,7 @@ oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, build_assertion_static_info_value (side, TREE_TYPE (f4),
-					    current_function_decl),
+					    current_function_decl, comment),
      f5, fold_convert (TREE_TYPE (f5), args_ptr),
      f6, fold_convert (TREE_TYPE (f6), check_fn));
 
@@ -42266,7 +42299,7 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, build_assertion_static_info_value (side, TREE_TYPE (f4),
-					    current_function_decl),
+					    current_function_decl, comment),
      f5, fold_convert (TREE_TYPE (f5), args_ptr),
      f6, fold_convert (TREE_TYPE (f6), check_fn));
 
@@ -42585,7 +42618,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
      f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
      f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
      f4, build_assertion_static_info_value (side, TREE_TYPE (f4),
-					    fndecl),
+					    fndecl, comment),
      f5, fold_convert (TREE_TYPE (f5), dummy_args_ptr),
      f6, fold_convert (TREE_TYPE (f6), check_fn));
 

@@ -151,6 +151,7 @@ namespace contracts
     bool _M_is_virtual;
     bool _M_overrides_virtual;
     group_semantic_rules_view _M_group_rules;
+    const char* _M_comment;
 
   public:
     constexpr evaluation_semantic semantic() const noexcept { return _M_semantic; }
@@ -162,6 +163,11 @@ namespace contracts
     // TU (the same for every assertion in it), in command-line order.
     constexpr group_semantic_rules_view group_semantic_rules() const noexcept
     { return _M_group_rules; }
+
+    // The assertion's predicate text, as assertion_context::comment()
+    // gives it, but available to a control object's queries at compile
+    // time; null where no assertion is being built.
+    constexpr const char* comment() const noexcept { return _M_comment; }
   };
 
   using __vendor_ext = void;
@@ -174,6 +180,7 @@ namespace contracts
     const char* _M_comment;
     const void* _M_src_loc_ptr;
     __vendor_ext* _M_ext;
+    const char* _M_message;	// Version 2 and later.
 
   public:
     // cannot be copied or moved or assigned to
@@ -184,6 +191,11 @@ namespace contracts
     evaluation_semantic semantic() const noexcept { return _M_evaluation_semantic; }
     detection_mode mode() const noexcept { return _M_detection_mode; }
     const char* comment() const noexcept { return _M_comment; }
+    // The message a control object passed along with the comment
+    // (assertion_info::set_message), or null.  A violation object built
+    // before the field existed (version 1) has none.
+    const char* message() const noexcept
+    { return _M_version >= 2 ? _M_message : nullptr; }
     std::source_location location() const noexcept {
       std::source_location __loc;
       __loc._M_impl
@@ -265,11 +277,18 @@ namespace contracts
     constexpr void set_kind(assertion_kind __kind) noexcept
     { _M_kind = __kind; }
 
+    // A message for the violation handler, alongside the comment: what
+    // contract_violation::message() gives it.  Null by default.
+    constexpr const char* message() const noexcept { return _M_message; }
+    constexpr void set_message(const char* __message) noexcept
+    { _M_message = __message; }
+
   private:
     const char* _M_comment;
     std::source_location _M_location;
     evaluation_semantic _M_semantic;
     assertion_kind _M_kind;
+    const char* _M_message = nullptr;
   };
 
   struct assertion_context {
@@ -473,7 +492,8 @@ namespace contracts
 					 evaluation_semantic semantic,
 					 detection_mode mode,
 					 const char* comment,
-					 std::source_location loc);
+					 std::source_location loc,
+					 const char* message = nullptr);
 
   // The plain-named public entry point control objects actually call;
   // forwards straight to __d4324_invoke_violation_handler above, which
@@ -494,7 +514,8 @@ namespace contracts
   invoke_violation_handler(const assertion_info& info, detection_mode mode)
   {
     __d4324_invoke_violation_handler(info.kind(), info.semantic(), mode,
-				      info.comment(), info.location());
+				      info.comment(), info.location(),
+				      info.message());
   }
 
 
@@ -851,9 +872,12 @@ namespace contracts
 	{
 	  try
 	    {
-	      invoke_violation_handler
-		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
-		 detection_mode::predicate_false);
+	      // The handler gets the predicate as the comment and this
+	      // object's message alongside it.
+	      assertion_info __info(__ctx.comment(), __ctx.location(),
+				    evaluation_semantic::enforce, __ctx.kind());
+	      __info.set_message(message);
+	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -925,9 +949,12 @@ namespace contracts
 	{
 	  try
 	    {
-	      invoke_violation_handler
-		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
-		 detection_mode::predicate_false);
+	      // The handler gets the predicate as the comment and this
+	      // object's message alongside it.
+	      assertion_info __info(__ctx.comment(), __ctx.location(),
+				    evaluation_semantic::enforce, __ctx.kind());
+	      __info.set_message(message);
+	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -998,9 +1025,12 @@ namespace contracts
 	{
 	  try
 	    {
-	      invoke_violation_handler
-		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
-		 detection_mode::predicate_false);
+	      // The handler gets the predicate as the comment and this
+	      // object's message alongside it.
+	      assertion_info __info(__ctx.comment(), __ctx.location(),
+				    evaluation_semantic::enforce, __ctx.kind());
+	      __info.set_message(message);
+	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -1151,9 +1181,12 @@ namespace contracts
 	{
 	  try
 	    {
-	      invoke_violation_handler
-		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
-		 detection_mode::predicate_false);
+	      // The handler gets the predicate as the comment and this
+	      // object's message alongside it.
+	      assertion_info __info(__ctx.comment(), __ctx.location(),
+				    evaluation_semantic::enforce, __ctx.kind());
+	      __info.set_message(message);
+	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -1215,9 +1248,12 @@ namespace contracts
 	{
 	  try
 	    {
-	      invoke_violation_handler
-		({__text, __ctx.location(), evaluation_semantic::enforce, __ctx.kind()},
-		 detection_mode::predicate_false);
+	      // The handler gets the predicate as the comment and this
+	      // object's message alongside it.
+	      assertion_info __info(__ctx.comment(), __ctx.location(),
+				    evaluation_semantic::enforce, __ctx.kind());
+	      __info.set_message(message);
+	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
 	  __d4324_terminate_wrapper();
@@ -1269,9 +1305,13 @@ namespace contracts
     else
       {
 	if (__sem != evaluation_semantic::quick_enforce)
-	  invoke_violation_handler
-	    ({__text, __ctx.location(), __sem, __ctx.kind()},
-	     detection_mode::predicate_false);
+	  {
+	    // The predicate as the comment, the message alongside it.
+	    assertion_info __info(__ctx.comment(), __ctx.location(), __sem,
+				  __ctx.kind());
+	    __info.set_message(__message);
+	    invoke_violation_handler(__info, detection_mode::predicate_false);
+	  }
 	if (__sem != evaluation_semantic::observe)
 	  __d4324_terminate_wrapper();
       }

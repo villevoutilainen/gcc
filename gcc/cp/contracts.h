@@ -1609,16 +1609,23 @@ extern unsigned contract_config_semantic_of (tree, tree, int);
    time outside any); or the translation unit's semantic if no entry
    matches.  No effect without a configuration.  */
 
+extern tree contract_static_info_comment;
+
 class contract_config_scope
 {
   unsigned m_saved;
   int m_saved_consteval;
+  tree m_saved_comment;
 public:
   contract_config_scope (tree contract, tree fn = NULL_TREE,
 			 int comptime = -2)
     : m_saved (contract_config_override),
-      m_saved_consteval (contract_config_consteval)
+      m_saved_consteval (contract_config_consteval),
+      m_saved_comment (contract_static_info_comment)
   {
+    /* For assertion_static_info::comment.  */
+    if (contract && CONTRACT_P (contract))
+      contract_static_info_comment = CONTRACT_COMMENT (contract);
     if (comptime != -2)
       contract_config_consteval = comptime;
     if (!contract_config_table.is_empty ())
@@ -1628,7 +1635,8 @@ public:
   }
   contract_config_scope (unsigned kind, location_t loc, tree ctrl, tree fn)
     : m_saved (contract_config_override),
-      m_saved_consteval (contract_config_consteval)
+      m_saved_consteval (contract_config_consteval),
+      m_saved_comment (contract_static_info_comment)
   {
     contract_config_consteval = 0;
     if (!contract_config_table.is_empty ())
@@ -1639,6 +1647,7 @@ public:
   {
     contract_config_override = m_saved;
     contract_config_consteval = m_saved_consteval;
+    contract_static_info_comment = m_saved_comment;
   }
 };
 
