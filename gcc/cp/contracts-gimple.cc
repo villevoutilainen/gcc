@@ -9987,6 +9987,8 @@ cg_relt_establish_for_call (gcall *call,
 			    cg_field_object_cache &field_object_cache,
 			    cg_dom_fact_state &state)
 {
+  if (!symbolic_functions_declared_p)
+    return;
   tree callee = gimple_call_fndecl (call);
   if (!callee)
     return;
@@ -10101,6 +10103,8 @@ cg_relt_value_written (cg_dom_fact_state &state, tree value)
 static void
 cg_relt_store (tree lhs, cg_dom_fact_state &state)
 {
+  if (!symbolic_functions_declared_p)
+    return;
   tree base = lhs ? get_base_address (lhs) : NULL_TREE;
   if (!base)
     return;
@@ -10132,8 +10136,11 @@ cg_relt_store (tree lhs, cg_dom_fact_state &state)
 static void
 cg_relt_process_assign (tree lhs, tree rhs, cg_dom_fact_state &state)
 {
+  if (!symbolic_functions_declared_p)
+    return;
   cg_relt_store (lhs, state);
-  if (!(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+  if (!symbolic_class_value_params_p
+      || !(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
       || lhs == rhs || !AGGREGATE_TYPE_P (TREE_TYPE (lhs)))
     return;
   /* A copy of a member's value ('a = p.first'): the member's slot.  */
@@ -10264,6 +10271,8 @@ cg_relt_value_ended_p (tree id, const vec<tree> &routes, bool any_route,
 static void
 cg_relt_process_call (gcall *call, function *fun, cg_dom_fact_state &state)
 {
+  if (!symbolic_functions_declared_p)
+    return;
   tree lhs = gimple_call_lhs (call);
   if (gimple_call_internal_p (call))
     {
@@ -10316,8 +10325,11 @@ cg_relt_process_call (gcall *call, function *fun, cg_dom_fact_state &state)
 	state.relt.remove (k);
     }
   /* The values whose address CALL is given: written, if through a
-     pointer to non-const, and handed out.  */
-  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+     pointer to non-const, and handed out.  Where class values come from
+     is tracked only once a relation can be about one
+     (symbolic_class_value_params_p).  */
+  for (unsigned i = 0;
+       symbolic_class_value_params_p && i < gimple_call_num_args (call); ++i)
     {
       tree arg = gimple_call_arg (call, i);
       if (TREE_CODE (arg) != ADDR_EXPR)
@@ -10334,7 +10346,8 @@ cg_relt_process_call (gcall *call, function *fun, cg_dom_fact_state &state)
     {
       cg_relt_store (lhs, state);
       tree base = get_base_address (lhs);
-      if (base && (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+      if (symbolic_class_value_params_p
+	  && base && (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
 	  && base == lhs && !routes.is_empty ())
 	{
 	  tree list = NULL_TREE;

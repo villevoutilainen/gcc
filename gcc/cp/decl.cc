@@ -12737,6 +12737,9 @@ grokfndecl (tree ctype,
       return NULL_TREE;
     }
 
+  if (declared_symbolic_p)
+    symbolic_functions_declared_p = true;
+
   /* A symbolic predicate's by-value parameter is a value, its fact keyed
      by the value's bytes: of a class type, one with unique object
      representations, whose equal values have the same bytes.  Any other
@@ -12749,6 +12752,10 @@ grokfndecl (tree ctype,
       for (; parms && parms != void_list_node; parms = TREE_CHAIN (parms))
 	{
 	  tree pt = TREE_VALUE (parms);
+	  /* The analysis tracks where class values come from only once a
+	     predicate can be about one (symbolic_class_value_params_p).  */
+	  if (CLASS_TYPE_P (pt) || dependent_type_p (pt))
+	    symbolic_class_value_params_p = true;
 	  if (CLASS_TYPE_P (pt) && !dependent_type_p (pt)
 	      && COMPLETE_TYPE_P (complete_type (pt))
 	      && !type_has_unique_obj_representations (pt))

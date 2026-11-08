@@ -1583,6 +1583,8 @@ extern oa_relation_arg_kind oa_relation_param_kind (tree);
 extern oa_relation_arg_kind oa_relation_arg_kind_of (tree, unsigned);
 extern bool oa_relation_conjunct_shape (tree, tree *, vec<tree> *, bool *);
 extern tree oa_relation_strip_arg (tree);
+extern bool symbolic_class_value_params_p;
+extern bool symbolic_functions_declared_p;
 extern tree oa_relation_member_slot (tree);
 extern tree oa_relation_member_slot_base (tree);
 extern tree oa_relation_member_slot_rebase (tree, tree);

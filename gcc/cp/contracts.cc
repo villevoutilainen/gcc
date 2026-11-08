@@ -13372,6 +13372,16 @@ public:
 	      }
 	for (tree k : hit)
 	  {
+	    /* A variable holding an aggregate value obtained from it
+	       (oa_relation_value_derived_set): the value's relations end
+	       (the derived-value rule).  The variable is an object of its
+	       own, which doesn't end with them, nor do the references
+	       bound to it or what was obtained from it.  */
+	    if (DECL_P (k) && AGGREGATE_TYPE_P (TREE_TYPE (k)))
+	      {
+		relation_invalidate (k);
+		continue;
+	      }
 	    auto_vec<tree, 4> ends;
 	    ends.safe_push (k);
 	    for (auto it : m_alias_target)
@@ -13379,13 +13389,7 @@ public:
 		ends.safe_push (it.first);
 	    for (tree d : ends)
 	      {
-		/* A value obtained from it: its relations end (the
-		   derived-value rule).  */
 		relation_invalidate (d);
-		/* An aggregate value (oa_relation_value_derived_set) is an
-		   object of its own, which doesn't end with them.  */
-		if (DECL_P (d) && AGGREGATE_TYPE_P (TREE_TYPE (d)))
-		  continue;
 		invalidate (d);
 		range_invalidate (d);
 		symbolic_object_address_invalidate (d);
@@ -23124,9 +23128,23 @@ static tree oa_value_sources (tree, oa_env &);
    copies, so a call that may end them ends its relations
    (oa_env::derived_end, the derived-value rule).  */
 
+/* Whether the translation unit has declared a symbolic function taking
+   a class (or a dependent type) by value: until then no relation can be
+   about a class value, and where one came from needn't be tracked.  */
+
+bool symbolic_class_value_params_p;
+
+/* Whether the translation unit has declared any symbolic function: until
+   then there are no relations (oa_relation_conjunct_shape), and nothing of
+   them to track.  */
+
+bool symbolic_functions_declared_p;
+
 static void
 oa_relation_value_derived_set (tree decl, tree init, oa_env &env)
 {
+  if (!symbolic_class_value_params_p)
+    return;
   if (!(VAR_P (decl) || TREE_CODE (decl) == PARM_DECL)
       || !AGGREGATE_TYPE_P (TREE_TYPE (decl)) || !init)
     return;
@@ -23148,6 +23166,8 @@ oa_relation_value_derived_set (tree decl, tree init, oa_env &env)
 static void
 oa_establish_call_relations (tree call, oa_env &env, tree result)
 {
+  if (!symbolic_functions_declared_p)
+    return;
   tree callee = cp_get_callee_fndecl_nofold (call);
   if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
     return;
