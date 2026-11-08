@@ -1785,6 +1785,34 @@ decl_remember_implicit_trigger_p (tree decl)
 	  && sfk != sfk_comparison);
 }
 
+/* The body of a defaulted reflect_constant ([class.reflect.constant]):
+   a reflection of the template parameter object template-argument-
+   equivalent to *this, which std::meta::reflect_constant gives for a
+   structural class -- 'return std::meta::reflect_constant (*this);'.
+   It builds that object from the subobjects, and never calls this
+   member (P4340, 2.2: serialize, then deserialize, all members).  */
+
+static void
+build_reflect_constant_body ()
+{
+  tree compound_stmt = begin_compound_stmt (BCS_FN_BODY);
+  tree meta = lookup_qualified_name (std_node, get_identifier ("meta"));
+  tree fn = (TREE_CODE (meta) == NAMESPACE_DECL
+	     ? lookup_qualified_name (meta, get_identifier ("reflect_constant"))
+	     : error_mark_node);
+  if (fn == error_mark_node || !fn)
+    error ("%<std::meta::reflect_constant%> has not been declared");
+  else
+    {
+      releasing_vec args;
+      vec_safe_push (args, current_class_ref);
+      tree call = finish_call_expr (fn, &args, /*disallow_virtual=*/false,
+				    /*koenig_p=*/false, tf_warning_or_error);
+      finish_return_stmt (call);
+    }
+  finish_compound_stmt (compound_stmt);
+}
+
 /* Synthesize FNDECL, a non-static member function.   */
 
 void
@@ -1852,6 +1880,11 @@ synthesize_method (tree fndecl)
     {
       /* Pass tf_none so the function is just deleted if there's a problem.  */
       build_comparison_op (fndecl, true, tf_none);
+      need_body = false;
+    }
+  else if (sfk == sfk_reflect_constant)
+    {
+      build_reflect_constant_body ();
       need_body = false;
     }
 
@@ -3390,8 +3423,8 @@ maybe_explain_implicit_delete (tree decl)
 	}
       if (!informed && sfk == sfk_reflect_constant)
 	inform (DECL_SOURCE_LOCATION (decl),
-		"a defaulted %qD only makes its class structural; it has no "
-		"definition", decl);
+		"%qD is defined as deleted because %qT is not a structural "
+		"type", decl, DECL_CONTEXT (decl));
       else if (!informed && sfk == sfk_comparison)
 	{
 	  inform (DECL_SOURCE_LOCATION (decl),
@@ -4113,23 +4146,33 @@ defaulted_reflect_constant (tree t)
 }
 
 /* Whether reflect_constant member function FN is
+   'std::meta::info reflect_constant () const', consteval or not, with no
+   ref-qualifier ([class.reflect.constant]).  */
+
+static bool
+reflect_constant_shape_p (tree fn)
+{
+  return (FUNCTION_FIRST_USER_PARMTYPE (fn) == void_list_node
+	  && (type_memfn_quals (TREE_TYPE (fn)) & TYPE_QUAL_CONST)
+	  && type_memfn_rqual (TREE_TYPE (fn)) == REF_QUAL_NONE
+	  && REFLECTION_TYPE_P (TREE_TYPE (TREE_TYPE (fn))));
+}
+
+/* Whether reflect_constant member function FN is
    'consteval std::meta::info reflect_constant () const'.  */
 
 static bool
 reflect_constant_signature_p (tree fn)
 {
-  return (DECL_IMMEDIATE_FUNCTION_P (fn)
-	  && FUNCTION_FIRST_USER_PARMTYPE (fn) == void_list_node
-	  && (type_memfn_quals (TREE_TYPE (fn)) & TYPE_QUAL_CONST)
-	  && type_memfn_rqual (TREE_TYPE (fn)) != REF_QUAL_RVALUE
-	  && REFLECTION_TYPE_P (TREE_TYPE (TREE_TYPE (fn))));
+  return DECL_IMMEDIATE_FUNCTION_P (fn) && reflect_constant_shape_p (fn);
 }
 
 /* Mark class T, now that its members are known, structural if it
    defaults its reflect_constant, or not structural if it deletes it
    (P4340): only 'consteval std::meta::info reflect_constant () const'
-   does either, and any other deleted reflect_constant is just a deleted
-   function.  Done from its members, not as each is declared, so that a
+   can be defaulted, and 'std::meta::info reflect_constant () const',
+   consteval or not, opts out when deleted; any other deleted
+   reflect_constant is just a deleted function.  Done from its members, not as each is declared, so that a
    redeclaration rejected as such has no effect.  */
 
 void
@@ -4142,16 +4185,21 @@ note_reflect_constant (tree t)
 	continue;
       if (DECL_DEFAULTED_FN (fn))
 	CLASSTYPE_STRUCTURAL (t) = 1;
-      else if (DECL_DELETED_FN (fn) && reflect_constant_signature_p (fn))
+      /* Deleting it opts the class out whether or not it is consteval:
+	 'std::meta::info reflect_constant () const = delete;' can only mean
+	 that.  */
+      else if (DECL_DELETED_FN (fn) && reflect_constant_shape_p (fn))
 	CLASSTYPE_NOT_STRUCTURAL (t) = 1;
     }
 }
 
 /* Check defaulting FN, a reflect_constant member function: it has to be
    'consteval std::meta::info reflect_constant () const', defaulted in its
-   class.  Its class is then structural (note_reflect_constant).  It is
-   only a marker: nothing defines it, and a call to it is ill-formed (it
-   is deleted).  */
+   class.  Its class is then structural (note_reflect_constant), and FN,
+   when used, is synthesized to return the reflection of *this's template
+   parameter object (build_reflect_constant_body).  It is defined as
+   deleted only where its class can't be structural
+   (check_bases_and_members), so that std::meta::is_deleted tells which.  */
 
 static bool
 defaultable_reflect_constant_check (tree fn)
@@ -4166,10 +4214,10 @@ defaultable_reflect_constant_check (tree fn)
   if (!reflect_constant_signature_p (fn))
     {
       error ("defaulted %qD must be a %<consteval%> %<const%> member "
-	     "function with no parameters returning %<std::meta::info%>", fn);
+	     "function with no parameters and no ref-qualifier returning "
+	     "%<std::meta::info%>", fn);
       return false;
     }
-  DECL_DELETED_FN (fn) = 1;
   return true;
 }
 

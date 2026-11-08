@@ -28,6 +28,8 @@ static_assert (std::meta::is_structural_type (^^S));
 
 template <S V>
 constexpr int use () { return V.get (); }
+template <S V>
+constexpr const S &use_object = V;
 static_assert (use <S (42)> () == 42);
 
 // Template-argument equivalence goes by the private members.
@@ -158,14 +160,24 @@ struct WrongType
 {
   int reflect_constant () const = default; // { dg-error "must be a .consteval. .const. member function" }
 };
+struct LRef
+{
+  consteval std::meta::info reflect_constant () const & = default; // { dg-error "must be a .consteval. .const. member function with no parameters and no ref-qualifier" }
+};
+struct RRef
+{
+  consteval std::meta::info reflect_constant () const && = default; // { dg-error "must be a .consteval. .const. member function with no parameters and no ref-qualifier" }
+};
 struct OutOfClass
 {
   consteval std::meta::info reflect_constant () const;
 };
 consteval std::meta::info OutOfClass::reflect_constant () const = default; // { dg-error "can only be defaulted in its class" }
 
-// It is only a marker: calling it is ill-formed.
-consteval std::meta::info call (const S &s)
-{
-  return s.reflect_constant (); // { dg-error "use of deleted function" }
-}
+// Calling it gives the reflection of the template parameter object
+// template-argument-equivalent to the object (P4340, 2.2), as
+// std::meta::reflect_constant does.
+constexpr S s42 (42);
+static_assert (s42.reflect_constant () == std::meta::reflect_constant (s42));
+static_assert ([: s42.reflect_constant () :].get () == 42);
+static_assert (&[: s42.reflect_constant () :] == &use_object<S (42)>);

@@ -72,11 +72,21 @@ public:
 };
 static_assert (std::meta::is_structural_type (^^OptIn));
 
-// It has to be consteval to opt out, and a function returning
-// std::meta::info has to be consteval anyway.
+// Deleting it opts out whether or not it is consteval; only defaulting
+// it requires consteval.
 struct NotConsteval
 {
   int x;
-  std::meta::info reflect_constant () const = delete; // { dg-error "must be declared .consteval." }
+  std::meta::info reflect_constant () const = delete;
 };
-static_assert (std::meta::is_structural_type (^^NotConsteval));
+static_assert (!std::meta::is_structural_type (^^NotConsteval));
+template <NotConsteval V> struct NC {}; // { dg-error "not a valid type for a template non-type parameter" }
+
+// A deleted reflect_constant with a ref-qualifier doesn't have the shape:
+// it is just a deleted function.
+struct RefQualified
+{
+  int x;
+  consteval std::meta::info reflect_constant () const & = delete;
+};
+static_assert (std::meta::is_structural_type (^^RefQualified));
