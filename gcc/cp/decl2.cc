@@ -6951,6 +6951,23 @@ mark_used (tree decl, tsubst_flags_t complain /* = tf_warning_or_error */)
   if (cp_unevaluated_operand || in_discarded_stmt)
     return true;
 
+  /* A defaulted reflect_constant only makes its class structural: it has
+     no definition, and an odr-use of it is ill-formed
+     ([class.reflect.constant]).  */
+  if (TREE_CODE (decl) == FUNCTION_DECL && DECL_DEFAULTED_FN (decl)
+      && !DECL_DELETED_FN (decl) && reflect_constant_fn_p (decl))
+    {
+      if (complain & tf_error)
+	{
+	  auto_diagnostic_group d;
+	  error ("use of %qD, which has no definition", decl);
+	  inform (DECL_SOURCE_LOCATION (decl), "a defaulted %qD only makes "
+		  "its class structural; use %<std::meta::reflect_constant%> "
+		  "instead", decl);
+	}
+      return false;
+    }
+
   DECL_ODR_USED (decl) = 1;
   if (DECL_CLONED_FUNCTION_P (decl))
     DECL_ODR_USED (DECL_CLONED_FUNCTION (decl)) = 1;

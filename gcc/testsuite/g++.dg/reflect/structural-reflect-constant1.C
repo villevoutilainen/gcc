@@ -28,8 +28,6 @@ static_assert (std::meta::is_structural_type (^^S));
 
 template <S V>
 constexpr int use () { return V.get (); }
-template <S V>
-constexpr const S &use_object = V;
 static_assert (use <S (42)> () == 42);
 
 // Template-argument equivalence goes by the private members.
@@ -174,10 +172,11 @@ struct OutOfClass
 };
 consteval std::meta::info OutOfClass::reflect_constant () const = default; // { dg-error "can only be defaulted in its class" }
 
-// Calling it gives the reflection of the template parameter object
-// template-argument-equivalent to the object (P4340, 2.2), as
-// std::meta::reflect_constant does.
-constexpr S s42 (42);
-static_assert (s42.reflect_constant () == std::meta::reflect_constant (s42));
-static_assert ([: s42.reflect_constant () :].get () == 42);
-static_assert (&[: s42.reflect_constant () :] == &use_object<S (42)>);
+// It only makes its class structural: an odr-use of it is ill-formed
+// (std::meta::reflect_constant gives the template parameter object), but
+// naming it in an unevaluated operand isn't an odr-use.
+consteval std::meta::info call (const S &s)
+{
+  return s.reflect_constant (); // { dg-error "which has no definition" }
+}
+using RC = decltype (S (1).reflect_constant ());
