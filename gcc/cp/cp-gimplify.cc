@@ -4657,10 +4657,14 @@ build_source_location_impl (location_t loc, tree fndecl,
 				&map);
   entry.uid = fndecl ? DECL_UID (fndecl) : -1;
   entry.var = error_mark_node;
+  /* Look up without inserting: building the value below can re-enter this
+     function (naming FNDECL can instantiate templates, whose contract
+     queries build source locations), which must not find a slot left
+     empty by this call.  */
   source_location_table_entry *entryp
-    = source_location_table->find_slot (entry, INSERT);
+    = source_location_table->find_slot (entry, NO_INSERT);
 
-  if (entryp->var)
+  if (entryp && entryp->var)
     return entryp->var;
 
   tree var = build_decl (loc, VAR_DECL, generate_internal_label ("Lsrc_loc"),
@@ -4728,9 +4732,13 @@ build_source_location_impl (location_t loc, tree fndecl,
   TREE_CONSTANT (ctor) = 1;
   TREE_STATIC (ctor) = 1;
   DECL_INITIAL (var) = ctor;
-  varpool_node::finalize_decl (var);
+  entryp = source_location_table->find_slot (entry, INSERT);
+  /* A re-entrant call may have built it meanwhile.  */
+  if (entryp->var)
+    return entryp->var;
   *entryp = entry;
   entryp->var = var;
+  varpool_node::finalize_decl (var);
   return var;
 }
 
