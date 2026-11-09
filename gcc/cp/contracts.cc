@@ -7664,6 +7664,67 @@ build_control_query_argument (contract_check_side side, tree parm_type,
      f1, contract_function_reflection (owner_fn));
 }
 
+/* The control types known to have no member of a query's name: most
+   control objects provide few of the queries the compiler asks about
+   (is_conveyor, proven_symbolic, ...), and each is asked for every
+   contract assertion, often many times.  Keyed by TYPE_UID and the
+   query's identifier.  */
+
+struct control_query_absence
+{
+  int type;	/* TYPE_UID of the control type's main variant.  */
+  tree name;	/* The query's identifier (never collected).  */
+};
+
+struct control_query_absence_hash : typed_noop_remove<control_query_absence>
+{
+  typedef control_query_absence value_type;
+  typedef control_query_absence compare_type;
+  static hashval_t hash (const control_query_absence &k)
+  { return iterative_hash_hashval_t (k.type, htab_hash_pointer (k.name)); }
+  static bool equal (const control_query_absence &a,
+		     const control_query_absence &b)
+  { return a.type == b.type && a.name == b.name; }
+  static const bool empty_zero_p = true;
+  static void mark_empty (control_query_absence &k) { k.name = NULL_TREE; }
+  static void mark_deleted (control_query_absence &k)
+  { k.name = NULL_TREE; k.type = -1; }
+  static bool is_empty (const control_query_absence &k)
+  { return k.name == NULL_TREE && k.type != -1; }
+  static bool is_deleted (const control_query_absence &k)
+  { return k.name == NULL_TREE && k.type == -1; }
+};
+
+static hash_set<control_query_absence, false, control_query_absence_hash>
+  *control_query_absent;
+
+/* The member function(s) named NAME of TYPE, a complete control type, as
+   a BASELINK, or NULL_TREE if it has none.  */
+
+static tree
+contract_control_query_member (tree type, const char *name)
+{
+  tree id = get_identifier (name);
+  bool cacheable = !processing_template_decl && !dependent_type_p (type);
+  control_query_absence key = { (int) TYPE_UID (TYPE_MAIN_VARIANT (type)),
+				id };
+  if (cacheable && control_query_absent && control_query_absent->contains (key))
+    return NULL_TREE;
+  tree member = lookup_member (type, id, /*protect=*/1, /*want_type=*/false,
+			       tf_none);
+  if (member && member != error_mark_node && BASELINK_P (member))
+    return member;
+  if (cacheable)
+    {
+      if (!control_query_absent)
+	control_query_absent
+	  = new hash_set<control_query_absence, false,
+			 control_query_absence_hash>;
+      control_query_absent->add (key);
+    }
+  return NULL_TREE;
+}
+
 /* Constant-evaluate CTRL::NAME(info) for the current translation unit's
    evaluation_semantic and the given SIDE, where NAME is a static *or
    non-static* member function taking a single
@@ -7710,9 +7771,8 @@ contract_control_bool_member_1 (tree ctrl, const char *name,
   if (!COMPLETE_TYPE_P (ctrl))
     return -1;
 
-  tree member = lookup_member (ctrl, get_identifier (name),
-			       /*protect=*/1, /*want_type=*/false, tf_none);
-  if (!member || member == error_mark_node || !BASELINK_P (member))
+  tree member = contract_control_query_member (ctrl, name);
+  if (!member)
     return -1;
 
   tree fn = OVL_FIRST (BASELINK_FUNCTIONS (member));
@@ -7928,7 +7988,14 @@ contract_control_query_value (tree ctrl, const char *name,
     return contract_control_bool_member_1 (ctrl, name, side, owner_fn, quiet);
   control_query_key key;
   key.ctrl = DECL_UID (c);
-  key.owner = owner_fn && DECL_P (owner_fn) ? (int) DECL_UID (owner_fn) : -1;
+  /* The argument is built from the function a caller-side wrapper,
+     outlined check or clone stands for (resolve_fndecl_for_diagnostic_name,
+     contract_static_info_fn), so they share the entry.  */
+  tree owner = owner_fn;
+  if (owner && TREE_CODE (owner) == FUNCTION_DECL
+      && DECL_LANG_SPECIFIC (owner))
+    owner = DECL_ORIGIN (resolve_fndecl_for_diagnostic_name (owner));
+  key.owner = owner && DECL_P (owner) ? (int) DECL_UID (owner) : -1;
   key.name = get_identifier (name);
   key.loc = contract_static_info_loc;
   key.side = side;
@@ -7980,8 +8047,7 @@ contract_apply_compute_semantic (tree contract, tree fn, int side,
     return semantic;
   tree type = contract_control_naming_type (ctrl);
   if (!type || !CLASS_TYPE_P (type) || !COMPLETE_TYPE_P (type)
-      || !lookup_member (type, get_identifier ("compute_semantic"),
-			 /*protect=*/1, /*want_type=*/false, tf_none))
+      || !contract_control_query_member (type, "compute_semantic"))
     return semantic;
   contract_check_side cside
     = (side < 0 ? contract_side_of (contract, fn)
@@ -8703,9 +8769,8 @@ contract_control_validates (tree ctrl, contract_check_side side, tree owner_fn, 
   if (!COMPLETE_TYPE_P (ctrl_type))
     return true;
 
-  tree member = lookup_member (ctrl_type, get_identifier ("validate"),
-				/*protect=*/1, /*want_type=*/false, tf_none);
-  if (!member || member == error_mark_node || !BASELINK_P (member))
+  tree member = contract_control_query_member (ctrl_type, "validate");
+  if (!member)
     return true;
 
   tree fn = OVL_FIRST (BASELINK_FUNCTIONS (member));
@@ -21244,12 +21309,14 @@ static bool oa_skip_predicate_scans;
 static bool
 oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  /* The scope's static info (and assertion_declaration_info) needs the
+     function, which a caller checking its own contracts leaves out.  */
+  if (!owner_fn)
+    owner_fn = current_function_decl;
   contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
-  if (!owner_fn)
-    owner_fn = current_function_decl;
   if (oa_validating_declaration && owner_fn == oa_validating_declaration)
     return (contract_control_conveyor_like (ctrl, ccs_definition, owner_fn)
 	    || contract_control_conveyor_like (ctrl, ccs_wrapper, owner_fn));
@@ -21268,12 +21335,14 @@ oa_contract_conveyor_active_p (tree contract, tree owner_fn = NULL_TREE)
 static bool
 oa_contract_symbolic_active_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  /* The scope's static info (and assertion_declaration_info) needs the
+     function, which a caller checking its own contracts leaves out.  */
+  if (!owner_fn)
+    owner_fn = current_function_decl;
   contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
-  if (!owner_fn)
-    owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
   if (!contract_control_symbolic_like (ctrl, side, owner_fn))
     return false;
@@ -21290,12 +21359,14 @@ oa_contract_symbolic_active_p (tree contract, tree owner_fn = NULL_TREE)
 static bool
 oa_contract_conveyor_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  /* The scope's static info (and assertion_declaration_info) needs the
+     function, which a caller checking its own contracts leaves out.  */
+  if (!owner_fn)
+    owner_fn = current_function_decl;
   contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
-  if (!owner_fn)
-    owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
   return contract_control_analyzed_conveyor (ctrl, side, owner_fn)
 	 || contract_control_proven_conveyor (ctrl, side, owner_fn);
@@ -21304,12 +21375,14 @@ oa_contract_conveyor_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE
 static bool
 oa_contract_symbolic_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  /* The scope's static info (and assertion_declaration_info) needs the
+     function, which a caller checking its own contracts leaves out.  */
+  if (!owner_fn)
+    owner_fn = current_function_decl;
   contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
-  if (!owner_fn)
-    owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
   return contract_control_analyzed_symbolic (ctrl, side, owner_fn)
 	 || contract_control_proven_symbolic (ctrl, side, owner_fn);
@@ -21323,12 +21396,14 @@ oa_contract_symbolic_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE
 static bool
 oa_contract_conveyor_strict_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  /* The scope's static info (and assertion_declaration_info) needs the
+     function, which a caller checking its own contracts leaves out.  */
+  if (!owner_fn)
+    owner_fn = current_function_decl;
   contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
-  if (!owner_fn)
-    owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
   return contract_control_proven_conveyor (ctrl, side, owner_fn);
 }
@@ -21336,12 +21411,14 @@ oa_contract_conveyor_strict_p (tree contract, tree owner_fn = NULL_TREE)
 static bool
 oa_contract_symbolic_strict_p (tree contract, tree owner_fn = NULL_TREE)
 {
+  /* The scope's static info (and assertion_declaration_info) needs the
+     function, which a caller checking its own contracts leaves out.  */
+  if (!owner_fn)
+    owner_fn = current_function_decl;
   contract_config_scope ccs (contract, owner_fn);
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || !flag_contract_control_objects)
     return false;
-  if (!owner_fn)
-    owner_fn = current_function_decl;
   contract_check_side side = contract_side_of (contract, owner_fn);
   return contract_control_proven_symbolic (ctrl, side, owner_fn);
 }

@@ -1645,11 +1645,15 @@ public:
       }
     if (comptime != -2)
       contract_config_consteval = comptime;
+    /* The configuration's semantic for CONTRACT, if any, else the
+       translation unit's -- never an enclosing scope's -- and then the
+       control object's own computation from it, if it has one.  */
     if (!contract_config_table.is_empty ())
       contract_config_override
 	= contract_config_semantic_of (contract, fn,
 				       contract_config_consteval, side);
-    /* Then the control object's own computation, if it has one.  */
+    else if (contract && CONTRACT_P (contract))
+      contract_config_override = 0;
     contract_config_override
       = contract_apply_compute_semantic (contract, fn, side,
 					 contract_config_override);
