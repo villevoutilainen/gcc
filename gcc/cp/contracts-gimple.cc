@@ -2905,8 +2905,8 @@ cg_addr_disqualifies_p (gimple *stmt, tree base, tree op, void *data)
   if (gimple_assign_single_p (stmt))
     {
       tree lhs = gimple_assign_lhs (stmt);
-      /* An element of a contract check's capture block.  */
-      if (TREE_CODE (lhs) == ARRAY_REF)
+      /* A field of a contract check's capture block.  */
+      if (TREE_CODE (lhs) == COMPONENT_REF)
 	{
 	  tree capture_struct = TREE_OPERAND (lhs, 0);
 	  if (DECL_P (capture_struct)
@@ -12292,7 +12292,7 @@ cg_scalar_memory_untracked (function *fun, hash_set<tree> &untracked)
 	    tree t = TREE_OPERAND (gimple_assign_rhs1 (stmt), 0);
 	    if (cg_stores_addr_into_args_field_p (stmt, t))
 	      c.allowed = t;
-	    else if (TREE_CODE (gimple_assign_lhs (stmt)) == ARRAY_REF)
+	    else if (TREE_CODE (gimple_assign_lhs (stmt)) == COMPONENT_REF)
 	      {
 		tree cond, decls;
 		tree base = TREE_OPERAND (gimple_assign_lhs (stmt), 0);
@@ -12383,7 +12383,7 @@ cg_scalar_memory_tracking_p_1 (function *fun, tree decl)
 	if (gimple_assign_single_p (stmt)
 	    && TREE_CODE (gimple_assign_rhs1 (stmt)) == ADDR_EXPR
 	    && TREE_OPERAND (gimple_assign_rhs1 (stmt), 0) == decl
-	    && TREE_CODE (gimple_assign_lhs (stmt)) == ARRAY_REF)
+	    && TREE_CODE (gimple_assign_lhs (stmt)) == COMPONENT_REF)
 	  {
 	    tree cond, decls;
 	    tree base = TREE_OPERAND (gimple_assign_lhs (stmt), 0);

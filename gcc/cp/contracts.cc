@@ -42736,34 +42736,63 @@ resolve_base_contract_calls (tree contract, tree using_fndecl)
 }
 
 /* A contract check's capture block -- the addresses its predicate reads
-   its operands through -- is an array of void *, one element per
-   captured operand, of a type distinct to the check (so that
-   contract_check_arg_struct_info can find the check from it).  Not a
-   record of typed pointer fields: a module interface streams an inline
-   function's body, checks included, and an unnamed record is no type it
-   can describe.  CAPTURE_BLOCK_TYPE builds one of N elements;
-   CAPTURE_SLOT refers to element I of BLOCK, a capture block lvalue.  */
+   its operands through -- is a class of its own, with one pointer field
+   per captured operand, __p0, __p1, ...  It is a named, artificial class
+   (as __builtin_contract_violation_type is), so that a module interface,
+   which streams an inline function's body, checks included, can stream
+   it too; an unnamed record is no type a module can describe.
+   CAPTURE_BLOCK_TYPE builds one for operands of the types in TYPES
+   (references stand for their referents); CAPTURE_SLOT refers to field I
+   of BLOCK, a capture block lvalue.  */
 
 static tree
-capture_block_type (unsigned n)
+capture_block_type (const vec<tree> &types)
 {
-  return build_distinct_type_copy (build_array_type_nelts (ptr_type_node,
-							   n));
+  tree fields = NULL_TREE;
+  for (unsigned i = 0; i < types.length (); ++i)
+    {
+      tree t = types[i];
+      tree pointee = TYPE_REF_P (t) ? TREE_TYPE (t) : t;
+      char name[16];
+      sprintf (name, "__p%u", i);
+      tree field = build_decl (BUILTINS_LOCATION, FIELD_DECL,
+			       get_identifier (name),
+			       build_pointer_type (pointee));
+      DECL_ARTIFICIAL (field) = true;
+      /* finish_builtin_struct wants them chained in reverse.  */
+      DECL_CHAIN (field) = fields;
+      fields = field;
+    }
+  tree type = make_class_type (RECORD_TYPE);
+  finish_builtin_struct (type, IDENTIFIER_POINTER (make_anon_name ()),
+			 fields, NULL_TREE);
+  CLASSTYPE_AS_BASE (type) = type;
+  xref_basetypes (type, /*bases=*/NULL_TREE);
+  DECL_CONTEXT (TYPE_NAME (type)) = FROB_CONTEXT (global_namespace);
+  DECL_ARTIFICIAL (TYPE_NAME (type)) = true;
+  TYPE_ARTIFICIAL (type) = true;
+  return type;
 }
 
 tree
 capture_slot (tree block, unsigned i)
 {
-  return build4 (ARRAY_REF, ptr_type_node, block, size_int (i), NULL_TREE,
-		 NULL_TREE);
+  tree field = TYPE_FIELDS (TREE_TYPE (block));
+  for (; field && (TREE_CODE (field) != FIELD_DECL || i); field = DECL_CHAIN (field))
+    if (TREE_CODE (field) == FIELD_DECL)
+      --i;
+  return build3 (COMPONENT_REF, TREE_TYPE (field), block, field, NULL_TREE);
 }
 
-/* The number of elements of capture block type TYPE.  */
+/* The number of fields of capture block type TYPE.  */
 
 static unsigned
 capture_block_size (tree type)
 {
-  return tree_to_uhwi (array_type_nelts_top (type));
+  unsigned n = 0;
+  for (tree f = TYPE_FIELDS (type); f; f = DECL_CHAIN (f))
+    n += TREE_CODE (f) == FIELD_DECL;
+  return n;
 }
 
 /* Build a fresh, file-local, static `bool NAME (void *)' thunk for CORE_FN
@@ -42822,11 +42851,8 @@ build_predicate_thunk_function (tree contract, tree core_fn, tree struct_type)
   unsigned i = 0;
   for (tree cp = DECL_ARGUMENTS (core_fn); cp; cp = DECL_CHAIN (cp), ++i)
     {
-      /* The element holds the operand's address as a void *.  */
-      tree pointee = (TYPE_REF_P (TREE_TYPE (cp))
-		      ? TREE_TYPE (TREE_TYPE (cp)) : TREE_TYPE (cp));
-      tree addr = fold_convert (build_pointer_type (pointee),
-				capture_slot (deref, i));
+      /* The field holds the operand's address.  */
+      tree addr = capture_slot (deref, i);
       tree arg = TYPE_REF_P (TREE_TYPE (cp))
 	? fold_convert (TREE_TYPE (cp), addr)
 	: build_simple_mem_ref (addr);
@@ -42869,7 +42895,10 @@ build_predicate_thunk_function (tree contract, tree core_fn, tree struct_type)
 static tree
 build_predicate_arg_struct_type (tree core_fn, location_t)
 {
-  return capture_block_type (list_length (DECL_ARGUMENTS (core_fn)));
+  auto_vec<tree> types;
+  for (tree p = DECL_ARGUMENTS (core_fn); p; p = DECL_CHAIN (p))
+    types.safe_push (TREE_TYPE (p));
+  return capture_block_type (types);
 }
 
 /* The capture struct type of CONTRACT's check in FN without building
@@ -42898,7 +42927,7 @@ build_contract_mark_struct_type (tree contract, tree fn, location_t)
   if (postcondition && result_type && !VOID_TYPE_P (result_type))
     types.safe_push (result_type);
 
-  return capture_block_type (types.length ());
+  return capture_block_type (types);
 }
 
 /* Declare a local variable of STRUCT_TYPE (built by
@@ -43011,8 +43040,8 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
 	 build_fold_addr_expr (real_val) shape for that specific case and
 	 mishandles this file's own more direct alternative.  */
       tree addr = (TYPE_REF_P (TREE_TYPE (real_val)) && !DECL_BY_REFERENCE (real_val))
-	? build1 (NOP_EXPR, ptr_type_node, real_val)
-	: fold_convert (ptr_type_node, build_fold_addr_expr (real_val));
+	? build1 (NOP_EXPR, TREE_TYPE (field_ref), real_val)
+	: fold_convert (TREE_TYPE (field_ref), build_fold_addr_expr (real_val));
       finish_expr_stmt (cp_build_init_expr (field_ref, addr));
       ++field;
     };
