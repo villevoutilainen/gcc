@@ -562,10 +562,14 @@ contract_side_of (tree contract, tree fndecl)
    checked or assumed under the current build configuration, for the given
    SIDE.  */
 
+static bool contract_redundant_caller_check_p (tree, int, tree);
+static contract_evaluation_semantic contract_caller_side_semantic (tree,
+								   tree);
+
 static bool
 contract_active_p (tree contract, contract_check_side side, tree fn)
 {
-  contract_config_scope ccs (contract, fn);
+  contract_config_scope ccs (contract, fn, -2, side);
   /* D4324: a named control object decides activity by its type's
      compile-time members rather than the translation-unit semantic.  The
      assertion is active if it is not ignored (a runtime check or
@@ -585,6 +589,10 @@ contract_active_p (tree contract, contract_check_side side, tree fn)
 	return true;
       return contract_control_assumable (ctrl, side, fn);
     }
+  /* A redundant caller-side check has its own semantic ("caller"
+     configuration entries).  */
+  if (contract_redundant_caller_check_p (contract, side, fn))
+    return contract_caller_side_semantic (contract, fn) != CES_IGNORE;
   return get_evaluation_semantic (contract) != CES_IGNORE;
 }
 
@@ -614,7 +622,8 @@ static bool
 contract_runs_on_side (tree contract, contract_check_side side,
 		       tree fn = NULL_TREE)
 {
-  contract_config_scope ccs (contract, fn);
+  contract_config_scope ccs (contract, fn, -2, side);
+  tree wrapper_or_fn = fn;
   /* For a caller-side wrapper, the function it wraps.  */
   if (fn && DECL_CONTRACT_WRAPPER (fn))
     fn = get_orig_func_for_wrapper (fn);
@@ -634,11 +643,22 @@ contract_runs_on_side (tree contract, contract_check_side side,
   if (side == ccs_definition)
     return force_def ? true : force_client ? false
 			     : flag_contracts_definition_check;
-  return force_def ? false : force_client ? true
-			   : (fn && DECL_VIRTUAL_P (fn)) ? true
-			   : (TREE_CODE (contract) == POSTCONDITION_STMT
-			      ? flag_contract_client_check > 1
-			      : flag_contract_client_check > 0);
+  if (force_def)
+    return false;
+  if (force_client || (fn && DECL_VIRTUAL_P (fn)))
+    return true;
+  /* P3595: -fcontracts-client-check=pre/all stands for a last
+     {"match": {"caller": true, "kind": "pre"}} or {"match": {"caller":
+     true}} entry with the translation unit's semantic; an earlier
+     "caller" entry that matches decides on its own (its semantic, ignore
+     included, then decides whether the check is active).  */
+  if (!contract_config_table.is_empty ()
+      && contract_config_semantic_of (contract, wrapper_or_fn, 0,
+				      ccs_wrapper))
+    return true;
+  return (TREE_CODE (contract) == POSTCONDITION_STMT
+	  ? flag_contract_client_check > 1
+	  : flag_contract_client_check > 0);
 }
 
 /* True if FNDECL has any checked or assumed contracts whose TREE_CODE is
@@ -2380,6 +2400,21 @@ static GTY(()) hash_map<tree, tree> *decl_nv_wrapper_fn = nullptr;
 
 static GTY(()) hash_map<tree, tree> *decl_for_wrapper = nullptr;
 
+/* For the redundant caller-side checks being decided or built: an
+   identifier of one character per configuration entry, '1' if the entry
+   has a "caller" object the calling code matches, else '0'; or NULL_TREE,
+   if no entry has a "caller" object.  Set by maybe_contract_wrap_call for
+   a call, and by define_contract_wrapper_func for the wrapper built for
+   such calls (contract_config_wrapper_mask).  */
+
+static GTY(()) tree contract_config_caller_mask;
+
+/* The wrapper of a call with a caller mask, mapped to its mask.  */
+static GTY(()) hash_map<tree, tree> *contract_config_wrapper_masks;
+
+static tree contract_config_caller_mask_for (tree, location_t);
+
+
 /* A predicate function's result parameter, mapped to the name its
    postcondition gave the result ('r' in 'post (r: r > 0)').  */
 static GTY(()) hash_map<tree, tree> *pred_result_names = nullptr;
@@ -2507,9 +2542,41 @@ build_contract_wrapper_function (tree fndecl, bool nonvirtual)
   return wrapdecl;
 }
 
+/* For a non-virtual function with a caller mask (contract_config_caller_
+   mask), the list of its wrappers: TREE_PURPOSE the mask, TREE_VALUE the
+   wrapper.  Calls whose callers match different "caller" objects get
+   different wrappers, each with the semantics its callers' entries give.  */
+static GTY(()) hash_map<tree, tree> *decl_masked_wrapper_fn = nullptr;
+
 static tree
 get_or_create_contract_wrapper_function (tree fndecl, bool nonvirtual)
 {
+  if (tree mask = nonvirtual ? NULL_TREE : contract_config_caller_mask)
+    {
+      hash_map_maybe_create<hm_ggc> (decl_masked_wrapper_fn);
+      tree &list = decl_masked_wrapper_fn->get_or_insert (fndecl);
+      unsigned n = 0;
+      for (tree l = list; l; l = TREE_CHAIN (l), ++n)
+	if (TREE_PURPOSE (l) == mask)
+	  return TREE_VALUE (l);
+      tree wrapdecl = build_contract_wrapper_function (fndecl, nonvirtual);
+      if (n)
+	{
+	  /* A distinct name for each further wrapper.  */
+	  char *nn = xasprintf ("%s%s%u",
+				IDENTIFIER_POINTER
+				  (DECL_ASSEMBLER_NAME (wrapdecl)),
+				JOIN_STR, n);
+	  SET_DECL_ASSEMBLER_NAME (wrapdecl, get_identifier (nn));
+	  free (nn);
+	}
+      hash_map_maybe_create<hm_ggc> (decl_for_wrapper);
+      decl_for_wrapper->put (wrapdecl, fndecl);
+      hash_map_maybe_create<hm_ggc> (contract_config_wrapper_masks);
+      contract_config_wrapper_masks->put (wrapdecl, mask);
+      list = tree_cons (mask, wrapdecl, list);
+      return wrapdecl;
+    }
   tree wrapdecl = get_contract_wrapper_function (fndecl, nonvirtual);
   if (!wrapdecl)
     {
@@ -3097,6 +3164,13 @@ copy_and_remap_contracts (tree dest, tree source,
 	continue;
 
       tree stmt = copy_node (contract);
+      /* A redundant caller-side check of a contract without a control
+	 object has its own semantic.  */
+      if (for_wrapper && !CONTRACT_CONTROL_OBJECT (contract)
+	  && contract_redundant_caller_check_p (contract, ccs_wrapper, dest))
+	CONTRACT_EVALUATION_SEMANTIC (stmt)
+	  = build_int_cst (uint16_type_node,
+			   contract_caller_side_semantic (contract, dest));
       if (oa_synthesized_implicit_contracts
 	  && oa_synthesized_implicit_contracts->contains (contract))
 	oa_synthesized_implicit_contracts->add (stmt);
@@ -3657,6 +3731,18 @@ maybe_contract_wrap_call (tree fndecl, tree call)
   if (!handle_contracts_p (fndecl))
     return call;
 
+  /* Which "caller" objects of the configuration this call's caller
+     matches; restored on every return.  */
+  struct caller_mask_restorer
+  {
+    tree saved = contract_config_caller_mask;
+    ~caller_mask_restorer () { contract_config_caller_mask = saved; }
+  } restore_caller_mask;
+  contract_config_caller_mask
+    = (DECL_VIRTUAL_P (fndecl) ? NULL_TREE
+       : contract_config_caller_mask_for (current_function_decl,
+					  cp_expr_loc_or_input_loc (call)));
+
   bool do_pre = has_active_preconditions (fndecl, ccs_wrapper);
   bool do_post = has_active_postconditions (fndecl, ccs_wrapper);
 
@@ -3703,6 +3789,10 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl,
     return true;
 
   gcc_checking_assert (!DECL_HAS_CONTRACTS_P (wrapdecl));
+  /* The caller mask of the calls this wrapper serves.  */
+  tree saved_mask = contract_config_caller_mask;
+  tree *mask = hash_map_safe_get (contract_config_wrapper_masks, wrapdecl);
+  contract_config_caller_mask = mask ? *mask : NULL_TREE;
   /* Which of the original contracts (pre and/or post) actually belong on
      this wrapper -- whether under the ordinary -fcontracts-client-check
      policy or a per-contract force_client_side_check/
@@ -3760,6 +3850,7 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl,
   finish_compound_stmt (compound_stmt);
   finish_function_body (body);
   expand_or_defer_fn (finish_function (/*inline_p=*/false));
+  contract_config_caller_mask = saved_mask;
   return true;
 }
 
@@ -3786,6 +3877,28 @@ emit_contract_wrapper_func (bool done)
       more |= map->elements () > start_elements;
       if (done)
 	map->empty ();
+    }
+  /* The wrappers of calls with caller masks.  */
+  if (decl_masked_wrapper_fn && !decl_masked_wrapper_fn->is_empty ())
+    {
+      auto count = [] ()
+	{
+	  size_t n = 0;
+	  for (auto i : *decl_masked_wrapper_fn)
+	    n += list_length (i.second);
+	  return n;
+	};
+      size_t start_elements = count ();
+      /* Defining a wrapper can add others, so collect them first.  */
+      auto_vec<std::pair<tree, tree> > todo;
+      for (auto i : *decl_masked_wrapper_fn)
+	for (tree l = i.second; l; l = TREE_CHAIN (l))
+	  todo.safe_push (std::make_pair (i.first, TREE_VALUE (l)));
+      for (auto &p : todo)
+	define_contract_wrapper_func (p.first, p.second, NULL);
+      more |= count () > start_elements;
+      if (done)
+	decl_masked_wrapper_fn->empty ();
     }
   gcc_checking_assert (!done || !more);
   return more;
@@ -7993,48 +8106,131 @@ contract_config_file_matches (const char *entry, const char *file)
   return n == m || file[m - n - 1] == '/' || entry[0] == '/';
 }
 
+/* Whether the location of XLOC lies in FILE, within one of the LINES_LEN
+   line intervals LINES (any line if none) and at COLUMN (any if 0).  */
+
+static bool
+contract_config_loc_matches (const char *file, const int *lines,
+			     unsigned lines_len, int column,
+			     const expanded_location &xloc)
+{
+  if (!xloc.file || !contract_config_file_matches (file, xloc.file))
+    return false;
+  bool in = !lines_len;
+  for (unsigned i = 0; i < lines_len; ++i)
+    if (xloc.line >= lines[2 * i] && xloc.line <= lines[2 * i + 1])
+      in = true;
+  return in && (!column || xloc.column == column);
+}
+
+/* The name of the namespace enclosing FN (NULL_TREE: the current scope),
+   for a "namespace" match; NULL for the global namespace.  The result is
+   GC-allocated by decl_as_string's buffer only until its next call, so
+   copied.  */
+
+static char *
+contract_config_ns_of (tree fn)
+{
+  tree scope = fn && fn != error_mark_node ? CP_DECL_CONTEXT (fn)
+	       : current_namespace;
+  scope = decl_namespace_context (scope);
+  if (!scope || scope == global_namespace)
+    return NULL;
+  return xstrdup (decl_as_string (scope, TFF_PLAIN_IDENTIFIER));
+}
+
+/* Whether some configuration entry has a "caller" object.  */
+
+static bool
+contract_config_caller_objects_p ()
+{
+  for (const contract_config_entry &e : contract_config_table)
+    if (e.caller == 2)
+      return true;
+  return false;
+}
+
+/* The caller mask (contract_config_caller_mask) of a call at LOC from
+   CALLER (NULL_TREE: no function), or NULL_TREE if no entry has a
+   "caller" object.  */
+
+static tree
+contract_config_caller_mask_for (tree caller, location_t loc)
+{
+  if (!contract_config_caller_objects_p ())
+    return NULL_TREE;
+  char *ns = NULL;
+  bool ns_known = false;
+  expanded_location xloc = expand_location (loc);
+  unsigned n = contract_config_table.length ();
+  char *mask = XALLOCAVEC (char, n + 1);
+  for (unsigned i = 0; i < n; ++i)
+    {
+      const contract_config_entry &e = contract_config_table[i];
+      bool match = e.caller == 2;
+      if (match && e.caller_ns)
+	{
+	  if (!ns_known)
+	    {
+	      ns = caller ? contract_config_ns_of (caller) : NULL;
+	      ns_known = true;
+	    }
+	  match = ns && contract_config_ns_matches (e.caller_ns, ns);
+	}
+      if (match && e.caller_file)
+	match = contract_config_loc_matches (e.caller_file, e.caller_lines,
+					     e.caller_lines_len,
+					     e.caller_column, xloc);
+      mask[i] = match ? '1' : '0';
+    }
+  mask[n] = '\0';
+  free (ns);
+  return get_identifier (mask);
+}
+
 /* The semantic the configuration gives a contract assertion of KIND at
    LOC, naming control object CTRL (NULL_TREE: none), of function FN
    (NULL_TREE: of the current scope); CONSTEVAL is 1 for its evaluation at
    compile time, 0 for run time, -1 for an evaluation of either (C++26
    contracts without control objects, which have one semantic for both:
-   entries with a "constexpr" key then match nothing).  0 if no entry
-   matches.  */
+   entries with a "constexpr" key then match nothing).  CALLER is true for
+   a redundant caller-side check (assertion_check_side::client, of a
+   non-virtual function), which only entries with a "caller" key match --
+   one with a "caller" object, only if the calling code matches it
+   (contract_config_caller_mask); the other checks match only entries
+   without one.  0 if no entry matches.  */
 
 unsigned
 contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
-			      tree fn, int comptime)
+			      tree fn, int comptime, bool caller)
 {
   if (contract_config_table.is_empty ())
     return 0;
-  tree scope = fn && fn != error_mark_node ? CP_DECL_CONTEXT (fn)
-	       : current_namespace;
-  scope = decl_namespace_context (scope);
-  const char *ns = NULL;
-  if (scope && scope != global_namespace)
-    ns = decl_as_string (scope, TFF_PLAIN_IDENTIFIER);
+  char *ns = contract_config_ns_of (fn);
   expanded_location xloc = expand_location (loc);
+  const char *mask = (caller && contract_config_caller_mask
+		      ? IDENTIFIER_POINTER (contract_config_caller_mask)
+		      : NULL);
   auto_vec<char *> groups;
   bool groups_known = false;
-  for (const contract_config_entry &e : contract_config_table)
+  unsigned result = 0;
+  for (unsigned i = 0; i < contract_config_table.length (); ++i)
     {
+      const contract_config_entry &e = contract_config_table[i];
+      if ((e.caller != 0) != caller)
+	continue;
+      if (e.caller == 2 && (!mask || mask[i] != '1'))
+	continue;
       if (e.kind && e.kind != kind)
 	continue;
       if (e.constexpr_eval != -1 && e.constexpr_eval != comptime)
 	continue;
       if (e.ns && (!ns || !contract_config_ns_matches (e.ns, ns)))
 	continue;
-      if (e.file)
-	{
-	  if (!xloc.file || !contract_config_file_matches (e.file, xloc.file))
-	    continue;
-	  bool in = !e.lines_len;
-	  for (unsigned i = 0; i < e.lines_len; ++i)
-	    if (xloc.line >= e.lines[2 * i] && xloc.line <= e.lines[2 * i + 1])
-	      in = true;
-	  if (!in || (e.column && xloc.column != e.column))
-	    continue;
-	}
+      if (e.file
+	  && !contract_config_loc_matches (e.file, e.lines, e.lines_len,
+					   e.column, xloc))
+	continue;
       if (e.group)
 	{
 	  if (!groups_known)
@@ -8053,27 +8249,67 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
 	  if (!covered)
 	    continue;
 	}
-      for (char *g : groups)
-	XDELETEVEC (g);
-      return e.semantic;
+      result = e.semantic;
+      break;
     }
   for (char *g : groups)
     XDELETEVEC (g);
-  return 0;
+  free (ns);
+  return result;
 }
 
-/* As contract_config_semantic_for, for CONTRACT.  */
+/* Whether a check of CONTRACT on SIDE, of FN or of the caller-side
+   wrapper FN, is a redundant caller-side check: one on the client side of
+   a non-virtual function, which its definition may check as well.  */
+
+static bool
+contract_redundant_caller_check_p (tree contract, int side, tree fn)
+{
+  if (side != ccs_wrapper || !contract
+      || TREE_CODE (contract) == ASSERTION_STMT)
+    return false;
+  if (fn && DECL_LANG_SPECIFIC (fn) && DECL_CONTRACT_WRAPPER (fn))
+    fn = get_orig_func_for_wrapper (fn);
+  return !(fn && DECL_VIRTUAL_P (fn));
+}
+
+/* As contract_config_semantic_for, for CONTRACT, of FN, checked on SIDE
+   (-1: the side of FN's own copy of it).  */
 
 unsigned
-contract_config_semantic_of (tree contract, tree fn, int comptime)
+contract_config_semantic_of (tree contract, tree fn, int comptime, int side)
 {
   if (contract_config_table.is_empty () || !contract
       || contract == error_mark_node)
     return 0;
-  return contract_config_semantic_for (get_contract_assertion_kind (contract),
-				       EXPR_LOCATION (contract),
-				       CONTRACT_CONTROL_OBJECT (contract), fn,
-				       comptime);
+  if (side < 0)
+    side = contract_side_of (contract, fn);
+  bool caller = contract_redundant_caller_check_p (contract, side, fn);
+  tree saved_mask = contract_config_caller_mask;
+  if (caller && fn && DECL_LANG_SPECIFIC (fn) && DECL_CONTRACT_WRAPPER (fn))
+    {
+      tree *m = hash_map_safe_get (contract_config_wrapper_masks, fn);
+      contract_config_caller_mask = m ? *m : NULL_TREE;
+    }
+  unsigned sem
+    = contract_config_semantic_for (get_contract_assertion_kind (contract),
+				    EXPR_LOCATION (contract),
+				    CONTRACT_CONTROL_OBJECT (contract), fn,
+				    comptime, caller);
+  contract_config_caller_mask = saved_mask;
+  return sem;
+}
+
+/* The semantic of a redundant caller-side check of the contract
+   CONTRACT without a control object, of FN: the configuration's for it
+   ("caller" entries), else the translation unit's.  */
+
+static contract_evaluation_semantic
+contract_caller_side_semantic (tree contract, tree fn)
+{
+  unsigned sem = contract_config_semantic_of (contract, fn, 0, ccs_wrapper);
+  return (contract_evaluation_semantic)
+    (sem ? sem : flag_contract_evaluation_semantic);
 }
 
 /* If the assertion names a control type CTRL, constant-evaluate
@@ -43418,6 +43654,8 @@ contracts_post_pch_load ()
   pch_rehash (object_check_fn_orig_decl);
   pch_rehash (decl_wrapper_fn);
   pch_rehash (decl_nv_wrapper_fn);
+  pch_rehash (decl_masked_wrapper_fn);
+  pch_rehash (contract_config_wrapper_masks);
   pch_rehash (decl_for_wrapper);
   pch_rehash (pred_result_names);
   pch_rehash (contract_positional_parms_map);

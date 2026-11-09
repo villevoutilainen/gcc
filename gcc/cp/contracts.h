@@ -1598,8 +1598,8 @@ extern void *symbolic_assert_scope_addr_data;
 extern unsigned contract_config_override;
 extern int contract_config_consteval;
 extern unsigned contract_config_semantic_for (unsigned, location_t, tree,
-					      tree, int);
-extern unsigned contract_config_semantic_of (tree, tree, int);
+					      tree, int, bool = false);
+extern unsigned contract_config_semantic_of (tree, tree, int, int = -1);
 
 /* While one is live, a control object's queries, its context and its
    static info see the semantic the configuration gives one contract
@@ -1607,7 +1607,10 @@ extern unsigned contract_config_semantic_of (tree, tree, int);
    FN (NULL_TREE: the current scope), evaluated at compile time if
    CONSTEVAL is 1, at run time if 0, as the enclosing scope's if -2 (run
    time outside any); or the translation unit's semantic if no entry
-   matches.  No effect without a configuration.  */
+   matches.  SIDE is the contract_check_side of the check, or -1 for the
+   side of FN's own copy of CONTRACT (its caller-side wrapper's, if FN is
+   one); a redundant caller-side check is matched by the "caller"
+   entries only.  No effect without a configuration.  */
 
 extern tree contract_static_info_comment;
 
@@ -1618,7 +1621,7 @@ class contract_config_scope
   tree m_saved_comment;
 public:
   contract_config_scope (tree contract, tree fn = NULL_TREE,
-			 int comptime = -2)
+			 int comptime = -2, int side = -1)
     : m_saved (contract_config_override),
       m_saved_consteval (contract_config_consteval),
       m_saved_comment (contract_static_info_comment)
@@ -1631,7 +1634,7 @@ public:
     if (!contract_config_table.is_empty ())
       contract_config_override
 	= contract_config_semantic_of (contract, fn,
-				       contract_config_consteval);
+				       contract_config_consteval, side);
   }
   contract_config_scope (unsigned kind, location_t loc, tree ctrl, tree fn)
     : m_saved (contract_config_override),

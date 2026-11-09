@@ -1773,6 +1773,16 @@ struct contract_config_entry
   unsigned lines_len;
   int column;
   unsigned semantic;
+  /* P3595 "caller": 0 if absent or false (the entry matches checks other
+     than redundant caller-side ones), 1 if true (it matches only
+     redundant caller-side checks), 2 if an object (as 1, and the caller
+     must match the CALLER_* fields that are set).  */
+  int caller;
+  const char *caller_ns;
+  const char *caller_file;
+  int *caller_lines;
+  unsigned caller_lines_len;
+  int caller_column;
 };
 extern vec<contract_config_entry> contract_config_table;
 

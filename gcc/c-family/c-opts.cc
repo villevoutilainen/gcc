@@ -1890,8 +1890,13 @@ contract_config_location (const char *loc, contract_config_entry &e,
    contract_config_table.  A configuration is an array of entries
    {"match": {...}, "output": {"semantic": NAME}}; "match" may have "kind"
    ("pre", "post", "contract_assert"), "constexpr" (true for constant
-   evaluation, false for run time), "namespace", "location" and "group"
-   (matched against a control object's group_names), each optional.  */
+   evaluation, false for run time), "namespace", "location", "group"
+   (matched against a control object's group_names) and "caller", each
+   optional.  "caller" is true, false, or an object with "namespace" and
+   "location" describing the calling code: an entry with "caller" true or
+   an object matches only the redundant caller-side checks (those with
+   assertion_check_side::client of a non-virtual function), and an entry
+   without it, or with it false, only the other checks.  */
 static void
 parse_contract_configuration (const char *text, const char *source)
 {
@@ -1910,7 +1915,9 @@ parse_contract_configuration (const char *text, const char *source)
     }
   static const char *const entry_keys[] = { "match", "output", NULL };
   static const char *const match_keys[]
-    = { "kind", "constexpr", "namespace", "location", "group", NULL };
+    = { "kind", "constexpr", "namespace", "location", "group", "caller",
+	NULL };
+  static const char *const caller_keys[] = { "namespace", "location", NULL };
   static const char *const output_keys[] = { "semantic", NULL };
   for (size_t i = 0; i < arr->size (); ++i)
     {
@@ -1988,6 +1995,43 @@ parse_contract_configuration (const char *text, const char *source)
 		{
 		  error ("contract configuration %qs: %<constexpr%> must be a "
 			 "boolean", source);
+		  continue;
+		}
+	    }
+	  if (json::value *cv = match->get ("caller"))
+	    {
+	      if (cv->get_kind () == json::JSON_TRUE)
+		e.caller = 1;
+	      else if (cv->get_kind () == json::JSON_FALSE)
+		e.caller = 0;
+	      else if (json::object *co = cv->dyn_cast_object ())
+		{
+		  const char *cloc = NULL;
+		  if (!contract_config_known_keys (co, "caller", caller_keys,
+						   source)
+		      || !contract_config_string (co, "namespace", &e.caller_ns,
+						  source)
+		      || !contract_config_string (co, "location", &cloc,
+						  source))
+		    continue;
+		  if (e.caller_ns && !strncmp (e.caller_ns, "::", 2))
+		    e.caller_ns += 2;
+		  if (cloc)
+		    {
+		      contract_config_entry ce = {};
+		      if (!contract_config_location (cloc, ce, source))
+			continue;
+		      e.caller_file = ce.file;
+		      e.caller_lines = ce.lines;
+		      e.caller_lines_len = ce.lines_len;
+		      e.caller_column = ce.column;
+		    }
+		  e.caller = 2;
+		}
+	      else
+		{
+		  error ("contract configuration %qs: %<caller%> must be a "
+			 "boolean or a JSON object", source);
 		  continue;
 		}
 	    }
