@@ -706,29 +706,6 @@ has_active_postconditions (tree fndecl, contract_check_side side)
   return has_active_contract_condition (fndecl, POSTCONDITION_STMT, side);
 }
 
-/* Return true if any contract of FNDECL is checked or assumed under the
-   current build configuration.  A plain "is anything active at all" query
-   has no single correct side, so a PRE/POST contract is checked under
-   *both* real sides (never a false negative that would wrongly skip real
-   per-side processing later); an ASSERTION_STMT has only
-   ccs_not_applicable to check.  */
-
-static bool
-contract_any_active_p (tree fndecl)
-{
-  tree contracts = get_fn_contract_specifiers (fndecl);
-  if (!contracts)
-    return false;
-
-  for (tree contract : tree_vec_range (contracts))
-    if (TREE_CODE (contract) == ASSERTION_STMT
-	? contract_active_p (contract, ccs_not_applicable, fndecl)
-	: (contract_active_p (contract, ccs_definition, fndecl)
-	   || contract_active_p (contract, ccs_wrapper, fndecl)))
-      return true;
-  return false;
-}
-
 /* Return true if any contract in CONTRACTS is not yet parsed.  */
 
 bool
@@ -743,21 +720,19 @@ contract_any_deferred_p (tree contracts)
   return false;
 }
 
-/* Returns true if function decl FNDECL has contracts and we need to
-   process them for the purposes of either building caller or definition
-   contract checks.
-   This function does not take into account whether caller or definition
-   side checking is enabled. Those checks will be done from the calling
-   function which will be able to determine whether it is doing caller
-   or definition contract handling.  */
+/* Whether FNDECL has contracts this translation unit may need to check,
+   on either side.  Whether any is active is not asked here: each caller
+   goes on to ask that for the one side it handles (has_active_
+   preconditions/has_active_postconditions), and asking both sides first
+   would evaluate every control object's queries for both.  */
 
 static bool
-handle_contracts_p (tree fndecl)
+handle_contracts_on_one_side_p (tree fndecl)
 {
   return (flag_contracts
 	  && !processing_template_decl
 	  && (CONTRACT_HELPER (fndecl) == ldf_contract_none)
-	  && contract_any_active_p (fndecl));
+	  && get_fn_contract_specifiers (fndecl));
 }
 
 /* For use with the tree inliner. This preserves non-mapped local variables,
@@ -2600,7 +2575,7 @@ start_function_contracts (tree fndecl)
   if (error_operand_p (fndecl))
     return;
 
-  if (!handle_contracts_p (fndecl))
+  if (!handle_contracts_on_one_side_p (fndecl))
     return;
 
   /* If nothing on FNDECL is going to run on its own side (whichever side
@@ -2948,7 +2923,7 @@ finish_contracts_wrapper_stmt (tree fndecl, tree compound_stmt)
 void
 maybe_apply_function_contracts (tree fndecl)
 {
-  if (!handle_contracts_p (fndecl))
+  if (!handle_contracts_on_one_side_p (fndecl))
     /* We did nothing and the original function body statement list will be
        popped by our caller.  */
     return;
@@ -3743,15 +3718,15 @@ maybe_contract_wrap_call (tree fndecl, tree call)
      active_preconditions/has_active_postconditions check further below
      (which cares about wrapper generation, not conveyor/symbolic
      classification).  This whole block sits ahead of the handle_
-     contracts_p early-return below (rather than after, as it used to):
-     handle_contracts_p requires contract_any_active_p (FNDECL), which is
-     false for a bare, non-conveyor constructor/destructor with no
-     contract specifiers of its own -- the overwhelmingly common case --
+     contracts_on_one_side_p early-return below (rather than after, as it
+     used to): that requires FNDECL to have contract specifiers, which a
+     bare, non-conveyor constructor/destructor without any of its own --
+     the overwhelmingly common case -- doesn't have,
      so the ctor/dtor marking a few lines down was previously dead code
      for exactly the callees that matter most here.  oa_maybe_
      instantiate_contracts is a no-op unless FNDECL is an as-yet-
      uninstantiated template specialization, so hoisting it above
-     handle_contracts_p is harmless for every other caller of this
+     handle_contracts_on_one_side_p is harmless for every other caller of this
      function.  oa_maybe_instantiate_contracts first, exactly like oa_
      scan_calls_in_expr/oa_function_needs_walk_p, since FNDECL's own
      contract specifiers can still be pointing at an uninstantiated
@@ -3821,7 +3796,9 @@ maybe_contract_wrap_call (tree fndecl, tree call)
 	}
     }
 
-  if (!handle_contracts_p (fndecl))
+  /* Whether the call needs a wrapper is asked of the wrapper's side
+     below (has_active_preconditions/has_active_postconditions).  */
+  if (!handle_contracts_on_one_side_p (fndecl))
     return call;
 
   /* Which "caller" objects of the configuration this call's caller
@@ -5324,8 +5301,8 @@ finish_function_outlined_contracts (tree fndecl)
 
   /* If there are no contracts here, or we're building them in-line then we
      do not need to build the outlined functions.  */
-  if (!handle_contracts_p (fndecl)
-      || !flag_contract_checks_outlined)
+  if (!flag_contract_checks_outlined
+      || !handle_contracts_on_one_side_p (fndecl))
     return;
 
   /* If nothing on FNDECL is going to run on its own side (whichever side
