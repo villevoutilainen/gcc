@@ -9896,6 +9896,31 @@ find_condition_captures (tree condition, tree orig, tree postcond_id)
 
 static GTY(()) hash_set<tree> *contract_pred_capture_parms;
 
+/* FN is a helper function a contract check of ORIG calls (its predicate
+   core, or a thunk to it).  It has internal linkage and no context; but
+   a module interface streams an inline ORIG's body -- the check included
+   -- so its helpers must be streamable too: make FN an inline function of
+   ORIG's namespace with vague linkage, defined in every TU that uses it,
+   like ORIG.  */
+
+static void
+contract_helper_linkage (tree fn, tree orig)
+{
+  /* With modules at all: a global module fragment's functions are
+     finished before the TU knows it is a module interface.  */
+  if (!modules_p () || !orig || TREE_CODE (orig) != FUNCTION_DECL
+      || !DECL_DECLARED_INLINE_P (orig) || !TREE_PUBLIC (orig))
+    return;
+  DECL_CONTEXT (fn) = FROB_CONTEXT (decl_namespace_context (orig));
+  TREE_PUBLIC (fn) = 1;
+  DECL_DECLARED_INLINE_P (fn) = 1;
+  set_originating_module (fn);
+  comdat_linkage (fn);
+  /* Decided: emitted wherever it is used, as ORIG is.  */
+  DECL_INTERFACE_KNOWN (fn) = 1;
+  DECL_NOT_REALLY_EXTERN (fn) = 1;
+}
+
 /* See contracts.h.  */
 
 bool
@@ -10049,6 +10074,7 @@ build_predicate_core_function_1 (tree contract, tree orig)
   TREE_PUBLIC (fn) = 0;
   DECL_EXTERNAL (fn) = 0;
   DECL_INTERFACE_KNOWN (fn) = 1;
+  contract_helper_linkage (fn, orig);
   /* D4324/P2680: see ldf_contract_predicate_helper's own comment --
      this "pred" function's own body is about to become a verbatim
      re-embedding of CONTRACT's condition, with no contract-statement
@@ -42709,6 +42735,37 @@ resolve_base_contract_calls (tree contract, tree using_fndecl)
 	     &data, NULL);
 }
 
+/* A contract check's capture block -- the addresses its predicate reads
+   its operands through -- is an array of void *, one element per
+   captured operand, of a type distinct to the check (so that
+   contract_check_arg_struct_info can find the check from it).  Not a
+   record of typed pointer fields: a module interface streams an inline
+   function's body, checks included, and an unnamed record is no type it
+   can describe.  CAPTURE_BLOCK_TYPE builds one of N elements;
+   CAPTURE_SLOT refers to element I of BLOCK, a capture block lvalue.  */
+
+static tree
+capture_block_type (unsigned n)
+{
+  return build_distinct_type_copy (build_array_type_nelts (ptr_type_node,
+							   n));
+}
+
+tree
+capture_slot (tree block, unsigned i)
+{
+  return build4 (ARRAY_REF, ptr_type_node, block, size_int (i), NULL_TREE,
+		 NULL_TREE);
+}
+
+/* The number of elements of capture block type TYPE.  */
+
+static unsigned
+capture_block_size (tree type)
+{
+  return tree_to_uhwi (array_type_nelts_top (type));
+}
+
 /* Build a fresh, file-local, static `bool NAME (void *)' thunk for CORE_FN
    (as built by build_predicate_core_function).  Its body casts its argument
    to a pointer to STRUCT_TYPE (see the struct built in build_contract_check,
@@ -42748,6 +42805,7 @@ build_predicate_thunk_function (tree contract, tree core_fn, tree struct_type)
   TREE_PUBLIC (fn) = 0;
   DECL_EXTERNAL (fn) = 0;
   DECL_INTERFACE_KNOWN (fn) = 1;
+  contract_helper_linkage (fn, core_fn);
   /* D4324/P2680: see ldf_contract_predicate_helper's own comment. This
      particular helper's own body never embeds a bare is_object_address
      call directly (it just forwards to CORE_FN, itself already marked),
@@ -42761,14 +42819,17 @@ build_predicate_thunk_function (tree contract, tree core_fn, tree struct_type)
   tree deref = build_simple_mem_ref (cast);
 
   releasing_vec call_args;
-  tree field = TYPE_FIELDS (struct_type);
-  for (tree cp = DECL_ARGUMENTS (core_fn); cp; cp = DECL_CHAIN (cp), field = DECL_CHAIN (field))
+  unsigned i = 0;
+  for (tree cp = DECL_ARGUMENTS (core_fn); cp; cp = DECL_CHAIN (cp), ++i)
     {
-      tree field_ref = build3 (COMPONENT_REF, TREE_TYPE (field), deref,
-			       field, NULL_TREE);
+      /* The element holds the operand's address as a void *.  */
+      tree pointee = (TYPE_REF_P (TREE_TYPE (cp))
+		      ? TREE_TYPE (TREE_TYPE (cp)) : TREE_TYPE (cp));
+      tree addr = fold_convert (build_pointer_type (pointee),
+				capture_slot (deref, i));
       tree arg = TYPE_REF_P (TREE_TYPE (cp))
-	? fold_convert (TREE_TYPE (cp), field_ref)
-	: build_simple_mem_ref (field_ref);
+	? fold_convert (TREE_TYPE (cp), addr)
+	: build_simple_mem_ref (addr);
       vec_safe_push (call_args, arg);
     }
 
@@ -42806,26 +42867,9 @@ build_predicate_thunk_function (tree contract, tree core_fn, tree struct_type)
    separately from either.  */
 
 static tree
-build_predicate_arg_struct_type (tree core_fn, location_t loc)
+build_predicate_arg_struct_type (tree core_fn, location_t)
 {
-  tree fields = NULL_TREE;
-  tree *last_field = &fields;
-  for (tree p = DECL_ARGUMENTS (core_fn); p; p = DECL_CHAIN (p))
-    {
-      tree pointee = TYPE_REF_P (TREE_TYPE (p))
-	? TREE_TYPE (TREE_TYPE (p)) : TREE_TYPE (p);
-      tree field = build_decl (loc, FIELD_DECL, NULL_TREE,
-			       build_pointer_type (pointee));
-      *last_field = field;
-      last_field = &DECL_CHAIN (field);
-    }
-
-  tree struct_type = make_node (RECORD_TYPE);
-  TYPE_FIELDS (struct_type) = fields;
-  for (tree f = fields; f; f = DECL_CHAIN (f))
-    DECL_CONTEXT (f) = struct_type;
-  layout_type (struct_type);
-  return struct_type;
+  return capture_block_type (list_length (DECL_ARGUMENTS (core_fn)));
 }
 
 /* The capture struct type of CONTRACT's check in FN without building
@@ -42837,7 +42881,7 @@ build_predicate_arg_struct_type (tree core_fn, location_t loc)
    them.  */
 
 static tree
-build_contract_mark_struct_type (tree contract, tree fn, location_t loc)
+build_contract_mark_struct_type (tree contract, tree fn, location_t)
 {
   bool postcondition = POSTCONDITION_P (contract);
   tree result_type = postcondition ? TREE_TYPE (TREE_TYPE (fn)) : NULL_TREE;
@@ -42854,22 +42898,7 @@ build_contract_mark_struct_type (tree contract, tree fn, location_t loc)
   if (postcondition && result_type && !VOID_TYPE_P (result_type))
     types.safe_push (result_type);
 
-  tree fields = NULL_TREE;
-  tree *last_field = &fields;
-  for (tree t : types)
-    {
-      tree pointee = TYPE_REF_P (t) ? TREE_TYPE (t) : t;
-      tree field = build_decl (loc, FIELD_DECL, NULL_TREE,
-			       build_pointer_type (pointee));
-      *last_field = field;
-      last_field = &DECL_CHAIN (field);
-    }
-  tree struct_type = make_node (RECORD_TYPE);
-  TYPE_FIELDS (struct_type) = fields;
-  for (tree f = fields; f; f = DECL_CHAIN (f))
-    DECL_CONTEXT (f) = struct_type;
-  layout_type (struct_type);
-  return struct_type;
+  return capture_block_type (types.length ());
 }
 
 /* Declare a local variable of STRUCT_TYPE (built by
@@ -42932,14 +42961,13 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
   BIND_EXPR_VARS (cc_bind) = struct_var;
   add_decl_expr (struct_var);
 
-  tree field = TYPE_FIELDS (struct_type);
+  unsigned field = 0, nfields = capture_block_size (struct_type);
   auto_vec<tree> filled;
 
   auto fill_one = [&] (tree real_val)
     {
       filled.safe_push (real_val);
-      tree field_ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var,
-				field, NULL_TREE);
+      tree field_ref = capture_slot (struct_var, field);
       /* D4324 fix (2026-08-19): a GENUINE, SOURCE-LEVEL reference REAL_VAL
 	 (a reference parameter, or a captured reference-typed local --
 	 excluding DECL_BY_REFERENCE, see below) is used DIRECTLY here (a
@@ -42983,14 +43011,14 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
 	 build_fold_addr_expr (real_val) shape for that specific case and
 	 mishandles this file's own more direct alternative.  */
       tree addr = (TYPE_REF_P (TREE_TYPE (real_val)) && !DECL_BY_REFERENCE (real_val))
-	? build1 (NOP_EXPR, TREE_TYPE (field), real_val)
-	: fold_convert (TREE_TYPE (field), build_fold_addr_expr (real_val));
+	? build1 (NOP_EXPR, ptr_type_node, real_val)
+	: fold_convert (ptr_type_node, build_fold_addr_expr (real_val));
       finish_expr_stmt (cp_build_init_expr (field_ref, addr));
-      field = DECL_CHAIN (field);
+      ++field;
     };
 
   for (tree real_val = DECL_ARGUMENTS (current_function_decl);
-       real_val && field; real_val = DECL_CHAIN (real_val))
+       real_val && field < nfields; real_val = DECL_CHAIN (real_val))
     fill_one (real_val);
 
   tree postcond_id = POSTCONDITION_P (contract)
@@ -42998,16 +43026,16 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
   vec<tree, va_gc> *captures
     = find_condition_captures (CONTRACT_CONDITION (contract),
 				current_function_decl, postcond_id);
-  for (unsigned i = 0; i < vec_safe_length (captures) && field; ++i)
+  for (unsigned i = 0; i < vec_safe_length (captures) && field < nfields; ++i)
     fill_one ((*captures)[i]);
 
-  if (field)
+  if (field < nfields)
     {
-      /* The trailing field, for a postcondition's result.  */
+      /* The trailing element, for a postcondition's result.  */
       gcc_checking_assert (POSTCONDITION_P (contract));
       fill_one (DECL_RESULT (current_function_decl));
     }
-  gcc_checking_assert (!field);
+  gcc_checking_assert (field == nfields);
 
   tree info = make_tree_vec (filled.length () + 2);
   TREE_VEC_ELT (info, 0) = contract;

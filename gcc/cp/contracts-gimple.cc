@@ -2905,7 +2905,8 @@ cg_addr_disqualifies_p (gimple *stmt, tree base, tree op, void *data)
   if (gimple_assign_single_p (stmt))
     {
       tree lhs = gimple_assign_lhs (stmt);
-      if (TREE_CODE (lhs) == COMPONENT_REF)
+      /* An element of a contract check's capture block.  */
+      if (TREE_CODE (lhs) == ARRAY_REF)
 	{
 	  tree capture_struct = TREE_OPERAND (lhs, 0);
 	  if (DECL_P (capture_struct)
@@ -12291,7 +12292,7 @@ cg_scalar_memory_untracked (function *fun, hash_set<tree> &untracked)
 	    tree t = TREE_OPERAND (gimple_assign_rhs1 (stmt), 0);
 	    if (cg_stores_addr_into_args_field_p (stmt, t))
 	      c.allowed = t;
-	    else if (TREE_CODE (gimple_assign_lhs (stmt)) == COMPONENT_REF)
+	    else if (TREE_CODE (gimple_assign_lhs (stmt)) == ARRAY_REF)
 	      {
 		tree cond, decls;
 		tree base = TREE_OPERAND (gimple_assign_lhs (stmt), 0);
@@ -12382,7 +12383,7 @@ cg_scalar_memory_tracking_p_1 (function *fun, tree decl)
 	if (gimple_assign_single_p (stmt)
 	    && TREE_CODE (gimple_assign_rhs1 (stmt)) == ADDR_EXPR
 	    && TREE_OPERAND (gimple_assign_rhs1 (stmt), 0) == decl
-	    && TREE_CODE (gimple_assign_lhs (stmt)) == COMPONENT_REF)
+	    && TREE_CODE (gimple_assign_lhs (stmt)) == ARRAY_REF)
 	  {
 	    tree cond, decls;
 	    tree base = TREE_OPERAND (gimple_assign_lhs (stmt), 0);
@@ -17093,14 +17094,11 @@ cg_contract_check_decl_value (gcall *call, tree struct_var, tree decls,
       && decl == POSTCONDITION_IDENTIFIER (contract)
       && TREE_VEC_LENGTH (decls) > 2)
     decl = TREE_VEC_ELT (decls, TREE_VEC_LENGTH (decls) - 1);
-  tree field = TYPE_FIELDS (TREE_TYPE (struct_var));
-  for (int i = 2; i < TREE_VEC_LENGTH (decls) && field;
-       ++i, field = DECL_CHAIN (field))
+  for (int i = 2; i < TREE_VEC_LENGTH (decls); ++i)
     {
       if (TREE_VEC_ELT (decls, i) != decl)
 	continue;
-      tree ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var, field,
-			 NULL_TREE);
+      tree ref = capture_slot (struct_var, i - 2);
       tree stored = cg_value_stored_before (call, ref);
       if (!stored)
 	return NULL_TREE;
@@ -17130,14 +17128,11 @@ static tree
 cg_contract_check_decl_storage (gcall *call, tree struct_var, tree decls,
 				tree decl)
 {
-  tree field = TYPE_FIELDS (TREE_TYPE (struct_var));
-  for (int i = 2; i < TREE_VEC_LENGTH (decls) && field;
-       ++i, field = DECL_CHAIN (field))
+  for (int i = 2; i < TREE_VEC_LENGTH (decls); ++i)
     {
       if (TREE_VEC_ELT (decls, i) != decl)
 	continue;
-      tree ref = build3 (COMPONENT_REF, TREE_TYPE (field), struct_var, field,
-			 NULL_TREE);
+      tree ref = capture_slot (struct_var, i - 2);
       tree stored = cg_value_stored_before (call, ref);
       if (!stored || TREE_CODE (stored) != ADDR_EXPR)
 	return NULL_TREE;

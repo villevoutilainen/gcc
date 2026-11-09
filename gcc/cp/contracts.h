@@ -537,6 +537,7 @@ extern void oa_collect_conjuncts_public (tree *cond, vec<tree *> *out);
    contract, set *COND to a copy of its condition as written, and set
    *DECLS to a TREE_VEC whose element I+2 is the decl captured by the
    struct's field I (contracts.cc).  */
+extern tree capture_slot (tree, unsigned);
 extern void contract_note_imported_decl (tree);
 extern void set_imported_fn_contract_specifiers (tree, tree);
 extern tree contract_check_arg_struct_info (tree struct_type, tree *cond,
