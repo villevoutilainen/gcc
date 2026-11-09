@@ -1,0 +1,7 @@
+[
+  {"match": {"namespace": "vendor", "caller": true}, "output": {"semantic": "observe"}},
+  {"match": {"function": "ours::quiet"}, "output": {"semantic": "ignore"}},
+  {"match": {"kind": "post"}, "output": {"semantic": "ignore"}},
+  {"match": {"location": "d4324-embed-config-demo.h:22"}, "output": {"semantic": "ignore"}},
+  {"match": {"namespace": "ours"}, "output": {"semantic": "observe"}}
+]
