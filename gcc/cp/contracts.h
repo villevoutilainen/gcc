@@ -1613,22 +1613,34 @@ extern unsigned contract_config_semantic_of (tree, tree, int, int = -1);
    entries only.  No effect without a configuration.  */
 
 extern tree contract_static_info_comment;
+/* For assertion_static_info::kind and location: the assertion's kind (0:
+   none) and location, of the contract assertion being processed.  */
+extern unsigned contract_static_info_kind;
+extern location_t contract_static_info_loc;
+extern void contract_static_info_note (tree);
 
 class contract_config_scope
 {
   unsigned m_saved;
   int m_saved_consteval;
   tree m_saved_comment;
+  unsigned m_saved_kind;
+  location_t m_saved_loc;
 public:
   contract_config_scope (tree contract, tree fn = NULL_TREE,
 			 int comptime = -2, int side = -1)
     : m_saved (contract_config_override),
       m_saved_consteval (contract_config_consteval),
-      m_saved_comment (contract_static_info_comment)
+      m_saved_comment (contract_static_info_comment),
+      m_saved_kind (contract_static_info_kind),
+      m_saved_loc (contract_static_info_loc)
   {
-    /* For assertion_static_info::comment.  */
+    /* For assertion_static_info::comment, kind and location.  */
     if (contract && CONTRACT_P (contract))
-      contract_static_info_comment = CONTRACT_COMMENT (contract);
+      {
+	contract_static_info_comment = CONTRACT_COMMENT (contract);
+	contract_static_info_note (contract);
+      }
     if (comptime != -2)
       contract_config_consteval = comptime;
     if (!contract_config_table.is_empty ())
@@ -1639,8 +1651,12 @@ public:
   contract_config_scope (unsigned kind, location_t loc, tree ctrl, tree fn)
     : m_saved (contract_config_override),
       m_saved_consteval (contract_config_consteval),
-      m_saved_comment (contract_static_info_comment)
+      m_saved_comment (contract_static_info_comment),
+      m_saved_kind (contract_static_info_kind),
+      m_saved_loc (contract_static_info_loc)
   {
+    contract_static_info_kind = kind;
+    contract_static_info_loc = loc;
     contract_config_consteval = 0;
     if (!contract_config_table.is_empty ())
       contract_config_override
@@ -1651,6 +1667,8 @@ public:
     contract_config_override = m_saved;
     contract_config_consteval = m_saved_consteval;
     contract_static_info_comment = m_saved_comment;
+    contract_static_info_kind = m_saved_kind;
+    contract_static_info_loc = m_saved_loc;
   }
 };
 

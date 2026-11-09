@@ -152,6 +152,8 @@ namespace contracts
     bool _M_overrides_virtual;
     group_semantic_rules_view _M_group_rules;
     const char* _M_comment;
+    assertion_kind _M_kind;
+    source_location _M_location;
 
   public:
     constexpr evaluation_semantic semantic() const noexcept { return _M_semantic; }
@@ -168,6 +170,13 @@ namespace contracts
     // gives it, but available to a control object's queries at compile
     // time; null where no assertion is being built.
     constexpr const char* comment() const noexcept { return _M_comment; }
+
+    // The assertion's kind and source location, as assertion_context::kind()
+    // and location() give them, but available to a control object's queries
+    // at compile time; kind() is 0 and location() empty where no assertion
+    // is being built.
+    constexpr assertion_kind kind() const noexcept { return _M_kind; }
+    constexpr source_location location() const noexcept { return _M_location; }
   };
 
   using __vendor_ext = void;
@@ -291,11 +300,18 @@ namespace contracts
     const char* _M_message = nullptr;
   };
 
+  // The comment, location, semantic and kind are those of static_info():
+  // the comment is empty, not null, and the location empty, when the
+  // control object omits them.
   struct assertion_context {
-    constexpr const char* comment() const noexcept { return __comment; }
-    constexpr std::source_location location() const noexcept { return __location; }
-    constexpr evaluation_semantic semantic() const noexcept { return __semantic; }
-    constexpr assertion_kind kind() const noexcept { return __kind; }
+    constexpr const char* comment() const noexcept
+    { return __static_info.comment(); }
+    constexpr std::source_location location() const noexcept
+    { return __static_info.location(); }
+    constexpr evaluation_semantic semantic() const noexcept
+    { return __static_info.semantic(); }
+    constexpr assertion_kind kind() const noexcept
+    { return __static_info.kind(); }
     constexpr const assertion_static_info& static_info() const noexcept
     { return __static_info; }
 
@@ -308,13 +324,9 @@ namespace contracts
     // type's own comment for why it exists as a separate, freely
     // user-constructible type rather than just widening this one.
     constexpr assertion_info info() const noexcept
-    { return assertion_info(__comment, __location, __semantic, __kind); }
+    { return assertion_info(comment(), location(), semantic(), kind()); }
 
   private:
-    const char* __comment;
-    std::source_location __location;
-    evaluation_semantic __semantic;
-    assertion_kind __kind;
     assertion_static_info __static_info;
     void* __args;
     bool (*__check)(void*);

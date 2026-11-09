@@ -7195,6 +7195,20 @@ remap_retval (tree fndecl, tree contract)
    processed (contract_config_scope), or 0: the translation unit's.  */
 unsigned contract_config_override;
 
+/* See contracts.h.  */
+unsigned contract_static_info_kind;
+location_t contract_static_info_loc;
+
+/* Note CONTRACT's kind and location for assertion_static_info
+   (contract_config_scope).  */
+
+void
+contract_static_info_note (tree contract)
+{
+  contract_static_info_kind = get_contract_assertion_kind (contract);
+  contract_static_info_loc = EXPR_LOCATION (contract);
+}
+
 /* Whether the contract assertion being processed is evaluated at compile
    time (1) or at run time (0), for contract_config_scope.  */
 int contract_config_consteval;
@@ -7424,10 +7438,25 @@ contract_static_info_virtual (tree fn, contract_check_side side,
 
 tree contract_static_info_comment;
 
+static tree build_real_source_location_value (location_t, tree, tree);
+
+/* The type of std::contracts::assertion_static_info's location field (its
+   eighth), for INFO_TYPE, that class.  */
+
+static tree
+assertion_static_info_location_type (tree info_type)
+{
+  tree f = next_aggregate_field (TYPE_FIELDS (info_type));
+  for (int i = 0; i < 7; ++i)
+    f = next_aggregate_field (DECL_CHAIN (f));
+  return TREE_TYPE (f);
+}
+
 static tree
 build_assertion_static_info_value (contract_check_side side, tree info_type,
 				   tree fn = NULL_TREE,
-				   tree comment_value = NULL_TREE)
+				   tree comment_value = NULL_TREE,
+				   tree location_value = NULL_TREE)
 {
   tree f0 = next_aggregate_field (TYPE_FIELDS (info_type));
   tree f1 = next_aggregate_field (DECL_CHAIN (f0));
@@ -7435,6 +7464,8 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
   tree f3 = next_aggregate_field (DECL_CHAIN (f2));
   tree f4 = next_aggregate_field (DECL_CHAIN (f3));
   tree f5 = next_aggregate_field (DECL_CHAIN (f4));
+  tree f6 = next_aggregate_field (DECL_CHAIN (f5));
+  tree f7 = next_aggregate_field (DECL_CHAIN (f6));
 
   /* Matches std::contracts::assertion_check_side's enumerator values
      exactly (see the library header).  */
@@ -7461,14 +7492,28 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
 		    && flag_contract_violation_information
 		  ? fold_convert (TREE_TYPE (f5), contract_static_info_comment)
 		  : build_zero_cst (TREE_TYPE (f5)));
+  /* LOCATION_VALUE: the location the assertion_context built with this
+     carries (empty when the control object omits it); otherwise that of
+     the contract being processed (contract_static_info_loc), or an empty
+     one outside one or under -fcontract-violation-information=none.  */
+  tree location
+    = (location_value ? location_value
+       : (contract_static_info_kind && flag_contract_violation_information
+	  && contract_static_info_loc != UNKNOWN_LOCATION)
+       ? build_real_source_location_value
+	   (contract_static_info_loc, TREE_TYPE (f7),
+	    fn ? resolve_fndecl_for_diagnostic_name (fn) : NULL_TREE)
+       : build_constructor (TREE_TYPE (f7), NULL));
   return build_constructor_va
-    (info_type, 6,
+    (info_type, 8,
      f0, build_int_cst (TREE_TYPE (f0), contract_evaluation_semantic_value ()),
      f1, build_int_cst (TREE_TYPE (f1), side_val),
      f2, constant_boolean_node (is_virtual, TREE_TYPE (f2)),
      f3, constant_boolean_node (overrides, TREE_TYPE (f3)),
      f4, build_group_rules_value (TREE_TYPE (f4)),
-     f5, comment);
+     f5, comment,
+     f6, build_int_cst (TREE_TYPE (f6), contract_static_info_kind),
+     f7, location);
 }
 
 /* Constant-evaluate CTRL::NAME(info) for the current translation unit's
@@ -30210,7 +30255,7 @@ get_or_build_scalar_precondition_thunk (tree contract, tree callee,
    DECL (the caller, since this always runs while oa_walk_stmt is
    walking the caller's own body) for both CONTRACT_SIDE_OF -- giving
    exactly the caller/client-side semantics wanted here -- and the
-   assertion_context's own source-location field.  */
+   location in the assertion_context's static info.  */
 
 static tree
 oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
@@ -30234,25 +30279,27 @@ oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
   tree f0 = next_aggregate_field (TYPE_FIELDS (ctx_type));
   tree f1 = next_aggregate_field (DECL_CHAIN (f0));
   tree f2 = next_aggregate_field (DECL_CHAIN (f1));
-  tree f3 = next_aggregate_field (DECL_CHAIN (f2));
-  tree f4 = next_aggregate_field (DECL_CHAIN (f3));
-  tree f5 = next_aggregate_field (DECL_CHAIN (f4));
-  tree f6 = next_aggregate_field (DECL_CHAIN (f5));
+  /* The comment, location, semantic and kind live in the static info.  */
+  tree info_type = TREE_TYPE (f0);
+  tree loc_type = assertion_static_info_location_type (info_type);
+  tree loc_value
+    = (contract_control_omits_source_location (ctrl, side,
+					       current_function_decl)
+       ? build_constructor (loc_type, NULL)
+       : build_real_source_location_value
+	   (loc, loc_type,
+	    resolve_fndecl_for_diagnostic_name (current_function_decl)));
+  unsigned saved_kind = contract_static_info_kind;
+  contract_static_info_kind = get_contract_assertion_kind (contract);
+  tree info = build_assertion_static_info_value (side, info_type,
+						 current_function_decl,
+						 comment, loc_value);
+  contract_static_info_kind = saved_kind;
   tree ctor = build_constructor_va
-    (ctx_type, 7,
-     f0, comment,
-     f1, (contract_control_omits_source_location (ctrl, side,
-						  current_function_decl)
-	  ? build_constructor (TREE_TYPE (f1), NULL)
-	  : build_real_source_location_value
-	      (loc, TREE_TYPE (f1),
-	       resolve_fndecl_for_diagnostic_name (current_function_decl))),
-     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
-     f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
-     f4, build_assertion_static_info_value (side, TREE_TYPE (f4),
-					    current_function_decl, comment),
-     f5, fold_convert (TREE_TYPE (f5), args_ptr),
-     f6, fold_convert (TREE_TYPE (f6), check_fn));
+    (ctx_type, 3,
+     f0, info,
+     f1, fold_convert (TREE_TYPE (f1), args_ptr),
+     f2, fold_convert (TREE_TYPE (f2), check_fn));
 
   tree ctx_var = build_decl (loc, VAR_DECL, NULL_TREE, ctx_type);
   DECL_ARTIFICIAL (ctx_var) = true;
@@ -42519,25 +42566,27 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   tree f0 = next_aggregate_field (TYPE_FIELDS (ctx_type));
   tree f1 = next_aggregate_field (DECL_CHAIN (f0));
   tree f2 = next_aggregate_field (DECL_CHAIN (f1));
-  tree f3 = next_aggregate_field (DECL_CHAIN (f2));
-  tree f4 = next_aggregate_field (DECL_CHAIN (f3));
-  tree f5 = next_aggregate_field (DECL_CHAIN (f4));
-  tree f6 = next_aggregate_field (DECL_CHAIN (f5));
+  /* The comment, location, semantic and kind live in the static info.  */
+  tree info_type = TREE_TYPE (f0);
+  tree loc_type = assertion_static_info_location_type (info_type);
+  tree loc_value
+    = (contract_control_omits_source_location (ctrl, side,
+					       current_function_decl)
+       ? build_constructor (loc_type, NULL)
+       : build_real_source_location_value
+	   (loc, loc_type,
+	    resolve_fndecl_for_diagnostic_name (current_function_decl)));
+  unsigned saved_kind = contract_static_info_kind;
+  contract_static_info_kind = get_contract_assertion_kind (contract);
+  tree info = build_assertion_static_info_value (side, info_type,
+						 current_function_decl,
+						 comment, loc_value);
+  contract_static_info_kind = saved_kind;
   tree ctor = build_constructor_va
-    (ctx_type, 7,
-     f0, comment,
-     f1, (contract_control_omits_source_location (ctrl, side,
-						  current_function_decl)
-	  ? build_constructor (TREE_TYPE (f1), NULL)
-	  : build_real_source_location_value
-	      (loc, TREE_TYPE (f1),
-	       resolve_fndecl_for_diagnostic_name (current_function_decl))),
-     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
-     f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
-     f4, build_assertion_static_info_value (side, TREE_TYPE (f4),
-					    current_function_decl, comment),
-     f5, fold_convert (TREE_TYPE (f5), args_ptr),
-     f6, fold_convert (TREE_TYPE (f6), check_fn));
+    (ctx_type, 3,
+     f0, info,
+     f1, fold_convert (TREE_TYPE (f1), args_ptr),
+     f2, fold_convert (TREE_TYPE (f2), check_fn));
 
   /* Build the assertion_context object on the stack; register it, exactly
      like the control object below.  Unlike a contract_violation object,
@@ -42838,25 +42887,26 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   tree f0 = next_aggregate_field (TYPE_FIELDS (ctx_type));
   tree f1 = next_aggregate_field (DECL_CHAIN (f0));
   tree f2 = next_aggregate_field (DECL_CHAIN (f1));
-  tree f3 = next_aggregate_field (DECL_CHAIN (f2));
-  tree f4 = next_aggregate_field (DECL_CHAIN (f3));
-  tree f5 = next_aggregate_field (DECL_CHAIN (f4));
-  tree f6 = next_aggregate_field (DECL_CHAIN (f5));
   tree dummy_args_ptr = build_zero_cst (ptr_type_node); /* Never read.  */
+  /* The comment, location, semantic and kind live in the static info.  */
+  tree info_type = TREE_TYPE (f0);
+  tree loc_type = assertion_static_info_location_type (info_type);
+  tree loc_value
+    = (contract_control_omits_source_location (ctrl, side, fndecl, quiet)
+       ? build_constructor (loc_type, NULL)
+       : build_real_source_location_value
+	   (loc, loc_type,
+	    resolve_fndecl_for_diagnostic_name (fndecl)));
+  unsigned saved_kind = contract_static_info_kind;
+  contract_static_info_kind = get_contract_assertion_kind (contract);
+  tree info = build_assertion_static_info_value (side, info_type, fndecl,
+						 comment, loc_value);
+  contract_static_info_kind = saved_kind;
   tree ctor = build_constructor_va
-    (ctx_type, 7,
-     f0, comment,
-     f1, (contract_control_omits_source_location (ctrl, side, fndecl, quiet)
-	  ? build_constructor (TREE_TYPE (f1), NULL)
-	  : build_real_source_location_value
-	      (loc, TREE_TYPE (f1),
-	       resolve_fndecl_for_diagnostic_name (fndecl))),
-     f2, build_int_cst (TREE_TYPE (f2), contract_evaluation_semantic_value ()),
-     f3, build_int_cst (TREE_TYPE (f3), get_contract_assertion_kind (contract)),
-     f4, build_assertion_static_info_value (side, TREE_TYPE (f4),
-					    fndecl, comment),
-     f5, fold_convert (TREE_TYPE (f5), dummy_args_ptr),
-     f6, fold_convert (TREE_TYPE (f6), check_fn));
+    (ctx_type, 3,
+     f0, info,
+     f1, fold_convert (TREE_TYPE (f1), dummy_args_ptr),
+     f2, fold_convert (TREE_TYPE (f2), check_fn));
 
   tree ctx_var = build_decl (loc, VAR_DECL, NULL_TREE, ctx_type);
   DECL_ARTIFICIAL (ctx_var) = true;
