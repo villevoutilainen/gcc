@@ -165,6 +165,7 @@ struct json_parser
 	  expect (',');
       }
     expect (']');
+    rs.index ();
     return rs;
   }
 };

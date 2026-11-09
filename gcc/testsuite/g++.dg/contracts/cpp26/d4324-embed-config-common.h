@@ -78,6 +78,20 @@ struct rules_t
 {
   std::array<rule, 64> r{};
   unsigned n = 0;
+  // For each [caller][kind], the indices of the rules that can match an
+  // assertion of that kind on that side, in order: built once, by
+  // index (), so that a query scans only those.
+  unsigned char cand[2][4][64] = {};
+  unsigned char ncand[2][4] = {};
+
+  constexpr void index ()
+  {
+    for (unsigned c = 0; c < 2; ++c)
+      for (unsigned k = 1; k < 4; ++k)
+	for (unsigned i = 0; i < n; ++i)
+	  if (r[i].caller == bool (c) && (!r[i].kind || r[i].kind == k))
+	    cand[c][k][ncand[c][k]++] = i;
+  }
 };
 
 // A file name matches an entry naming it, or naming a trailing part of
@@ -167,13 +181,10 @@ struct configured
     bool caller = (info.side () == assertion_check_side::client
 		   && !info.is_virtual ());
     auto loc = info.location ();
-    for (unsigned i = 0; i < Rules.n; ++i)
+    unsigned kind = unsigned (info.kind ());
+    for (unsigned j = 0; j < Rules.ncand[caller][kind]; ++j)
       {
-	const rule& r = Rules.r[i];
-	if (r.caller != caller)
-	  continue;
-	if (r.kind && r.kind != unsigned (info.kind ()))
-	  continue;
+	const rule& r = Rules.r[Rules.cand[caller][kind][j]];
 	if (!r.ns.empty () && !(in_fn && ns_chain_matches (r.ns, chain)))
 	  continue;
 	if (!r.function.empty ()

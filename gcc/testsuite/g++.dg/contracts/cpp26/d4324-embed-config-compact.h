@@ -65,6 +65,7 @@ parse_compact (const unsigned char (&d)[N])
     }
   if (i != N)
     throw "compact contract configuration: trailing data";
+  rs.index ();
   return rs;
 }
 
