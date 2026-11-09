@@ -1,0 +1,4 @@
+[
+  {"match": {"group": "lib.io"}, "output": {"semantic": "observe"}},
+  {"match": {"group": "lib"}, "output": {"semantic": "ignore"}}
+]

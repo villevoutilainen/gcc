@@ -1,7 +1,7 @@
 // Parse a P3595 contract configuration (JSON) into cfg::rules_t at compile
 // time.  Supported: an array of {"match": {...}, "output": {"semantic": S}}
-// with match keys "kind", "namespace", "function", "location"
-// ("file" or "file:N-M,K"), "caller" (boolean).  Strings have no escapes.
+// with match keys "kind", "namespace", "function", "location" ("file" or
+// "file:N-M,K"), "caller" (boolean), "group".  Strings have no escapes.
 #ifndef D4324_EMBED_CONFIG_JSON_H
 #define D4324_EMBED_CONFIG_JSON_H
 
@@ -117,6 +117,8 @@ struct json_parser
 	      r.function.assign (v.starts_with ("::") ? v.substr (2) : v);
 	    else if (key == "location")
 	      location (r, v);
+	    else if (key == "group")
+	      r.group.assign (v);
 	    else
 	      throw "contract configuration: unknown match key";
 	  }

@@ -7617,6 +7617,26 @@ contract_function_reflection (tree fn)
   return get_reflection (DECL_SOURCE_LOCATION (fn), fn);
 }
 
+/* The reflection a control-object query's assertion_declaration_info
+   gives as its enclosing_namespace: the innermost namespace enclosing FN
+   (classes skipped), the function the assertion belongs to as
+   contract_function_reflection finds it, or, without one, the current
+   namespace.  */
+
+static tree
+contract_namespace_reflection (tree fn)
+{
+  if (fn && DECL_LANG_SPECIFIC (fn) && DECL_CONTRACT_WRAPPER (fn))
+    fn = get_orig_func_for_wrapper (fn);
+  if (fn && DECL_CLONED_FUNCTION_P (fn))
+    fn = DECL_CLONED_FUNCTION (fn);
+  tree ns = (fn && TREE_CODE (fn) == FUNCTION_DECL
+	     ? decl_namespace_context (fn) : current_namespace);
+  if (!ns)
+    ns = global_namespace;
+  return get_reflection (DECL_SOURCE_LOCATION (ns), ns);
+}
+
 /* Whether TYPE is std::contracts::assertion_declaration_info.  */
 
 static bool
@@ -7654,15 +7674,18 @@ build_control_query_argument (contract_check_side side, tree parm_type,
   complete_type (type);
   tree f0 = next_aggregate_field (TYPE_FIELDS (type));
   tree f1 = f0 ? next_aggregate_field (DECL_CHAIN (f0)) : NULL_TREE;
-  if (!f1
+  tree f2 = f1 ? next_aggregate_field (DECL_CHAIN (f1)) : NULL_TREE;
+  if (!f2
       || !same_type_ignoring_top_level_qualifiers_p (TREE_TYPE (f0),
 						     static_info_type)
-      || !REFLECTION_TYPE_P (TREE_TYPE (f1)))
+      || !REFLECTION_TYPE_P (TREE_TYPE (f1))
+      || !REFLECTION_TYPE_P (TREE_TYPE (f2)))
     return NULL_TREE;
   return build_constructor_va
-    (type, 2,
+    (type, 3,
      f0, build_assertion_static_info_value (side, TREE_TYPE (f0), owner_fn),
-     f1, contract_function_reflection (owner_fn));
+     f1, contract_function_reflection (owner_fn),
+     f2, contract_namespace_reflection (owner_fn));
 }
 
 /* The control types known to have no member of a query's name: most

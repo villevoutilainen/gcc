@@ -182,13 +182,18 @@ namespace contracts
 #if __cpp_impl_reflection
   // D4324 (experimental): what a control object's compile-time query sees
   // when it takes this type instead of assertion_static_info -- the static
-  // info, and a reflection of the function the assertion belongs to: per
+  // info, a reflection of the function the assertion belongs to (per
   // info.kind(), the function a pre/post is declared on, or the one whose
   // body contains a contract_assert; the null reflection outside any
-  // function.  A consteval-only type, so such a query is consteval.
+  // function), and one of the namespace enclosing it.  A consteval-only
+  // type, so such a query is consteval.
   struct assertion_declaration_info {
     assertion_static_info info;
     decltype(^^int) function;
+    // The innermost namespace enclosing the assertion (classes skipped):
+    // that of function, or, outside any function, where the assertion
+    // is; the global namespace at the outermost.  Never null.
+    decltype(^^int) enclosing_namespace;
   };
 #endif
 

@@ -72,6 +72,7 @@ struct rule
   unsigned char nlines = 0;	// line intervals of "location", 0: any line
   std::array<std::uint32_t, 16> lines{};	// lo/hi pairs
   fstr ns, function, file;
+  fstr group;			// "a.b": matched by a control object's own group
 };
 
 struct rules_t
@@ -83,6 +84,26 @@ struct rules_t
   // index (), so that a query scans only those.
   unsigned char cand[2][4][64] = {};
   unsigned char ncand[2][4] = {};
+
+  // The semantic of the first rule naming only a group that covers NAME
+  // ("lib" covers "lib" and "lib.io"), or 0.  A group is a control
+  // object's own data, so it can ask this itself, when it is constructed.
+  constexpr unsigned char semantic_for_group (std::string_view name) const
+  {
+    for (unsigned i = 0; i < n; ++i)
+      {
+	const rule& g = r[i];
+	if (g.group.empty () || g.kind || g.caller || !g.ns.empty ()
+	    || !g.function.empty () || !g.file.empty ())
+	  continue;
+	std::string_view grp = g.group.view ();
+	if (name == grp
+	    || (name.size () > grp.size () && name.starts_with (grp)
+		&& name[grp.size ()] == '.'))
+	  return g.semantic;
+      }
+    return 0;
+  }
 
   constexpr void index ()
   {
@@ -175,9 +196,9 @@ struct configured
   {
     const assertion_static_info& info = d.info;
     bool in_fn = d.function != std::meta::info{};
-    ns_chain chain;
-    if (in_fn)
-      chain = namespaces_of (std::meta::parent_of (d.function));
+    // The namespaces enclosing the assertion, from the one the compiler
+    // gives (that of its function, or where it is).
+    ns_chain chain = namespaces_of (d.enclosing_namespace);
     bool caller = (info.side () == assertion_check_side::client
 		   && !info.is_virtual ());
     auto loc = info.location ();
@@ -185,7 +206,10 @@ struct configured
     for (unsigned j = 0; j < Rules.ncand[caller][kind]; ++j)
       {
 	const rule& r = Rules.r[Rules.cand[caller][kind][j]];
-	if (!r.ns.empty () && !(in_fn && ns_chain_matches (r.ns, chain)))
+	// Groups are the labels' business (semantic_for_group).
+	if (!r.group.empty ())
+	  continue;
+	if (!r.ns.empty () && !ns_chain_matches (r.ns, chain))
 	  continue;
 	if (!r.function.empty ()
 	    && !(in_fn && function_matches (r.function, d.function)))
