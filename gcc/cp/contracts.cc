@@ -3299,6 +3299,21 @@ contract_fix_control_object (tree ctrl, tree fn)
   return var;
 }
 
+/* Set while attaching contract specifiers read from a module: those are
+   as the exporter left them (fixed where they need to be; a template's,
+   which a reader can't yet tell for one, are fixed when instantiated).  */
+static bool setting_imported_contracts;
+
+/* As set_fn_contract_specifiers, for contracts read from a module.  */
+
+void
+set_imported_fn_contract_specifiers (tree decl, tree contracts)
+{
+  setting_imported_contracts = true;
+  set_fn_contract_specifiers (decl, contracts);
+  setting_imported_contracts = false;
+}
+
 /* Fix the control objects of the contract assertions CONTRACTS of FN
    (contract_fix_control_object).  */
 
@@ -3327,7 +3342,8 @@ set_fn_contract_specifiers (tree decl, tree contracts)
   /* An ordinary function's; those of templated functions, and of their
      instantiations (whose contracts are attached here before they are
      substituted), are fixed when they are substituted.  */
-  if (TREE_CODE (decl) == FUNCTION_DECL && !DECL_TEMPLATE_INFO (decl))
+  if (TREE_CODE (decl) == FUNCTION_DECL && !DECL_TEMPLATE_INFO (decl)
+      && !setting_imported_contracts)
     contract_fix_control_objects (contracts, decl);
 
   bool existed = false;

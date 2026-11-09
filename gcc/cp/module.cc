@@ -11373,14 +11373,10 @@ trees_out::fn_parms_init (tree fn)
       tree_node_vals (parm);
     }
 
-  if (!streaming_p ())
-    {
-      /* We must walk contract specifiers so the dependency graph is
-	 complete.  */
-      if (tree contracts = get_fn_contract_specifiers (fn))
-	for (tree contract : tree_vec_range (contracts))
-	  tree_node (contract);
-    }
+  /* Write the contract specifiers, if any: importers need them for their
+     own checks of calls (caller-side checks) and for instantiating a
+     template's.  (Walking them also completes the dependency graph.)  */
+  tree_node (flag_contracts ? get_fn_contract_specifiers (fn) : NULL_TREE);
 
   /* Write a reference to contracts pre/post functions, if any, to avoid
      regenerating them in importers.  */
@@ -11432,6 +11428,11 @@ trees_in::fn_parms_init (tree fn)
 	  DECL_READ_P (parm) = true;
 	}
     }
+
+  /* The contract specifiers, if any.  */
+  tree contracts = tree_node ();
+  if (contracts && !get_fn_contract_specifiers (fn))
+    set_imported_fn_contract_specifiers (fn, contracts);
 
   /* Reload references to contract functions, if any.  */
   tree pre_fn = tree_node ();
