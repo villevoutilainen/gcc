@@ -8969,6 +8969,11 @@ trees_in::decl_value ()
 	  DECL_MODULE_IMPORT_P (inner) = true;
 	}
 
+      /* A per-TU contract violation wrapper an imported body calls must
+	 be defined in this TU.  */
+      if (flag_contracts)
+	contract_note_imported_decl (inner);
+
       if (temploid_friend)
 	imported_temploid_friends->put (decl, temploid_friend);
 

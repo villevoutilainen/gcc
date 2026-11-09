@@ -5464,14 +5464,10 @@ declare_terminate_wrapper ()
 
 /* Define a noipa wrapper around the call to std::terminate */
 
-static void
-build_terminate_wrapper ()
+static tree
+emit_terminate_wrapper (tree fn)
 {
-  /* We should not be trying to build this if we never used it.  */
-  gcc_checking_assert (tu_terminate_wrapper);
-
-  start_preparsed_function (tu_terminate_wrapper,
-			    DECL_ATTRIBUTES(tu_terminate_wrapper),
+  start_preparsed_function (fn, DECL_ATTRIBUTES (fn),
 			    SF_DEFAULT | SF_PRE_PARSED);
   tree body = begin_function_body ();
   tree compound_stmt = begin_compound_stmt (BCS_FN_BODY);
@@ -5479,8 +5475,17 @@ build_terminate_wrapper ()
   finish_return_stmt (NULL_TREE);
   finish_compound_stmt (compound_stmt);
   finish_function_body (body);
-  tu_terminate_wrapper = finish_function (false);
-  expand_or_defer_fn (tu_terminate_wrapper);
+  fn = finish_function (false);
+  expand_or_defer_fn (fn);
+  return fn;
+}
+
+static void
+build_terminate_wrapper ()
+{
+  /* We should not be trying to build this if we never used it.  */
+  gcc_checking_assert (tu_terminate_wrapper);
+  tu_terminate_wrapper = emit_terminate_wrapper (tu_terminate_wrapper);
 }
 
 /* Lookup a name in std::contracts, or inject it.  */
@@ -6731,30 +6736,17 @@ maybe_replace_d4324_violation_handler_call (tree call_expr, tree fn)
   return bind;
 }
 
-/* If we have emitted any contracts in this TU that will call a violation
-   handler, then emit the wrappers for the handler.  */
+/* Define the violation handler wrapper FN (__tu_has_violation), calling
+   TERMINATE_WRAPPER after the handler unless observed.  */
 
-void
-maybe_emit_violation_handler_wrappers ()
+static void
+emit_has_violation_wrapper (tree fn, tree terminate_wrapper)
 {
-  /* We might need the terminate wrapper, even if we do not use the violation
-     handler wrappers.  */
-  if (tu_terminate_wrapper && flag_contracts_conservative_ipa)
-    build_terminate_wrapper ();
-
-  if (!tu_has_violation)
-    return;
-
-  tree terminate_wrapper = terminate_fn;
-  if (flag_contracts_conservative_ipa)
-    terminate_wrapper = tu_terminate_wrapper;
-
-  /* tu_has_violation */
-  start_preparsed_function (tu_has_violation, NULL_TREE,
+  start_preparsed_function (fn, NULL_TREE,
 			    SF_DEFAULT | SF_PRE_PARSED);
   tree body = begin_function_body ();
   tree compound_stmt = begin_compound_stmt (BCS_FN_BODY);
-  tree v = DECL_ARGUMENTS (tu_has_violation);
+  tree v = DECL_ARGUMENTS (fn);
   tree semantic = DECL_CHAIN (v);
 
   /* We are going to call the handler.  */
@@ -6776,60 +6768,135 @@ maybe_emit_violation_handler_wrappers ()
 
   finish_compound_stmt (compound_stmt);
   finish_function_body (body);
-  tu_has_violation = finish_function (false);
-  expand_or_defer_fn (tu_has_violation);
+  fn = finish_function (false);
+  expand_or_defer_fn (fn);
+}
 
-  /* tu_has_violation_exception (P2900 only; not declared under D4324).  */
-  if (tu_has_violation_exception)
-    {
-      start_preparsed_function (tu_has_violation_exception, NULL_TREE,
+/* Define the exception-to-violation wrapper FN
+   (__tu_has_violation_exception), likewise.  */
+
+static void
+emit_has_violation_exception_wrapper (tree fn, tree terminate_wrapper)
+{
+  start_preparsed_function (fn, NULL_TREE,
 				SF_DEFAULT | SF_PRE_PARSED);
-      body = begin_function_body ();
-      compound_stmt = begin_compound_stmt (BCS_FN_BODY);
-      v = DECL_ARGUMENTS (tu_has_violation_exception);
-      semantic = DECL_CHAIN (v);
-      location_t loc = DECL_SOURCE_LOCATION (tu_has_violation_exception);
+  tree body = begin_function_body ();
+  tree compound_stmt = begin_compound_stmt (BCS_FN_BODY);
+  tree v = DECL_ARGUMENTS (fn);
+  tree semantic = DECL_CHAIN (v);
+  location_t loc = DECL_SOURCE_LOCATION (fn);
 
-      tree a_type = strip_top_quals (non_reference (TREE_TYPE (v)));
-      tree v2 = build_decl (loc, VAR_DECL, NULL_TREE, a_type);
-      DECL_SOURCE_LOCATION (v2) = loc;
-      DECL_CONTEXT (v2) = current_function_decl;
-      DECL_ARTIFICIAL (v2) = true;
-      layout_decl (v2, 0);
-      v2 = pushdecl (v2);
-      add_decl_expr (v2);
-      tree r = cp_build_init_expr (v2, convert_from_reference (v));
-      finish_expr_stmt (r);
-      tree memb = lookup_member (a_type, get_identifier ("_M_detection_mode"),
+  tree a_type = strip_top_quals (non_reference (TREE_TYPE (v)));
+  tree v2 = build_decl (loc, VAR_DECL, NULL_TREE, a_type);
+  DECL_SOURCE_LOCATION (v2) = loc;
+  DECL_CONTEXT (v2) = current_function_decl;
+  DECL_ARTIFICIAL (v2) = true;
+  layout_decl (v2, 0);
+  v2 = pushdecl (v2);
+  add_decl_expr (v2);
+  tree r = cp_build_init_expr (v2, convert_from_reference (v));
+  finish_expr_stmt (r);
+  tree memb = lookup_member (a_type, get_identifier ("_M_detection_mode"),
 				 /*protect=*/1, /*want_type=*/0,
 				 tf_warning_or_error);
-      r = build_class_member_access_expr (v2, memb, NULL_TREE, false,
+  r = build_class_member_access_expr (v2, memb, NULL_TREE, false,
 					  tf_warning_or_error);
-      r = cp_build_modify_expr
+  r = cp_build_modify_expr
 	(loc, r, NOP_EXPR,
 	 build_int_cst (uint16_type_node, (uint16_t)CDM_EVAL_EXCEPTION),
 	 tf_warning_or_error);
-      finish_expr_stmt (r);
-      /* We are going to call the handler.  */
-      build_contract_handler_call (v);
+  finish_expr_stmt (r);
+  /* We are going to call the handler.  */
+  build_contract_handler_call (v);
 
-      if_observe = begin_if_stmt ();
-      /* if (observe) return; */
-      cond = build2 (EQ_EXPR, uint16_type_node, semantic,
+  tree if_observe = begin_if_stmt ();
+  /* if (observe) return; */
+  tree cond = build2 (EQ_EXPR, uint16_type_node, semantic,
 		     build_int_cst (uint16_type_node, (uint16_t)CES_OBSERVE));
-      finish_if_stmt_cond (cond, if_observe);
-      emit_builtin_observable_checkpoint ();
-      finish_then_clause (if_observe);
-      begin_else_clause (if_observe);
-      /* else terminate.  */
-      finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
-      finish_else_clause (if_observe);
-      finish_if_stmt (if_observe);
-      finish_return_stmt (NULL_TREE);
-      finish_compound_stmt (compound_stmt);
-      finish_function_body (body);
-      tu_has_violation_exception = finish_function (false);
-      expand_or_defer_fn (tu_has_violation_exception);
+  finish_if_stmt_cond (cond, if_observe);
+  emit_builtin_observable_checkpoint ();
+  finish_then_clause (if_observe);
+  begin_else_clause (if_observe);
+  /* else terminate.  */
+  finish_expr_stmt (build_call_a (terminate_wrapper, 0, nullptr));
+  finish_else_clause (if_observe);
+  finish_if_stmt (if_observe);
+  finish_return_stmt (NULL_TREE);
+  finish_compound_stmt (compound_stmt);
+  finish_function_body (body);
+  fn = finish_function (false);
+  expand_or_defer_fn (fn);
+}
+
+/* The declarations of the wrappers above, and of __tu_terminate_wrapper,
+   that bodies imported from modules call: each TU defines its own copies
+   (they have internal linkage), and a module interface streams only
+   their declarations.  */
+static GTY(()) vec<tree, va_gc> *imported_contract_wrappers;
+
+/* DECL was read from a module: note it if it is one of the per-TU
+   contract wrappers, to define it at the end of this TU.  */
+
+void
+contract_note_imported_decl (tree decl)
+{
+  if (TREE_CODE (decl) != FUNCTION_DECL || !DECL_ARTIFICIAL (decl)
+      || TREE_PUBLIC (decl) || !DECL_NAME (decl))
+    return;
+  if (id_equal (DECL_NAME (decl), "__tu_has_violation")
+      || id_equal (DECL_NAME (decl), "__tu_has_violation_exception")
+      || id_equal (DECL_NAME (decl), "__tu_terminate_wrapper"))
+    vec_safe_push (imported_contract_wrappers, decl);
+}
+
+/* If we have emitted any contracts in this TU that will call a violation
+   handler, then emit the wrappers for the handler; and those that bodies
+   imported from modules call.  */
+
+void
+maybe_emit_violation_handler_wrappers ()
+{
+  /* We might need the terminate wrapper, even if we do not use the violation
+     handler wrappers.  */
+  if (tu_terminate_wrapper && flag_contracts_conservative_ipa)
+    build_terminate_wrapper ();
+
+  tree terminate_wrapper = terminate_fn;
+  if (flag_contracts_conservative_ipa)
+    terminate_wrapper = tu_terminate_wrapper;
+
+  if (tu_has_violation)
+    {
+      if (!terminate_wrapper)
+	terminate_wrapper = terminate_fn;
+      emit_has_violation_wrapper (tu_has_violation, terminate_wrapper);
+      /* tu_has_violation_exception (P2900 only; not declared under D4324).  */
+      if (tu_has_violation_exception)
+	emit_has_violation_exception_wrapper (tu_has_violation_exception,
+					      terminate_wrapper);
+    }
+
+  /* The imported ones: their own copies, calling std::terminate directly
+     (a body imported from a module calls its own TU's terminate wrapper,
+     if any, itself).  */
+  for (unsigned i = 0; i < vec_safe_length (imported_contract_wrappers); ++i)
+    {
+      tree fn = (*imported_contract_wrappers)[i];
+      /* Defined already: the same declaration imported twice.  */
+      if (DECL_SAVED_TREE (fn) || DECL_STRUCT_FUNCTION (fn))
+	continue;
+      /* Its own symbol: this TU's wrapper, and those of other modules,
+	 have the same name.  */
+      char *nn = xasprintf ("%s.imported.%u",
+			    IDENTIFIER_POINTER (DECL_ASSEMBLER_NAME (fn)), i);
+      SET_DECL_ASSEMBLER_NAME (fn, get_identifier (nn));
+      free (nn);
+      if (id_equal (DECL_NAME (fn), "__tu_has_violation"))
+	emit_has_violation_wrapper (fn, terminate_fn);
+      else if (id_equal (DECL_NAME (fn), "__tu_has_violation_exception"))
+	emit_has_violation_exception_wrapper (fn, terminate_fn);
+      else
+	emit_terminate_wrapper (fn);
     }
 }
 
