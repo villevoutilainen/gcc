@@ -1596,6 +1596,10 @@ extern void *symbolic_assert_scope_addr_data;
 
 /* D4324, QoI: P3595 contract configuration (contracts.cc).  */
 extern unsigned contract_config_override;
+/* The semantic before the control object's compute_semantic: the
+   configuration's, or 0 for the translation unit's.  is_ignored is asked
+   with it (contract_control_is_ignored).  */
+extern unsigned contract_config_base;
 extern int contract_config_consteval;
 extern unsigned contract_config_semantic_for (unsigned, location_t, tree,
 					      tree, int, bool = false);
@@ -1628,6 +1632,7 @@ class contract_config_scope
   tree m_saved_comment;
   unsigned m_saved_kind;
   location_t m_saved_loc;
+  unsigned m_saved_base;
 public:
   contract_config_scope (tree contract, tree fn = NULL_TREE,
 			 int comptime = -2, int side = -1)
@@ -1635,7 +1640,8 @@ public:
       m_saved_consteval (contract_config_consteval),
       m_saved_comment (contract_static_info_comment),
       m_saved_kind (contract_static_info_kind),
-      m_saved_loc (contract_static_info_loc)
+      m_saved_loc (contract_static_info_loc),
+      m_saved_base (contract_config_base)
   {
     /* For assertion_static_info::comment, kind and location.  */
     if (contract && CONTRACT_P (contract))
@@ -1654,6 +1660,7 @@ public:
 				       contract_config_consteval, side);
     else if (contract && CONTRACT_P (contract))
       contract_config_override = 0;
+    contract_config_base = contract_config_override;
     contract_config_override
       = contract_apply_compute_semantic (contract, fn, side,
 					 contract_config_override);
@@ -1663,7 +1670,8 @@ public:
       m_saved_consteval (contract_config_consteval),
       m_saved_comment (contract_static_info_comment),
       m_saved_kind (contract_static_info_kind),
-      m_saved_loc (contract_static_info_loc)
+      m_saved_loc (contract_static_info_loc),
+      m_saved_base (contract_config_base)
   {
     contract_static_info_kind = kind;
     contract_static_info_loc = loc;
@@ -1671,6 +1679,7 @@ public:
     if (!contract_config_table.is_empty ())
       contract_config_override
 	= contract_config_semantic_for (kind, loc, ctrl, fn, 0);
+    contract_config_base = contract_config_override;
   }
   ~contract_config_scope ()
   {
@@ -1679,6 +1688,7 @@ public:
     contract_static_info_comment = m_saved_comment;
     contract_static_info_kind = m_saved_kind;
     contract_static_info_loc = m_saved_loc;
+    contract_config_base = m_saved_base;
   }
 };
 

@@ -1,9 +1,10 @@
-// D4324 (experimental): a control object's optional compute_semantic
-// query gives each contract assertion its semantic, from what the
-// compiler tells it about the assertion; the result is the semantic its
-// other queries (is_ignored) and its operator() see.  Here: preconditions
-// observed in the definition, postconditions ignored, and preconditions
-// checked on the caller's side reported as enforce (the handler throws).
+// D4324 (experimental): a control object's optional compute_semantic query
+// gives each contract assertion its semantic, from what the compiler tells
+// it about the assertion; the result is the semantic its other queries and
+// its operator() see; without is_ignored, an assertion computed ignore is
+// ignored.  Here: preconditions observed in the definition, postconditions
+// ignored, and preconditions checked on the caller's side reported as
+// enforce (the handler throws).
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=ignore -fcontracts-client-check=pre" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -35,9 +36,6 @@ struct by_kind_t
       return evaluation_semantic::enforce;
     return evaluation_semantic::observe;
   }
-  static constexpr bool
-  is_ignored (assertion_static_info i) noexcept
-  { return i.semantic () == evaluation_semantic::ignore; }
   constexpr void
   operator() (const assertion_context& c) const
   {

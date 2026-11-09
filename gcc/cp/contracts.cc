@@ -7269,6 +7269,7 @@ remap_retval (tree fndecl, tree contract)
 /* The semantic a P3595 configuration gives the contract assertion being
    processed (contract_config_scope), or 0: the translation unit's.  */
 unsigned contract_config_override;
+unsigned contract_config_base;
 
 /* See contracts.h.  */
 unsigned contract_static_info_kind;
@@ -8052,6 +8053,11 @@ contract_apply_compute_semantic (tree contract, tree fn, int side,
   contract_check_side cside
     = (side < 0 ? contract_side_of (contract, fn)
        : (contract_check_side) side);
+  /* An assertion its is_ignored ignores, with SEMANTIC, is not computed
+     a semantic.  */
+  if (contract_control_query_member (type, "is_ignored")
+      && contract_control_bool_member (ctrl, "is_ignored", cside, fn) == 1)
+    return semantic;
   int v = contract_control_query_value (ctrl, "compute_semantic", cside, fn);
   if (v < 0)
     return semantic;
@@ -8735,6 +8741,27 @@ contract_caller_side_semantic (tree contract, tree fn)
 static bool
 contract_control_is_ignored (tree ctrl, contract_check_side side, tree owner_fn, bool quiet)
 {
+  /* D4324 (experimental): is_ignored and compute_semantic are mutually
+     optional.  is_ignored, if any, decides first, with the semantic before
+     compute_semantic (contract_config_base); if it doesn't ignore the
+     assertion, a compute_semantic that computes ignore does.  With
+     neither, the assertion is never ignored.  */
+  tree type = contract_control_naming_type (ctrl);
+  if (type && CLASS_TYPE_P (type) && COMPLETE_TYPE_P (type)
+      && contract_control_query_member (type, "compute_semantic"))
+    {
+      if (contract_control_query_member (type, "is_ignored"))
+	{
+	  unsigned saved = contract_config_override;
+	  contract_config_override = contract_config_base;
+	  int ignored = contract_control_bool_member (ctrl, "is_ignored", side,
+						      owner_fn, quiet);
+	  contract_config_override = saved;
+	  if (ignored == 1)
+	    return true;
+	}
+      return contract_evaluation_semantic_value () == CES_IGNORE;
+    }
   return contract_control_bool_member (ctrl, "is_ignored", side, owner_fn, quiet) == 1;
 }
 

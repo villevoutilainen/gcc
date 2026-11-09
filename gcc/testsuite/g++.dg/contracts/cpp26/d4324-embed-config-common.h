@@ -207,10 +207,9 @@ struct configured
     return info.semantic ();
   }
 
-  // From here on, as default_v: semantic() is the computed one.
-  static constexpr bool
-  is_ignored (assertion_static_info info) noexcept
-  { return info.semantic () == evaluation_semantic::ignore; }
+  // No is_ignored: an assertion is ignored when the semantic computed for
+  // it is ignore.  From here on, as default_v: semantic() is the computed
+  // one.
 
   constexpr void
   operator() (const assertion_context& ctx) const
