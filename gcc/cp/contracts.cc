@@ -51,6 +51,8 @@ along with GCC; see the file COPYING3.  If not see
 #include "fold-const.h"
 #include "value-range.h"
 
+static tree contract_control_object_source (tree);
+
 /*  Design notes.
 
   There are three phases:
@@ -236,8 +238,14 @@ mismatched_contracts_p (tree old_contract, tree new_contract)
     }
   if (c1 != NULL_TREE)
     {
-      tree cf1 = cp_fully_fold_init (c1);
-      tree cf2 = cp_fully_fold_init (c2);
+      /* A control object evaluated where it was written is compared as
+	 written: its value depends on where that was.  */
+      bool fixed = (contract_control_object_source (c1) != c1
+		    || contract_control_object_source (c2) != c2);
+      c1 = contract_control_object_source (c1);
+      c2 = contract_control_object_source (c2);
+      tree cf1 = fixed ? c1 : cp_fully_fold_init (c1);
+      tree cf2 = fixed ? c2 : cp_fully_fold_init (c2);
 
       saved_comparing_contracts = comparing_contracts;
       comparing_contracts = true;
@@ -3251,6 +3259,85 @@ propagate_cdtor_contracts_to_clones (tree fn)
     }
 }
 
+/* A prvalue control object (e.g. 'pre<label{...}>') is evaluated once,
+   where it is written: with FN, the function the assertion belongs to,
+   as the current function -- so that what it computes from its context,
+   such as std::meta::access_context::current (), is that of the
+   assertion, not of wherever it would otherwise be evaluated later (a
+   caller-side check's call site, for one).  The value is kept in an
+   artificial constexpr variable, as a named control object is; the
+   source expression is kept for comparing redeclarations and for
+   substituting into it again (contract_control_object_source).  */
+
+static GTY(()) hash_map<tree, tree> *fixed_control_objects;
+
+/* The expression a control object CTRL fixed by contract_fix_control_object
+   was written as, or CTRL itself.  */
+
+static tree
+contract_control_object_source (tree ctrl)
+{
+  tree *src = hash_map_safe_get (fixed_control_objects, ctrl);
+  return src ? *src : ctrl;
+}
+
+/* As above: CTRL, a control object of a contract assertion of FN
+   (NULL_TREE: the current function), evaluated into a variable if it is
+   a non-dependent prvalue of class type.  */
+
+tree
+contract_fix_control_object (tree ctrl, tree fn)
+{
+  if (!ctrl || error_operand_p (ctrl) || processing_template_decl)
+    return ctrl;
+  tree c = tree_strip_any_location_wrapper (ctrl);
+  STRIP_NOPS (c);
+  if (DECL_P (c) || REFERENCE_REF_P (c) || !CLASS_TYPE_P (TREE_TYPE (ctrl))
+      || instantiation_dependent_expression_p (ctrl))
+    return ctrl;
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    fn = current_function_decl;
+  tree saved_fn = current_function_decl;
+  current_function_decl = fn;
+  tree val = cxx_constant_value (ctrl);
+  current_function_decl = saved_fn;
+  if (TREE_CODE (val) == TARGET_EXPR)
+    val = TARGET_EXPR_INITIAL (val);
+  if (TREE_CODE (val) != CONSTRUCTOR)
+    return ctrl;
+  tree type = cp_build_qualified_type (TREE_TYPE (ctrl), TYPE_QUAL_CONST);
+  tree var = build_decl (EXPR_LOC_OR_LOC (ctrl, input_location), VAR_DECL,
+			 generate_internal_label ("Lctrl"), type);
+  TREE_STATIC (var) = 1;
+  TREE_PUBLIC (var) = 0;
+  TREE_READONLY (var) = 1;
+  DECL_ARTIFICIAL (var) = 1;
+  DECL_IGNORED_P (var) = 1;
+  DECL_EXTERNAL (var) = 0;
+  DECL_DECLARED_CONSTEXPR_P (var) = 1;
+  DECL_INITIALIZED_BY_CONSTANT_EXPRESSION_P (var) = 1;
+  DECL_INITIAL (var) = val;
+  layout_decl (var, 0);
+  varpool_node::finalize_decl (var);
+  hash_map_maybe_create<hm_ggc> (fixed_control_objects);
+  fixed_control_objects->put (var, contract_control_object_source (ctrl));
+  return var;
+}
+
+/* Fix the control objects of the contract assertions CONTRACTS of FN
+   (contract_fix_control_object).  */
+
+static void
+contract_fix_control_objects (tree contracts, tree fn)
+{
+  if (!contracts || processing_template_decl)
+    return;
+  for (tree contract : tree_vec_range (contracts))
+    if (CONTRACT_P (contract) && CONTRACT_CONTROL_OBJECT (contract))
+      CONTRACT_CONTROL_OBJECT (contract)
+	= contract_fix_control_object (CONTRACT_CONTROL_OBJECT (contract), fn);
+}
+
 /* Set the (maybe) parsed contract specifiers CONTRACTS for DECL.
    CONTRACTS is either  NULL_TREE or a TREE_VEC of contract statements.  */
 
@@ -3261,6 +3348,12 @@ set_fn_contract_specifiers (tree decl, tree contracts)
     return;
 
   gcc_checking_assert (!contracts || TREE_CODE (contracts) == TREE_VEC);
+
+  /* An ordinary function's; those of templated functions, and of their
+     instantiations (whose contracts are attached here before they are
+     substituted), are fixed when they are substituted.  */
+  if (TREE_CODE (decl) == FUNCTION_DECL && !DECL_TEMPLATE_INFO (decl))
+    contract_fix_control_objects (contracts, decl);
 
   bool existed = false;
   contract_decl& rd
@@ -4264,7 +4357,9 @@ tsubst_object_contract_specifiers (tree pattern_decl, tree new_decl,
 
       tree ctrl = CONTRACT_CONTROL_OBJECT (orig_stmt);
       if (ctrl)
-	ctrl = tsubst_expr (ctrl, args, complain, pattern_decl);
+	ctrl = contract_fix_control_object
+		 (tsubst_expr (contract_control_object_source (ctrl), args,
+			       complain, pattern_decl), new_decl);
       CONTRACT_CONTROL_OBJECT (new_stmt) = ctrl;
 
       auto constify_ovr
@@ -5072,6 +5167,9 @@ grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
 	 walk needed, so this only fires for contract_assert.  */
       if (current_function_decl)
 	SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
+      /* Evaluated where it is written: in the enclosing function.  */
+      control_object
+	= contract_fix_control_object (control_object, current_function_decl);
     }
   else if (id_equal (contract_spec, "pre"))
     {

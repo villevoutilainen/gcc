@@ -1613,6 +1613,7 @@ extern unsigned contract_config_semantic_of (tree, tree, int, int = -1);
    entries only.  No effect without a configuration.  */
 
 extern tree contract_static_info_comment;
+extern tree contract_fix_control_object (tree, tree);
 /* For assertion_static_info::kind and location: the assertion's kind (0:
    none) and location, of the contract assertion being processed.  */
 extern unsigned contract_static_info_kind;

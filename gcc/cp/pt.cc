@@ -12500,6 +12500,9 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
 	 from parsing inside a template, exactly as CONTRACT_CONDITION's
 	 own substitution just below already does.  */
       ctrl = tsubst_expr (ctrl, args, complain, in_decl);
+      /* Evaluated where it is written: in DECL, or in the function whose
+	 body holds a contract_assert.  */
+      ctrl = contract_fix_control_object (ctrl, decl);
       CONTRACT_CONTROL_OBJECT (r) = ctrl;
     }
   auto constify_ovr
