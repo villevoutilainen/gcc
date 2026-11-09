@@ -9245,9 +9245,13 @@ contract_failure_terminates_p (tree contract, tree owner_fn)
     STRIP_NOPS (c);
     if (VAR_P (c) && DECL_DECLARED_CONSTEXPR_P (c))
       env.ctrl_obj = c;
-    else
+    else if (!instantiation_dependent_expression_p (ctrl))
       {
-	tree val = maybe_constant_value (ctrl);
+	/* In a template, a non-dependent prvalue control object (e.g.
+	   'pre<T{}>' for a class T with a constructor) is still in its
+	   template form.  */
+	tree val = (processing_template_decl ? fold_non_dependent_expr (ctrl)
+		    : maybe_constant_value (ctrl));
 	if (TREE_CODE (val) == TARGET_EXPR)
 	  val = maybe_constant_init (TARGET_EXPR_INITIAL (val));
 	if (TREE_CODE (val) == CONSTRUCTOR)
