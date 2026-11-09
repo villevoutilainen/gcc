@@ -10024,6 +10024,15 @@ build_predicate_core_function_1 (tree contract, tree orig)
     }
   tree new_captures = NULL_TREE;
   tree *last_capture = &new_captures;
+  /* The names the parameters so far have: a captured entity keeps its own
+     name unless another parameter has it already -- two entities of the
+     same name (std::ranges::size and a class's size, say) can both be
+     named by one predicate -- and then gets NAME.N, which no source can
+     spell.  */
+  hash_set<tree> parm_names;
+  for (tree p = new_args; p; p = DECL_CHAIN (p))
+    if (DECL_NAME (p))
+      parm_names.add (DECL_NAME (p));
   for (unsigned i = 0; i < vec_safe_length (captures); ++i)
     {
       /* A captured local may be a VAR_DECL (an ordinary local variable)
@@ -10032,8 +10041,23 @@ build_predicate_core_function_1 (tree contract, tree orig)
 	 PARM_DECL chain, so build a fresh one of the same type rather
 	 than copy_decl, which would preserve a VAR_DECL's own tree code.  */
       tree cp = (*captures)[i];
-      tree np = build_lang_decl (PARM_DECL, DECL_NAME (cp),
-				 capture_parm_type (cp));
+      tree pname = DECL_NAME (cp);
+      if (pname && parm_names.contains (pname))
+	for (unsigned n = 1;; ++n)
+	  {
+	    char *nn = xasprintf ("%s.%u", IDENTIFIER_POINTER (DECL_NAME (cp)),
+				  n);
+	    tree id = get_identifier (nn);
+	    free (nn);
+	    if (!parm_names.contains (id))
+	      {
+		pname = id;
+		break;
+	      }
+	  }
+      if (pname)
+	parm_names.add (pname);
+      tree np = build_lang_decl (PARM_DECL, pname, capture_parm_type (cp));
       /* Only one bound here to the local itself: not a by-value scalar
 	 (a pointer's value proves nothing), nor a captured reference
 	 (only as valid as its own binding).  */
