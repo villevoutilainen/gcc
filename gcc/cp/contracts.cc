@@ -7591,6 +7591,79 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
      f7, location);
 }
 
+/* The reflection a control-object query's assertion_declaration_info
+   gives as its function: FN, the function whose contract assertion is
+   being processed -- the one a pre/post belongs to, or that encloses a
+   contract_assert -- as the user declared it: the wrapped function for
+   a caller-side wrapper, the constructor or destructor for one of its
+   clones, the template for an uninstantiated function template.  The
+   null reflection if there is none (e.g. a contract_assert outside any
+   function).  */
+
+static tree
+contract_function_reflection (tree fn)
+{
+  if (fn && DECL_LANG_SPECIFIC (fn) && DECL_CONTRACT_WRAPPER (fn))
+    fn = get_orig_func_for_wrapper (fn);
+  if (fn && DECL_CLONED_FUNCTION_P (fn))
+    fn = DECL_CLONED_FUNCTION (fn);
+  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+    return get_null_reflection ();
+  if (DECL_TEMPLATE_INFO (fn)
+      && DECL_TEMPLATE_RESULT (DECL_TI_TEMPLATE (fn)) == fn
+      && PRIMARY_TEMPLATE_P (DECL_TI_TEMPLATE (fn)))
+    fn = DECL_TI_TEMPLATE (fn);
+  return get_reflection (DECL_SOURCE_LOCATION (fn), fn);
+}
+
+/* Whether TYPE is std::contracts::assertion_declaration_info.  */
+
+static bool
+assertion_declaration_info_type_p (tree type)
+{
+  if (!flag_reflection || !CLASS_TYPE_P (type) || !TYPE_IDENTIFIER (type)
+      || !id_equal (TYPE_IDENTIFIER (type), "assertion_declaration_info"))
+    return false;
+  tree ctx = CP_TYPE_CONTEXT (type);
+  return (ctx && TREE_CODE (ctx) == NAMESPACE_DECL && DECL_NAME (ctx)
+	  && id_equal (DECL_NAME (ctx), "contracts")
+	  && CP_DECL_CONTEXT (ctx) == std_node);
+}
+
+/* The argument for a control-object query whose parameter has type
+   PARM_TYPE, for a check on SIDE of a contract assertion of OWNER_FN: an
+   assertion_static_info, or (with reflection) an
+   assertion_declaration_info -- the static info and the reflection of
+   OWNER_FN (contract_function_reflection).  NULL_TREE if PARM_TYPE is
+   neither.  */
+
+static tree
+build_control_query_argument (contract_check_side side, tree parm_type,
+			      tree owner_fn)
+{
+  tree type = non_reference (parm_type);
+  tree static_info_type
+    = lookup_std_contracts_type (get_identifier ("assertion_static_info"));
+  if (same_type_ignoring_top_level_qualifiers_p (type, static_info_type))
+    return build_assertion_static_info_value (side, TYPE_MAIN_VARIANT (type),
+					      owner_fn);
+  if (!assertion_declaration_info_type_p (TYPE_MAIN_VARIANT (type)))
+    return NULL_TREE;
+  type = TYPE_MAIN_VARIANT (type);
+  complete_type (type);
+  tree f0 = next_aggregate_field (TYPE_FIELDS (type));
+  tree f1 = f0 ? next_aggregate_field (DECL_CHAIN (f0)) : NULL_TREE;
+  if (!f1
+      || !same_type_ignoring_top_level_qualifiers_p (TREE_TYPE (f0),
+						     static_info_type)
+      || !REFLECTION_TYPE_P (TREE_TYPE (f1)))
+    return NULL_TREE;
+  return build_constructor_va
+    (type, 2,
+     f0, build_assertion_static_info_value (side, TREE_TYPE (f0), owner_fn),
+     f1, contract_function_reflection (owner_fn));
+}
+
 /* Constant-evaluate CTRL::NAME(info) for the current translation unit's
    evaluation_semantic and the given SIDE, where NAME is a static *or
    non-static* member function taking a single
@@ -7625,8 +7698,9 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
    separate dispatch (contract_control_validates below).  */
 
 static int
-contract_control_bool_member (tree ctrl, const char *name,
-			       contract_check_side side, tree owner_fn, bool quiet = false)
+contract_control_bool_member_1 (tree ctrl, const char *name,
+				 contract_check_side side, tree owner_fn,
+				 bool quiet)
 {
   tree ctrl_expr = ctrl;
   ctrl = contract_control_naming_type (ctrl);
@@ -7664,12 +7738,10 @@ contract_control_bool_member (tree ctrl, const char *name,
   tree parm_types = FUNCTION_FIRST_USER_PARMTYPE (fn);
   if (!parm_types || parm_types == void_list_node)
     return -1;
-  tree info_type = non_reference (TREE_VALUE (parm_types));
-  tree real_info_type
-    = lookup_std_contracts_type (get_identifier ("assertion_static_info"));
-  if (!same_type_ignoring_top_level_qualifiers_p (info_type, real_info_type))
+  tree cfg_arg = build_control_query_argument (side, TREE_VALUE (parm_types),
+					      owner_fn);
+  if (!cfg_arg)
     return -1;
-  tree cfg_arg = build_assertion_static_info_value (side, info_type, owner_fn);
 
   releasing_vec args;
   vec_safe_push (args, cfg_arg);
@@ -7770,7 +7842,161 @@ contract_control_bool_member (tree ctrl, const char *name,
     return -1;
   if (!val || TREE_CODE (val) != INTEGER_CST)
     return -1;
-  return integer_onep (val) ? 1 : 0;
+  /* A bool query's 0 or 1, or the value of another query's enumeration
+     (compute_semantic's evaluation_semantic).  */
+  if (!tree_fits_shwi_p (val) || tree_to_shwi (val) < 0
+      || tree_to_shwi (val) > INT_MAX)
+    return -1;
+  return (int) tree_to_shwi (val);
+}
+
+/* A control object's query result, for the argument it was given: a
+   query's argument is a function of the control object, the side, the
+   function, and the semantic, comment, kind and location of the contract
+   assertion being processed (build_assertion_static_info_value), so the
+   same query with all of those the same has the same result (the
+   comment is the contract's, which the location identifies).  A
+   contract assertion's queries are asked many times (per side, per call
+   and per decision), and each evaluation is a constant evaluation.  */
+
+struct control_query_key
+{
+  int ctrl;		/* DECL_UID of the control object.  */
+  int owner;		/* DECL_UID of the function, or -1.  */
+  tree name;		/* The query's identifier (never collected).  */
+  location_t loc;
+  int side;
+  unsigned semantic;
+  unsigned kind;
+};
+
+/* Keyed by UIDs and identifiers rather than by trees, which can be freed
+   explicitly (duplicate_decls, for one) behind the cache's back.  */
+
+struct control_query_key_traits : typed_noop_remove<control_query_key>
+{
+  typedef control_query_key value_type;
+  typedef control_query_key compare_type;
+  static hashval_t
+  hash (const control_query_key &k)
+  {
+    inchash::hash h;
+    h.add_int (k.ctrl);
+    h.add_int (k.owner);
+    h.add_ptr (k.name);
+    h.add_int (k.loc);
+    h.add_int (k.side);
+    h.add_int (k.semantic);
+    h.add_int (k.kind);
+    return h.end ();
+  }
+  static bool
+  equal (const control_query_key &a, const control_query_key &b)
+  {
+    return (a.ctrl == b.ctrl && a.owner == b.owner && a.name == b.name
+	    && a.loc == b.loc && a.side == b.side
+	    && a.semantic == b.semantic && a.kind == b.kind);
+  }
+  static const bool empty_zero_p = true;
+  static void mark_empty (control_query_key &k) { k.name = NULL_TREE; }
+  static void mark_deleted (control_query_key &k)
+  { k.name = NULL_TREE; k.ctrl = -1; }
+  static bool is_empty (const control_query_key &k)
+  { return k.name == NULL_TREE && k.ctrl != -1; }
+  static bool is_deleted (const control_query_key &k)
+  { return k.name == NULL_TREE && k.ctrl == -1; }
+};
+
+static hash_map<control_query_key, int,
+		simple_hashmap_traits<control_query_key_traits, int> >
+  *control_query_cache;
+
+/* Constant-evaluate CTRL::NAME(info): see contract_control_bool_member_1.
+   A result that folded (0 or more) is remembered (control_query_key);
+   one that didn't (-1: no such member, not yet known, or diagnosed) is
+   not, so that a later non-quiet query still diagnoses it.  */
+
+static int
+contract_control_query_value (tree ctrl, const char *name,
+			      contract_check_side side, tree owner_fn,
+			      bool quiet = false)
+{
+  tree c = ctrl ? tree_strip_any_location_wrapper (ctrl) : NULL_TREE;
+  if (c)
+    STRIP_NOPS (c);
+  if (processing_template_decl || !c || !DECL_P (c))
+    return contract_control_bool_member_1 (ctrl, name, side, owner_fn, quiet);
+  control_query_key key;
+  key.ctrl = DECL_UID (c);
+  key.owner = owner_fn && DECL_P (owner_fn) ? (int) DECL_UID (owner_fn) : -1;
+  key.name = get_identifier (name);
+  key.loc = contract_static_info_loc;
+  key.side = side;
+  key.semantic = contract_evaluation_semantic_value ();
+  key.kind = contract_static_info_kind;
+  if (!control_query_cache)
+    control_query_cache
+      = new hash_map<control_query_key, int,
+		     simple_hashmap_traits<control_query_key_traits, int> >;
+  if (int *r = control_query_cache->get (key))
+    return *r;
+  int result
+    = contract_control_bool_member_1 (ctrl, name, side, owner_fn, quiet);
+  if (result >= 0)
+    control_query_cache->put (key, result);
+  return result;
+}
+
+/* CTRL::NAME(info) for a bool query NAME: 1, 0, or -1 if CTRL has no
+   usable such member (contract_control_query_value).  */
+
+static int
+contract_control_bool_member (tree ctrl, const char *name,
+			      contract_check_side side, tree owner_fn,
+			      bool quiet = false)
+{
+  int v = contract_control_query_value (ctrl, name, side, owner_fn, quiet);
+  return v < 0 ? -1 : v != 0;
+}
+
+/* D4324 (experimental): the semantic of CONTRACT, of FN, checked on SIDE
+   (-1: the side of FN's own copy of it), whose semantic is otherwise
+   SEMANTIC (the configuration's, or 0: the translation unit's): what its
+   control object's optional compute_semantic query returns for it, given
+   the static info (or assertion_declaration_info) with SEMANTIC.  The
+   result is then the semantic its other queries and its operator() see,
+   so a per-assertion decision a query makes reaches the evaluation.
+   SEMANTIC if there is no such query.  */
+
+unsigned
+contract_apply_compute_semantic (tree contract, tree fn, int side,
+				 unsigned semantic)
+{
+  if (!flag_contract_control_objects || processing_template_decl
+      || !contract || !CONTRACT_P (contract))
+    return semantic;
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || error_operand_p (ctrl))
+    return semantic;
+  tree type = contract_control_naming_type (ctrl);
+  if (!type || !CLASS_TYPE_P (type) || !COMPLETE_TYPE_P (type)
+      || !lookup_member (type, get_identifier ("compute_semantic"),
+			 /*protect=*/1, /*want_type=*/false, tf_none))
+    return semantic;
+  contract_check_side cside
+    = (side < 0 ? contract_side_of (contract, fn)
+       : (contract_check_side) side);
+  int v = contract_control_query_value (ctrl, "compute_semantic", cside, fn);
+  if (v < 0)
+    return semantic;
+  if (v < CES_IGNORE || v > CES_QUICK)
+    {
+      error_at (EXPR_LOCATION (contract),
+		"%<compute_semantic%> for control object of type %qT "
+		"returns an invalid evaluation semantic", type);
+      return semantic;
+    }
+  return v;
 }
 
 /* D4324, QoI: P3595 contract configuration (-fcontract-configuration=,
@@ -8491,10 +8717,9 @@ contract_control_validates (tree ctrl, contract_check_side side, tree owner_fn, 
   tree parm_types = FUNCTION_FIRST_USER_PARMTYPE (fn);
   if (!parm_types || parm_types == void_list_node)
     return true;
-  tree info_type = non_reference (TREE_VALUE (parm_types));
-  tree real_info_type
-    = lookup_std_contracts_type (get_identifier ("assertion_static_info"));
-  if (!same_type_ignoring_top_level_qualifiers_p (info_type, real_info_type))
+  tree cfg_arg = build_control_query_argument (side, TREE_VALUE (parm_types),
+					      owner_fn);
+  if (!cfg_arg)
     return true;
 
   /* validate's own return type must be exactly std::contracts::
@@ -8507,7 +8732,6 @@ contract_control_validates (tree ctrl, contract_check_side side, tree owner_fn, 
   if (!same_type_ignoring_top_level_qualifiers_p (result_type, real_result_type))
     return true;
 
-  tree cfg_arg = build_assertion_static_info_value (side, info_type, owner_fn);
   releasing_vec args;
   vec_safe_push (args, cfg_arg);
 

@@ -1052,6 +1052,9 @@ export namespace std::contracts
   using std::contracts::assertion_control;
   using std::contracts::assertion_info;
   using std::contracts::assertion_static_info;
+#if __cpp_impl_reflection
+  using std::contracts::assertion_declaration_info;
+#endif
   using std::contracts::assume;
   using std::contracts::assume_v;
   using std::contracts::base_contract;

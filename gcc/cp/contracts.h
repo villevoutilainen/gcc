@@ -1600,6 +1600,7 @@ extern int contract_config_consteval;
 extern unsigned contract_config_semantic_for (unsigned, location_t, tree,
 					      tree, int, bool = false);
 extern unsigned contract_config_semantic_of (tree, tree, int, int = -1);
+extern unsigned contract_apply_compute_semantic (tree, tree, int, unsigned);
 
 /* While one is live, a control object's queries, its context and its
    static info see the semantic the configuration gives one contract
@@ -1648,6 +1649,10 @@ public:
       contract_config_override
 	= contract_config_semantic_of (contract, fn,
 				       contract_config_consteval, side);
+    /* Then the control object's own computation, if it has one.  */
+    contract_config_override
+      = contract_apply_compute_semantic (contract, fn, side,
+					 contract_config_override);
   }
   contract_config_scope (unsigned kind, location_t loc, tree ctrl, tree fn)
     : m_saved (contract_config_override),
