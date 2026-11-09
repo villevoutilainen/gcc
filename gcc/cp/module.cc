@@ -6554,6 +6554,12 @@ trees_out::core_vals (tree t)
       unsigned ix = unsigned (vl);
       for (; ix != limit; ix++)
 	WT (TREE_OPERAND (t, ix));
+
+      /* A BIND_EXPR's variables after the first: their chain is otherwise
+	 rebuilt from its BLOCK, which one built after the function's
+	 scopes (e.g. a contract check's) doesn't have.  */
+      if (code == BIND_EXPR && !BIND_EXPR_BLOCK (t) && BIND_EXPR_VARS (t))
+	chained_decls (DECL_CHAIN (BIND_EXPR_VARS (t)));
     }
   else if (code == REQUIRES_EXPR)
     {
@@ -7154,6 +7160,13 @@ trees_in::core_vals (tree t)
       unsigned ix = unsigned (vl);
       for (; ix != limit; ix++)
 	RTU (TREE_OPERAND (t, ix));
+
+      if (code == BIND_EXPR && !BIND_EXPR_BLOCK (t) && BIND_EXPR_VARS (t))
+	{
+	  tree rest = chained_decls ();
+	  if (!DECL_CHAIN (BIND_EXPR_VARS (t)))
+	    DECL_CHAIN (BIND_EXPR_VARS (t)) = rest;
+	}
     }
   else if (code == REQUIRES_EXPR)
     {
