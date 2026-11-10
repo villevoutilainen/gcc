@@ -431,6 +431,7 @@ public:
 		    are in play.  */
   vec<tree, va_heap, vl_embed> *scopes;
   name_lookup *previous; /* Previously active lookup.  */
+  tree binding_scope; /* The namespace whose bindings are being processed.  */
 
 protected:
   /* Marked scope stack for outermost name lookup.  */
@@ -442,7 +443,8 @@ public:
   name_lookup (tree n, LOOK_want w = LOOK_want::NORMAL)
   : name (n), value (NULL_TREE), type (NULL_TREE),
     want (w), tentative (false),
-    deduping (false), scopes (NULL), previous (NULL)
+    deduping (false), scopes (NULL), previous (NULL),
+    binding_scope (NULL_TREE)
   {
     preserve_state ();
   }
@@ -743,6 +745,68 @@ name_lookup::add_type (tree new_type)
     type = ambiguous (new_type, type);
 }
 
+/* True if a using-declarator whose target scope is the namespace USCOPE,
+   naming the declaration D, is transparent to a reflect-expression
+   ([expr.reflect], P4466): each scope that contains exactly one of D and
+   the using-declarator is an inline or unnamed namespace.  */
+
+static bool
+reflect_transparent_using_p (tree d, tree uscope)
+{
+  if (TREE_CODE (uscope) != NAMESPACE_DECL)
+    return false;
+  tree ds = CP_DECL_CONTEXT (d);
+  if (TREE_CODE (ds) != NAMESPACE_DECL)
+    return false;
+  auto transparent = [] (tree ns)
+    { return DECL_NAMESPACE_INLINE_P (ns) || !DECL_NAME (ns); };
+  /* Up from D to the innermost namespace that also encloses USCOPE.  */
+  for (; !is_nested_namespace (ds, uscope); ds = CP_DECL_CONTEXT (ds))
+    if (!transparent (ds))
+      return false;
+  /* And up from the using-declarator to that same namespace.  */
+  for (tree s = uscope; s != ds; s = CP_DECL_CONTEXT (s))
+    if (!transparent (s))
+      return false;
+  return true;
+}
+
+/* If T is a using-declarator in the namespace SCOPE that a
+   reflect-expression looks through (see reflect_transparent_using_p),
+   return the declaration it names, otherwise T.  */
+
+static tree
+strip_reflect_transparent_using (tree t, tree scope)
+{
+  if (!t)
+    return t;
+  if (TREE_CODE (t) == USING_DECL
+      && !DECL_DEPENDENT_P (t)
+      && DECL_P (USING_DECL_DECLS (t))
+      && reflect_transparent_using_p (USING_DECL_DECLS (t), scope))
+    return USING_DECL_DECLS (t);
+  if (TREE_CODE (t) == OVERLOAD)
+    {
+      /* An overload set whose using-declarators are all looked through
+	 becomes the set of functions they name.  */
+      bool any = false;
+      for (ovl_iterator iter (t); iter; ++iter)
+	if (iter.using_p ())
+	  {
+	    if (!reflect_transparent_using_p (*iter, scope))
+	      return t;
+	    any = true;
+	  }
+      if (!any)
+	return t;
+      tree fns = NULL_TREE;
+      for (ovl_iterator iter (t); iter; ++iter)
+	fns = lookup_add (*iter, fns);
+      return fns;
+    }
+  return t;
+}
+
 /* Process a found binding containing NEW_VAL and NEW_TYPE.  Returns
    true if we actually found something noteworthy.  Hiddenness has
    already been handled in the caller.  */
@@ -754,6 +818,20 @@ name_lookup::process_binding (tree new_val, tree new_type)
   if (new_type
       && (want & LOOK_want::TYPE_NAMESPACE) == LOOK_want::NAMESPACE)
     new_type = NULL_TREE;
+
+  /* A reflect-expression keeps the using-declarators it finds, except
+     the ones it looks through.  */
+  if (UNLIKELY (cp_preserve_using_decl) && binding_scope)
+    {
+      tree v = strip_reflect_transparent_using (new_val, binding_scope);
+      if (v != new_val && TREE_CODE (new_val) == OVERLOAD && !deduping)
+	/* The function may also be found directly, through an inline
+	   namespace; the using-declarator's OVL_DEDUP_P would have
+	   engaged deduping.  */
+	dedup (true);
+      new_val = v;
+      new_type = strip_reflect_transparent_using (new_type, binding_scope);
+    }
 
   new_val = strip_using_decl (new_val);
   new_type = strip_using_decl (new_type);
@@ -830,6 +908,7 @@ bool
 name_lookup::search_namespace_only (tree scope)
 {
   bool found = false;
+  auto bs = make_temp_override (binding_scope, scope);
   if (tree *binding = find_namespace_slot (scope, name))
     {
       tree val = *binding;
@@ -8436,7 +8515,8 @@ lookup_name (tree name, LOOK_where where, LOOK_want want)
 
   /* If we have a known type overload, pull it out.  This can happen
      for both using decls and unhidden functions.  */
-  if (val && TREE_CODE (val) == OVERLOAD && TREE_TYPE (val) != unknown_type_node)
+  if (val && TREE_CODE (val) == OVERLOAD && TREE_TYPE (val) != unknown_type_node
+      && LIKELY (!cp_preserve_using_decl))
     val = OVL_FUNCTION (val);
 
   return val;

@@ -188,10 +188,15 @@ get_reflection (location_t loc, tree t, reflect_kind kind/*=REFLECT_UNDEF*/)
       inform (DECL_SOURCE_LOCATION (t), "%qD declared here", t);
       return error_mark_node;
     }
-  /* If lookup finds a declaration that replaced a using-declarator during
-     a single search, R is ill-formed.  */
+  /* If lookup finds a declaration that replaced a using-declarator U during
+     a single search, the target scope of U shall be associated with a
+     namespace, and each scope that contains exactly one of the declaration
+     and U shall be associated with an inline or unnamed namespace (P4466).
+     Name lookup has already looked through the using-declarators that
+     satisfy this; any left are ill-formed.  */
   else if (TREE_CODE (t) == USING_DECL
-	   || (TREE_CODE (t) == OVERLOAD && OVL_USING_P (t)))
+	   || (TREE_CODE (MAYBE_BASELINK_FUNCTIONS (t)) == OVERLOAD
+	       && OVL_USING_P (MAYBE_BASELINK_FUNCTIONS (t))))
     {
       error_at (loc, "%<^^%> cannot be applied to a using-declaration");
       return error_mark_node;
