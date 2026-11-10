@@ -2115,6 +2115,22 @@ get_class_binding_direct (tree klass, tree name, bool want_type)
 	val = want_type ? STAT_TYPE (val) : STAT_DECL (val);
       else if (want_type && !DECL_DECLARES_TYPE_P (val))
 	val = NULL_TREE;
+
+      /* member_vec_dedup replaced a non-dependent using-declarator of a
+	 non-function with the declaration it names; a reflect-expression
+	 needs the using-declarator, which TYPE_FIELDS still has.  */
+      if (UNLIKELY (cp_preserve_using_decl)
+	  && val
+	  && DECL_P (val)
+	  && !DECL_DECLARES_FUNCTION_P (val))
+	for (tree f = TYPE_FIELDS (klass); f; f = DECL_CHAIN (f))
+	  if (TREE_CODE (f) == USING_DECL
+	      && DECL_NAME (f) == lookup
+	      && strip_using_decl (USING_DECL_DECLS (f)) == val)
+	    {
+	      val = f;
+	      break;
+	    }
     }
   else
     {
