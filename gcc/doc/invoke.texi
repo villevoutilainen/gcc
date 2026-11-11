@@ -254,6 +254,7 @@ in the following sections.
 -fno-nonansi-builtins  -fnothrow-opt  -fno-operator-names
 -fno-optional-diags
 -fno-pretty-templates  -frange-for-ext-temps  -freflection
+-freflection-transparent-using-decls
 -fno-rtti  -fsized-deallocation
 -fstrict-enums  -fstrong-eval-order@r{[}=@var{kind}@r{]}
 -ftemplate-backtrace-limit=@var{n}
@@ -3901,6 +3902,18 @@ in earlier versions of the standard.
 @opindex freflection
 @item -freflection
 Enable experimental C++26 Reflection.
+
+@opindex freflection-transparent-using-decls
+@item -freflection-transparent-using-decls
+Let a reflect-expression look through every using-declarator at namespace
+scope, so that @code{^^N::x} after @code{namespace N @{ using M::x; @}}
+represents @code{M::x}.  By default, as specified by P4466, it looks
+through only a using-declarator that is separated from the declaration it
+names by nothing but inline or unnamed namespaces, and other
+using-declarators make it ill-formed.  Using-declarators at class scope
+make it ill-formed either way.  This option does not change what
+@code{std::meta::members_of} returns, which never includes a
+using-declarator.
 
 @opindex fno-rtti
 @opindex frtti

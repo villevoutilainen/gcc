@@ -748,13 +748,19 @@ name_lookup::add_type (tree new_type)
 /* True if a using-declarator whose target scope is the namespace USCOPE,
    naming the declaration D, is transparent to a reflect-expression
    ([expr.reflect], P4466): each scope that contains exactly one of D and
-   the using-declarator is an inline or unnamed namespace.  */
+   the using-declarator is an inline or unnamed namespace.  With
+   -freflection-transparent-using-decls, every using-declarator whose
+   target scope is a namespace is.  */
 
 static bool
 reflect_transparent_using_p (tree d, tree uscope)
 {
   if (TREE_CODE (uscope) != NAMESPACE_DECL)
     return false;
+  /* -freflection-transparent-using-decls: every namespace-scope
+     using-declarator.  */
+  if (flag_reflection_transparent_using_decls)
+    return true;
   tree ds = CP_DECL_CONTEXT (d);
   if (TREE_CODE (ds) != NAMESPACE_DECL)
     return false;

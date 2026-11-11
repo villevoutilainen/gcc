@@ -1523,6 +1523,9 @@ UrlSuffix(gcc/C_002b_002b-Dialect-Options.html#index-fno-range-for-ext-temps)
 freflection
 UrlSuffix(gcc/C_002b_002b-Dialect-Options.html#index-freflection)
 
+freflection-transparent-using-decls
+UrlSuffix(gcc/C_002b_002b-Dialect-Options.html#index-freflection-transparent-using-decls)
+
 freplace-objc-classes
 UrlSuffix(gcc/Objective-C-and-Objective-C_002b_002b-Dialect-Options.html#index-fno-replace-objc-classes)
 

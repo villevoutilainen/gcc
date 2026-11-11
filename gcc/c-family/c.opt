@@ -2560,6 +2560,10 @@ freflection
 C++ ObjC++ Var(flag_reflection) Init(0)
 Enable experimental C++26 Reflection.
 
+freflection-transparent-using-decls
+C++ ObjC++ Var(flag_reflection_transparent_using_decls) Init(0)
+Let a reflect-expression look through every namespace-scope using-declarator.
+
 freplace-objc-classes
 ObjC ObjC++ LTO Var(flag_replace_objc_classes)
 Used in Fix-and-Continue mode to indicate that object files may be swapped in at runtime.
