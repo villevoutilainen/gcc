@@ -1699,85 +1699,258 @@ cg_loop_max_latch_count (class loop *loop,
   return any;
 }
 
-/* The range of VAL, a PHI at the head of a loop whose latch is taken a
-   bounded number of times, when every iteration changes it by adding,
-   subtracting or multiplying values that don't depend on it ('t += i',
-   'r *= i'): the union of its values after each number of iterations
-   up to the bound -- at AT_STMT, which may see one iteration fewer
-   (cg_loop_max_latch_count).  An overflow on the way is item 8's own
-   error, so each step is exact.  IN_PROGRESS holds VAL: what an
-   operand's range needs of VAL is unknown.  */
+/* How an iteration of LOOP changes the value of LEAF, a PHI at LOOP's
+   head: a DAG of 'acc CODE x' and 'x CODE acc' (x not computed from the
+   accumulator the same way) from LEAF to the value the latch takes back,
+   joined by PHIs in the loop's body whose every incoming value is so
+   computed ('if (c) t += i;' -- LEAF itself being one), and through
+   loops nested in LOOP, each with its own (SUB) -- 't += x' in an inner
+   loop is a bounded number of such steps.  N bounds how many times the
+   latch is taken.  An overflow on the way is item 8's own error, so each
+   step is exact.  */
 
-static bool
-cg_loop_accumulator_range (tree val,
-			   hash_map<tree, cg_range_lite> &established_range,
-			   hash_map<tree, cg_range_lite> &scalar_range_cache,
-			   gimple_ranger *ranger, cg_range_lite *out,
-			   gimple *at_stmt)
+struct cg_acc_fn
 {
-  gphi *phi = dyn_cast <gphi *> (SSA_NAME_DEF_STMT (val));
-  if (!phi || !current_loops || !dom_info_available_p (CDI_DOMINATORS))
-    return false;
-  basic_block bb = gimple_bb (phi);
-  class loop *loop = bb->loop_father;
-  tree type = TREE_TYPE (val);
-  if (!loop || loop->header != bb || !loop->latch
-      || gimple_phi_num_args (phi) != 2 || !INTEGRAL_TYPE_P (type)
-      || !TYPE_OVERFLOW_UNDEFINED (type))
-    return false;
-  static unsigned depth;
-  if (depth >= 4)
-    return false;
-  auto deeper = make_temp_override (depth, depth + 1);
-
-  /* How the value the latch takes back is computed from VAL: a DAG of
-     'acc CODE x' and 'x CODE acc' (x not computed from the accumulator
-     the same way), joined by PHIs in the loop's body whose every
-     incoming value is so computed ('if (c) t += i;' -- VAL itself being
-     one).  */
-  struct node { tree_code code; bool acc_first; cg_range_lite x;
-		unsigned first, n;
-		/* X is the loop's counter plus COFF: CINIT + K * CSTEP + COFF
-		   in the iteration after K latches.  */
-		bool ctr = false; widest_int cstep = 0, coff = 0;
-		cg_range_lite cinit; };
+  struct node
+  {
+    /* PLUS_EXPR, MINUS_EXPR, MULT_EXPR; ERROR_MARK for a join; LOOP_EXPR
+       for a nested loop's PHI, SUB, entered with the value of the kid;
+       SSA_NAME for the leaf.  */
+    tree_code code;
+    bool acc_first;
+    cg_range_lite x;
+    unsigned first, n;
+    /* X is the loop's counter plus COFF: CINIT + K * CSTEP + COFF in the
+       iteration after K latches.  */
+    bool ctr;
+    widest_int cstep, coff;
+    cg_range_lite cinit;
+    cg_acc_fn *sub;
+  };
+  class loop *loop = NULL;
+  widest_int tmin = 0, tmax = 0;
   auto_vec<node, 16> nodes;
   auto_vec<int, 16> kids;
-  hash_map<tree, int> memo;
-  const int leaf = 0;
-  nodes.safe_push (node { SSA_NAME, false, cg_range_lite (), 0, 0, false,
-			  0, 0, cg_range_lite () });
+  auto_vec<cg_acc_fn *> subs;
+  int root = -1;
   bool any_ctr = false;
-  memo.put (val, leaf);
+  widest_int n = 0;
+
+  cg_acc_fn () = default;
+  cg_acc_fn (const cg_acc_fn &) = delete;
+  ~cg_acc_fn ()
+  {
+    for (cg_acc_fn *s : subs)
+      delete s;
+  }
+
+  bool additive_p () const
+  {
+    for (const node &nd : nodes)
+      if (nd.code == MULT_EXPR
+	  || (nd.code == MINUS_EXPR && !nd.acc_first)
+	  || (nd.code == LOOP_EXPR && !nd.sub->additive_p ()))
+	return false;
+    return true;
+  }
+
+  /* The value after one iteration from R, if within the type (unless not
+     LIMITED); the iteration after K latches, if K.  */
+  bool eval (int i, const cg_range_lite &r, cg_range_lite *out,
+	     const widest_int *k, bool limited) const
+  {
+    const node &nd = nodes[i];
+    if (nd.code == SSA_NAME)
+      {
+	*out = r;
+	return true;
+      }
+    if (nd.code == ERROR_MARK)
+      {
+	for (unsigned j = 0; j < nd.n; ++j)
+	  {
+	    cg_range_lite kr;
+	    if (!eval (kids[nd.first + j], r, &kr, k, limited))
+	      return false;
+	    *out = j ? cg_range_hull (*out, kr) : kr;
+	  }
+	return true;
+      }
+    cg_range_lite s;
+    if (!eval (kids[nd.first], r, &s, k, limited))
+      return false;
+    if (nd.code == LOOP_EXPR)
+      return nd.sub->apply (s, out, limited);
+    cg_range_lite x = nd.x;
+    if (k && nd.ctr)
+      {
+	cg_range_lite c;
+	c.has_lo = c.has_hi = true;
+	c.lo = nd.cinit.lo + *k * nd.cstep + nd.coff;
+	c.hi = nd.cinit.hi + *k * nd.cstep + nd.coff;
+	cg_range_meet (&c, x);
+	/* Empty: not reached in that iteration; X still holds.  */
+	if (c.lo <= c.hi)
+	  x = c;
+      }
+    cg_range_lite t;
+    t.has_lo = t.has_hi = true;
+    if (nd.code == PLUS_EXPR)
+      t.lo = s.lo + x.lo, t.hi = s.hi + x.hi;
+    else if (nd.code == MINUS_EXPR && nd.acc_first)
+      t.lo = s.lo - x.hi, t.hi = s.hi - x.lo;
+    else if (nd.code == MINUS_EXPR)
+      t.lo = x.lo - s.hi, t.hi = x.hi - s.lo;
+    else
+      {
+	bool has_lo, has_hi;
+	if (!cg_range_lite_multiply (s, x, &has_lo, &t.lo, &has_hi, &t.hi)
+	    || !has_lo || !has_hi)
+	  return false;
+      }
+    /* Beyond the type, a step overflows: no bound.  */
+    if (limited && (t.lo < tmin || t.hi > tmax))
+      return false;
+    *out = t;
+    return true;
+  }
+
+  /* The union of the values after each number of iterations up to N,
+     from R, if within the type (unless not LIMITED).  */
+  bool apply (cg_range_lite r, cg_range_lite *out, bool limited) const
+  {
+    if (additive_p ())
+      {
+	/* Each iteration moves the value by what one does from zero,
+	   whatever it was.  */
+	cg_range_lite zero, d;
+	zero.has_lo = zero.has_hi = true;
+	zero.lo = zero.hi = 0;
+	if (!eval (root, zero, &d, NULL, false))
+	  return false;
+	if (d.lo < 0)
+	  r.lo += n * d.lo;
+	if (d.hi > 0)
+	  r.hi += n * d.hi;
+      }
+    else if (any_ctr && n <= 64)
+      {
+	/* W, the values after K latches, iteration by iteration, each with
+	   its own counter value; R their union.  */
+	cg_range_lite w = r;
+	for (widest_int k = 0; k < n; k += 1)
+	  {
+	    cg_range_lite s;
+	    if (!eval (root, w, &s, &k, limited))
+	      return false;
+	    w = s;
+	    r = cg_range_hull (r, w);
+	  }
+      }
+    else
+      /* R grows to hold every value after up to K iterations.  */
+      for (widest_int k = 0; k < n; k += 1)
+	{
+	  cg_range_lite s;
+	  if (k >= 64 || !eval (root, r, &s, NULL, limited))
+	    return false;
+	  cg_range_lite u = cg_range_hull (r, s);
+	  if (u.lo == r.lo && u.hi == r.hi)
+	    break;
+	  r = u;
+	}
+    if (limited && (r.lo < tmin || r.hi > tmax))
+      return false;
+    *out = r;
+    return true;
+  }
+};
+
+/* Fill FN for LEAF, a PHI at the head of LOOP, its latch count as seen
+   at AT_STMT (cg_loop_max_latch_count).  */
+
+static bool
+cg_acc_build (cg_acc_fn *fn, tree leaf, class loop *loop,
+	      hash_map<tree, cg_range_lite> &established_range,
+	      hash_map<tree, cg_range_lite> &scalar_range_cache,
+	      gimple_ranger *ranger, gimple *at_stmt, unsigned depth)
+{
+  gphi *phi = safe_dyn_cast <gphi *> (SSA_NAME_DEF_STMT (leaf));
+  tree type = TREE_TYPE (leaf);
+  if (depth > 3 || !phi || !loop || gimple_bb (phi) != loop->header
+      || !loop->latch || gimple_phi_num_args (phi) != 2
+      || !INTEGRAL_TYPE_P (type) || !TYPE_OVERFLOW_UNDEFINED (type))
+    return false;
+  fn->loop = loop;
+  fn->tmin = wi::to_widest (TYPE_MIN_VALUE (type));
+  fn->tmax = wi::to_widest (TYPE_MAX_VALUE (type));
+  typedef cg_acc_fn::node node;
+  auto blank = [] (tree_code code)
+    {
+      return node { code, false, cg_range_lite (), 0, 0, false, 0, 0,
+		    cg_range_lite (), NULL };
+    };
+  hash_map<tree, int> memo;
+  fn->nodes.safe_push (blank (SSA_NAME));
+  memo.put (leaf, 0);
   auto build = [&] (auto &self, tree t, unsigned d) -> int
     {
       if (int *m = memo.get (t))
 	return *m;
-      if (d > 8 || nodes.length () > 32 || TREE_CODE (t) != SSA_NAME)
+      if (d > 8 || fn->nodes.length () > 32 || TREE_CODE (t) != SSA_NAME)
 	return -1;
       gimple *def = SSA_NAME_DEF_STMT (t);
       if (!def || !gimple_bb (def)
-	  || gimple_bb (def)->loop_father != loop)
+	  || !flow_bb_inside_loop_p (loop, gimple_bb (def)))
 	return -1;
+      basic_block bb = gimple_bb (def);
       int r = -1;
       if (gphi *p = dyn_cast <gphi *> (def))
 	{
-	  if (gimple_bb (p) == loop->header)
+	  class loop *inner = bb->loop_father;
+	  if (bb == loop->header)
 	    return -1;
-	  auto_vec<int, 4> ks;
-	  for (unsigned i = 0; i < gimple_phi_num_args (p); ++i)
+	  if (bb == inner->header)
 	    {
-	      int k = self (self, gimple_phi_arg_def (p, i), d + 1);
+	      /* A loop nested in LOOP: the value it is entered with, then
+		 its own iterations.  */
+	      if (gimple_phi_num_args (p) != 2 || !inner->latch)
+		return -1;
+	      int k = self (self, PHI_ARG_DEF_FROM_EDGE
+				    (p, loop_preheader_edge (inner)), d + 1);
 	      if (k < 0)
 		return -1;
-	      ks.safe_push (k);
+	      cg_acc_fn *sub = new cg_acc_fn;
+	      fn->subs.safe_push (sub);
+	      if (!cg_acc_build (sub, t, inner, established_range,
+				 scalar_range_cache, ranger, NULL, depth + 1))
+		return -1;
+	      node nd = blank (LOOP_EXPR);
+	      nd.first = fn->kids.length ();
+	      nd.n = 1;
+	      nd.sub = sub;
+	      fn->kids.safe_push (k);
+	      fn->nodes.safe_push (nd);
+	      r = fn->nodes.length () - 1;
 	    }
-	  node nd { ERROR_MARK, false, cg_range_lite (), kids.length (),
-		    ks.length (), false, 0, 0, cg_range_lite () };
-	  for (int k : ks)
-	    kids.safe_push (k);
-	  nodes.safe_push (nd);
-	  r = nodes.length () - 1;
+	  else
+	    {
+	      auto_vec<int, 4> ks;
+	      for (unsigned i = 0; i < gimple_phi_num_args (p); ++i)
+		{
+		  int k = self (self, gimple_phi_arg_def (p, i), d + 1);
+		  if (k < 0)
+		    return -1;
+		  ks.safe_push (k);
+		}
+	      node nd = blank (ERROR_MARK);
+	      nd.first = fn->kids.length ();
+	      nd.n = ks.length ();
+	      for (int k : ks)
+		fn->kids.safe_push (k);
+	      fn->nodes.safe_push (nd);
+	      r = fn->nodes.length () - 1;
+	    }
 	}
       else if (gassign *a = dyn_cast <gassign *> (def))
 	{
@@ -1789,8 +1962,10 @@ cg_loop_accumulator_range (tree val,
 	  if ((k0 < 0) == (k1 < 0))
 	    return -1;
 	  tree x = k0 >= 0 ? o1 : o0;
-	  node nd { code, k0 >= 0, cg_range_lite (), kids.length (), 1, false,
-		    0, 0, cg_range_lite () };
+	  node nd = blank (code);
+	  nd.acc_first = k0 >= 0;
+	  nd.first = fn->kids.length ();
+	  nd.n = 1;
 	  if (TREE_CODE (x) == INTEGER_CST)
 	    {
 	      nd.x.has_lo = nd.x.has_hi = true;
@@ -1802,7 +1977,7 @@ cg_loop_accumulator_range (tree val,
 					  /*require_conveyor=*/true, &nd.x)
 		   || !nd.x.has_lo || !nd.x.has_hi)
 	    return -1;
-	  /* X the counter, or the counter plus a constant.  */
+	  /* X this loop's counter, or the counter plus a constant.  */
 	  tree base = x;
 	  widest_int off = 0;
 	  if (TREE_CODE (x) == SSA_NAME)
@@ -1817,6 +1992,8 @@ cg_loop_accumulator_range (tree val,
 		    off = -off;
 		}
 	  tree cinit;
+	  /* Only in LOOP's own body: an inner loop's statement runs many
+	     times per iteration of LOOP, but with LOOP's counter the same.  */
 	  if (cg_loop_counter_p (loop, base, &nd.cstep, &cinit))
 	    {
 	      if (TREE_CODE (cinit) == INTEGER_CST)
@@ -1833,86 +2010,52 @@ cg_loop_accumulator_range (tree val,
 		nd.cinit = cg_range_lite ();
 	      nd.ctr = nd.cinit.has_lo && nd.cinit.has_hi;
 	      nd.coff = off;
-	      any_ctr |= nd.ctr;
+	      fn->any_ctr |= nd.ctr;
 	    }
-	  kids.safe_push (k0 >= 0 ? k0 : k1);
-	  nodes.safe_push (nd);
-	  r = nodes.length () - 1;
+	  fn->kids.safe_push (k0 >= 0 ? k0 : k1);
+	  fn->nodes.safe_push (nd);
+	  r = fn->nodes.length () - 1;
 	}
       if (r >= 0)
 	memo.put (t, r);
       return r;
     };
-  int root = build (build, PHI_ARG_DEF_FROM_EDGE (phi, loop_latch_edge (loop)),
+  fn->root = build (build, PHI_ARG_DEF_FROM_EDGE (phi, loop_latch_edge (loop)),
 		    0);
-  if (root <= leaf)
-    return false;
-  /* The accumulator's range after one iteration from R, if within the
-     type (unless not LIMITED); the iteration after K latches, if K.  */
-  widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
-  widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
-  bool limited = true;
-  auto eval = [&] (auto &self, int i, const cg_range_lite &r,
-		   cg_range_lite *out, const widest_int *k) -> bool
-    {
-      const node &nd = nodes[i];
-      if (i == leaf)
-	{
-	  *out = r;
-	  return true;
-	}
-      if (nd.code == ERROR_MARK)
-	{
-	  for (unsigned j = 0; j < nd.n; ++j)
-	    {
-	      cg_range_lite kr;
-	      if (!self (self, kids[nd.first + j], r, &kr, k))
-		return false;
-	      *out = j ? cg_range_hull (*out, kr) : kr;
-	    }
-	  return true;
-	}
-      cg_range_lite s;
-      if (!self (self, kids[nd.first], r, &s, k))
-	return false;
-      cg_range_lite x = nd.x;
-      if (k && nd.ctr)
-	{
-	  cg_range_lite c;
-	  c.has_lo = c.has_hi = true;
-	  c.lo = nd.cinit.lo + *k * nd.cstep + nd.coff;
-	  c.hi = nd.cinit.hi + *k * nd.cstep + nd.coff;
-	  cg_range_meet (&c, x);
-	  /* Empty: not reached in that iteration; X still holds.  */
-	  if (c.lo <= c.hi)
-	    x = c;
-	}
-      cg_range_lite t;
-      t.has_lo = t.has_hi = true;
-      if (nd.code == PLUS_EXPR)
-	t.lo = s.lo + x.lo, t.hi = s.hi + x.hi;
-      else if (nd.code == MINUS_EXPR && nd.acc_first)
-	t.lo = s.lo - x.hi, t.hi = s.hi - x.lo;
-      else if (nd.code == MINUS_EXPR)
-	t.lo = x.lo - s.hi, t.hi = x.hi - s.lo;
-      else
-	{
-	  bool has_lo, has_hi;
-	  if (!cg_range_lite_multiply (s, x, &has_lo, &t.lo, &has_hi,
-				       &t.hi)
-	      || !has_lo || !has_hi)
-	    return false;
-	}
-      /* Beyond the type, a step overflows: no bound.  */
-      if (limited && (t.lo < tmin || t.hi > tmax))
-	return false;
-      *out = t;
-      return true;
-    };
+  return (fn->root > 0
+	  && cg_loop_max_latch_count (loop, established_range,
+				      scalar_range_cache, ranger, &fn->n,
+				      at_stmt));
+}
 
-  widest_int n;
-  if (!cg_loop_max_latch_count (loop, established_range, scalar_range_cache,
-				ranger, &n, at_stmt))
+/* The range of VAL, a PHI at the head of a loop whose latch is taken a
+   bounded number of times, when every iteration changes it by adding,
+   subtracting or multiplying values that don't depend on it ('t += i',
+   'r *= i'): the union of its values after each number of iterations
+   up to the bound -- at AT_STMT, which may see one iteration fewer
+   (cg_loop_max_latch_count).  IN_PROGRESS holds VAL: what an operand's
+   range needs of VAL is unknown.  */
+
+static bool
+cg_loop_accumulator_range (tree val,
+			   hash_map<tree, cg_range_lite> &established_range,
+			   hash_map<tree, cg_range_lite> &scalar_range_cache,
+			   gimple_ranger *ranger, cg_range_lite *out,
+			   gimple *at_stmt)
+{
+  gphi *phi = dyn_cast <gphi *> (SSA_NAME_DEF_STMT (val));
+  if (!phi || !current_loops || !dom_info_available_p (CDI_DOMINATORS))
+    return false;
+  class loop *loop = gimple_bb (phi)->loop_father;
+  if (!loop || loop->header != gimple_bb (phi))
+    return false;
+  static unsigned depth;
+  if (depth >= 4)
+    return false;
+  auto deeper = make_temp_override (depth, depth + 1);
+  cg_acc_fn fn;
+  if (!cg_acc_build (&fn, val, loop, established_range, scalar_range_cache,
+		     ranger, at_stmt, 0))
     return false;
   tree init = PHI_ARG_DEF_FROM_EDGE (phi, loop_preheader_edge (loop));
   cg_range_lite r;
@@ -1927,59 +2070,7 @@ cg_loop_accumulator_range (tree val,
 				  /*require_conveyor=*/true, &r)
 	   || !r.has_lo || !r.has_hi)
     return false;
-
-  /* Only adding to and subtracting from the accumulator: each iteration
-     moves it by what one does from zero, whatever it was.  */
-  bool additive = true;
-  for (unsigned i = 1; i < nodes.length (); ++i)
-    if (nodes[i].code == MULT_EXPR
-	|| (nodes[i].code == MINUS_EXPR && !nodes[i].acc_first))
-      additive = false;
-  if (additive)
-    {
-      cg_range_lite zero, d;
-      zero.has_lo = zero.has_hi = true;
-      zero.lo = zero.hi = 0;
-      /* From zero, not the accumulator's value: the type's limits are
-	 checked on the result below.  */
-      limited = false;
-      if (!eval (eval, root, zero, &d, NULL))
-	return false;
-      if (d.lo < 0)
-	r.lo += n * d.lo;
-      if (d.hi > 0)
-	r.hi += n * d.hi;
-    }
-  else if (any_ctr && n <= 64)
-    {
-      /* W, the values after K latches, iteration by iteration, each with
-	 its own counter value; R their union.  */
-      cg_range_lite w = r;
-      for (widest_int k = 0; k < n; k += 1)
-	{
-	  cg_range_lite s;
-	  if (!eval (eval, root, w, &s, &k))
-	    return false;
-	  w = s;
-	  r = cg_range_hull (r, w);
-	}
-    }
-  else
-    /* R grows to hold every value after up to K iterations.  */
-    for (widest_int k = 0; k < n; k += 1)
-      {
-	cg_range_lite s;
-	if (k >= 64 || !eval (eval, root, r, &s, NULL))
-	  return false;
-	cg_range_lite u = cg_range_hull (r, s);
-	if (u.lo == r.lo && u.hi == r.hi)
-	  break;
-	r = u;
-      }
-  if (r.lo < tmin || r.hi > tmax)
-    return false;
-  *out = r;
-  return true;
+  return fn.apply (r, out, true);
 }
 
 static bool
