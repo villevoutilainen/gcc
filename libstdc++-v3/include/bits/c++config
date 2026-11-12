@@ -847,9 +847,14 @@ namespace std
 // A defaulted reflect_constant (P4340, with -freflection): a class
 // template's specializations are then structural wherever their bases
 // and members are, regardless of their access, and its reflect_constant
-// is deleted (so the specialization isn't structural) elsewhere.
+// is deleted (so the specialization isn't structural) elsewhere.  With
+// -freflection-structural-metainfo-conversion, a defaulted explicit
+// conversion to std::meta::info does the same instead.
 #ifndef _GLIBCXX_DEFAULT_REFLECT_CONSTANT
-# if defined(__cpp_impl_reflection)
+# if defined(__GXX_REFLECTION_METAINFO_CONVERSION)
+#  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT \
+  consteval explicit operator decltype(^^int)() const = default;
+# elif defined(__cpp_impl_reflection)
 #  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT \
   consteval decltype(^^int) reflect_constant() const = default;
 # else
