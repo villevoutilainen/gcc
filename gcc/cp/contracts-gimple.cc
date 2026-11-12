@@ -162,7 +162,74 @@ struct cg_range_lite
 {
   bool has_lo = false, has_hi = false;
   widest_int lo = 0, hi = 0;
+  /* Up to two single values a 'v != C' conjunct excluded, which a bound
+     can't express inside the range ('y != 0 && y != -1' for a division,
+     where 'y != 0' is a nonzero fact instead).  */
+  widest_int excl[2] = { 0, 0 };
+  unsigned n_excl = 0;
 };
+
+/* Record that R excludes V.  */
+
+static void
+cg_range_add_excl (cg_range_lite &r, const widest_int &v)
+{
+  for (unsigned i = 0; i < r.n_excl; ++i)
+    if (r.excl[i] == v)
+      return;
+  if (r.n_excl < 2)
+    r.excl[r.n_excl++] = v;
+}
+
+/* True if conjunct C is 'D != K' or 'K != D', D a variable or parameter
+   and K a nonzero integer constant, which oa_match_simple_comparison
+   doesn't match ('D != 0' is a nonzero fact instead).  */
+
+static bool
+cg_match_ne_const (tree c, tree *decl_out, tree *cst_out)
+{
+  c = STRIP_ANY_LOCATION_WRAPPER (c);
+  while (TREE_CODE (c) == CLEANUP_POINT_EXPR)
+    c = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (c, 0));
+  if (TREE_CODE (c) != NE_EXPR)
+    return false;
+  auto strip = [] (tree t)
+    {
+      t = STRIP_ANY_LOCATION_WRAPPER (t);
+      while (CONVERT_EXPR_P (t) || TREE_CODE (t) == NON_LVALUE_EXPR)
+	t = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+      return t;
+    };
+  tree op0 = strip (TREE_OPERAND (c, 0)), op1 = strip (TREE_OPERAND (c, 1));
+  /* A constant written as an expression ('INT_MIN' is
+     '(-2147483647 - 1)').  */
+  if (TREE_CODE (op0) != INTEGER_CST && TREE_CONSTANT (op0))
+    op0 = strip (fold (op0));
+  if (TREE_CODE (op1) != INTEGER_CST && TREE_CONSTANT (op1))
+    op1 = strip (fold (op1));
+  if (TREE_CODE (op0) == INTEGER_CST)
+    std::swap (op0, op1);
+  if ((TREE_CODE (op0) != VAR_DECL && TREE_CODE (op0) != PARM_DECL)
+      || TREE_CODE (op1) != INTEGER_CST || integer_zerop (op1)
+      || !INTEGRAL_TYPE_P (TREE_TYPE (op0)))
+    return false;
+  *decl_out = op0;
+  *cst_out = op1;
+  return true;
+}
+
+/* True if V is outside R: beyond a bound, or excluded.  */
+
+static bool
+cg_range_excludes_p (const cg_range_lite &r, const widest_int &v)
+{
+  if ((r.has_lo && v < r.lo) || (r.has_hi && v > r.hi))
+    return true;
+  for (unsigned i = 0; i < r.n_excl; ++i)
+    if (r.excl[i] == v)
+      return true;
+  return false;
+}
 
 /* This engine's own local mirror of contracts.cc's oa_range_fact_text
    (see .claude/plans/lazy-stirring-pearl.md) -- same rationale and
@@ -453,6 +520,9 @@ cg_tighten_range_bound (cg_range_lite &r, tree_code code, const widest_int &val)
     case EQ_EXPR:
       r.has_lo = true; r.lo = val;
       r.has_hi = true; r.hi = val;
+      break;
+    case NE_EXPR:
+      cg_range_add_excl (r, val);
       break;
     default:
       break;
@@ -3207,6 +3277,19 @@ cg_seed_self_trust (function *fun, hash_map<tree, cg_fact> &established,
 	  if (key)
 	    established_range.put (key, range);
 	}
+      /* 'p != K', K nonzero: an excluded value ('pre (y != -1)').  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree param, cst;
+	  if (!cg_match_ne_const (*conjuncts[i], &param, &cst)
+	      || TREE_CODE (param) != PARM_DECL)
+	    continue;
+	  tree key = cg_self_trust_key (fun, param);
+	  if (!key)
+	    continue;
+	  cg_range_lite &r = established_range.get_or_insert (key);
+	  cg_range_add_excl (r, wi::to_widest (cst));
+	}
     }
 
   /* D4324/P2680 item 7's Q1 axiom, mirroring contracts.cc's own
@@ -5279,6 +5362,15 @@ cg_check_div_mod_ub (gimple *stmt, hash_map<tree, cg_fact> &established_nz,
   if (range_of (divisor, &r)
       && ((r.has_lo && r.lo > -1) || (r.has_hi && r.hi < -1)))
     return;
+  /* Known not to be -1, or not to be the minimum, from an established
+     'y != -1' or 'x != INT_MIN' fact (a precondition or a contract
+     assertion), which no bound can express.  */
+  if (cg_range_lite *e = established_range.get (divisor))
+    if (cg_range_excludes_p (*e, -1))
+      return;
+  if (cg_range_lite *e = established_range.get (dividend))
+    if (cg_range_excludes_p (*e, wi::to_widest (TYPE_MIN_VALUE (type))))
+      return;
   /* Known not to be -1, or not to be the minimum, from the conditions
      guarding STMT ('if (y == -1) return ...;').  */
   if (cg_excludes_value_at_p (divisor, stmt, ranger,
@@ -17237,6 +17329,8 @@ cg_assert_fact_scope::put_range (tree key, const cg_range_lite &range)
 	merged.has_lo = true, merged.lo = old->lo;
       if (old->has_hi && (!merged.has_hi || old->hi < merged.hi))
 	merged.has_hi = true, merged.hi = old->hi;
+      for (unsigned i = 0; i < old->n_excl; ++i)
+	cg_range_add_excl (merged, old->excl[i]);
     }
   m_undo.safe_push (u);
   m_established_range.put (key, merged);
@@ -17744,6 +17838,20 @@ cg_assert_fact_scope::establish (gcall *call)
 	    if (tree key = value_of (decl))
 	      if (TREE_CODE (key) == SSA_NAME)
 		put_fact (NZ, key, { conveyor_enabled });
+	  continue;
+	}
+      /* 'v != K', K nonzero: an excluded value ('y != -1').  */
+      tree ne_cst;
+      if (cg_match_ne_const (c, &decl, &ne_cst))
+	{
+	  if (scalar_decl_p (decl))
+	    if (tree key = value_of (decl))
+	      if (TREE_CODE (key) == SSA_NAME)
+		{
+		  cg_range_lite excl;
+		  cg_range_add_excl (excl, wi::to_widest (ne_cst));
+		  put_range (key, excl);
+		}
 	  continue;
 	}
       tree_code code;
