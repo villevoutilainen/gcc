@@ -2310,6 +2310,11 @@ eval_is_special_member_function (tree r)
   r = MAYBE_BASELINK_FUNCTIONS (r);
   if (TREE_CODE (r) == FUNCTION_DECL && special_memfn_p (r) != sfk_none)
     return boolean_true_node;
+  /* A template-argument function is a special member function
+     ([special], -freflection-operator-template).  */
+  else if (TREE_CODE (r) == FUNCTION_DECL
+	   && DECL_NAME (r) == op_template_identifier)
+    return boolean_true_node;
   else
     return boolean_false_node;
 }
@@ -7204,7 +7209,7 @@ class_members_of (location_t loc, const constexpr_ctx *ctx, tree r,
     elts->qsort (members_cmp);
   if (kind == METAFN_MEMBERS_OF && !implicitly_declared.is_empty ())
     {
-      gcc_assert (implicitly_declared.length () <= 8);
+      gcc_assert (implicitly_declared.length () <= 9);
       for (tree m : implicitly_declared)
 	if (default_ctor_p (m))
 	  {
@@ -7242,6 +7247,15 @@ class_members_of (location_t loc, const constexpr_ctx *ctx, tree r,
 	  }
       for (tree m : implicitly_declared)
 	if (DECL_MAYBE_IN_CHARGE_DESTRUCTOR_P (m))
+	  {
+	    CONSTRUCTOR_APPEND_ELT (elts, NULL_TREE,
+				    get_reflection_raw (loc, m));
+	    break;
+	  }
+      /* An implicitly-declared template-argument function
+	 (-freflection-operator-template).  */
+      for (tree m : implicitly_declared)
+	if (DECL_NAME (m) == op_template_identifier)
 	  {
 	    CONSTRUCTOR_APPEND_ELT (elts, NULL_TREE,
 				    get_reflection_raw (loc, m));

@@ -155,6 +155,7 @@ enum cp_tree_index
     CPTI_BASE_DTOR_IDENTIFIER,
     CPTI_DELETING_DTOR_IDENTIFIER,
     CPTI_CONV_OP_IDENTIFIER,
+    CPTI_OP_TEMPLATE_IDENTIFIER,
     CPTI_DELTA_IDENTIFIER,
     CPTI_IN_CHARGE_IDENTIFIER,
     CPTI_VTT_PARM_IDENTIFIER,
@@ -309,6 +310,10 @@ extern GTY(()) tree cp_global_trees[CPTI_MAX];
    conversion functions use special identifiers outside the identifier
    table.  */
 #define conv_op_identifier		cp_global_trees[CPTI_CONV_OP_IDENTIFIER]
+/* The name of a template-argument function, 'operator template'
+   (-freflection-operator-template, P4340R1).  It has a space, so no
+   user-written identifier is the same.  */
+#define op_template_identifier		cp_global_trees[CPTI_OP_TEMPLATE_IDENTIFIER]
 
 #define delta_identifier		cp_global_trees[CPTI_DELTA_IDENTIFIER]
 #define in_charge_identifier		cp_global_trees[CPTI_IN_CHARGE_IDENTIFIER]
@@ -7787,6 +7792,7 @@ extern bool defaultable_fn_check		(tree);
 extern bool reflect_constant_fn_p		(const_tree);
 extern tree defaulted_reflect_constant		(tree);
 extern void note_reflect_constant		(tree);
+extern void maybe_declare_template_arg_fn	(tree);
 extern bool metainfo_conversion_structural_p	(tree);
 extern void check_abi_tags			(tree);
 extern tree missing_abi_tags			(tree);

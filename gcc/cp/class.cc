@@ -8263,8 +8263,11 @@ finish_struct_1 (tree t)
     {
       /* In a class template, though, a defaulted reflect_constant is
 	 instead deleted where its class can't be structural (P4340), so
-	 that instantiation opts out as if it deleted it.  */
-      if (CLASSTYPE_TEMPLATE_INSTANTIATION (t))
+	 that instantiation opts out as if it deleted it.  A defaulted
+	 template-argument function is in any class (P4340R1,
+	 [class.template.arg]/9).  */
+      if (CLASSTYPE_TEMPLATE_INSTANTIATION (t)
+	  || flag_reflection_operator_template)
 	if (tree fn = defaulted_reflect_constant (t))
 	  {
 	    DECL_DELETED_FN (fn) = 1;
@@ -8355,6 +8358,8 @@ finish_struct (tree t, tree attributes)
      the struct, not the end.  */
   input_location = DECL_SOURCE_LOCATION (TYPE_NAME (t));
 
+  if (!processing_template_decl)
+    maybe_declare_template_arg_fn (t);
   note_reflect_constant (t);
 
   if (processing_template_decl)

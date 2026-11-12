@@ -7861,6 +7861,16 @@ cp_parser_unqualified_id (cp_parser* parser,
 	  /* If that didn't work, try a conversion-function-id.  */
 	  if (!cp_parser_parse_definitely (parser))
 	    id = cp_parser_conversion_function_id (parser);
+	  /* A template-argument function can be named only in the
+	     declarator-id of its declaration ([class.template.arg]).  */
+	  else if (id == op_template_identifier && !declarator_p)
+	    {
+	      if (!cp_parser_simulate_error (parser))
+		error_at (id.get_location (), "%<operator template%> cannot "
+			  "be named outside the declarator of its "
+			  "declaration");
+	      return error_mark_node;
+	    }
 
 	  return id;
 	}
@@ -20409,6 +20419,14 @@ cp_parser_operator (cp_parser* parser, location_t start_loc)
 	  op = DELETE_EXPR;
 	else if (token->keyword == RID_CO_AWAIT)
 	  op = CO_AWAIT_EXPR;
+	else if (token->keyword == RID_TEMPLATE
+		 && flag_reflection_operator_template)
+	  {
+	    /* The template-argument function (P4340R1).  */
+	    end_loc = cp_lexer_consume_token (parser->lexer)->location;
+	    start_loc = make_location (start_loc, start_loc, end_loc);
+	    return cp_expr (op_template_identifier, start_loc);
+	  }
 	else
 	  break;
 
@@ -24977,8 +24995,24 @@ cp_parser_using_declaration (cp_parser* parser,
        cp_parser_parse_definitely will be false, as required.  */
     return cp_parser_parse_definitely (parser);
 
+
   token = cp_lexer_peek_token (parser->lexer);
   /* Parse the unqualified-id.  */
+  /* A template-argument function can't be named by a using-declarator
+     ([class.template.arg]).  */
+  if (flag_reflection_operator_template
+      && cp_lexer_next_token_is_keyword (parser->lexer, RID_OPERATOR)
+      && cp_lexer_nth_token_is_keyword (parser->lexer, 2, RID_TEMPLATE)
+      && !access_declaration_p)
+    {
+      error_at (cp_lexer_peek_token (parser->lexer)->location,
+		"%<operator template%> cannot be named by a "
+		"using-declarator");
+      cp_parser_skip_to_end_of_statement (parser);
+      cp_parser_consume_semicolon_at_end_of_statement (parser);
+      return true;
+    }
+
   identifier = cp_parser_unqualified_id (parser,
 					 /*template_keyword_p=*/false,
 					 /*check_dependency_p=*/true,

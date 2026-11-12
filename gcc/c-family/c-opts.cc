@@ -1367,6 +1367,11 @@ c_common_post_options (const char **pfilename)
     error ("%<-freflection%> only supported with %<-std=c++26%> or "
 	   "%<-std=gnu++26%>");
 
+  /* Only one way of making a class structural is active:
+     -freflection-operator-template takes precedence.  */
+  if (flag_reflection_operator_template)
+    flag_reflection_structural_metainfo_conversion = 0;
+
   if (num_in_fnames > 1)
     error ("too many filenames given; type %<%s %s%> for usage",
 	   progname, "--help");

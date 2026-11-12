@@ -4034,7 +4034,8 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
       return;
     }
   if (kind == sfk_reflect_constant
-      && flag_reflection_structural_metainfo_conversion
+      && (flag_reflection_structural_metainfo_conversion
+	  || flag_reflection_operator_template)
       && DECL_TEMPLATE_INSTANTIATION (fn)
       && !reflect_constant_signature_p (fn))
     {
@@ -4153,7 +4154,14 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
 bool
 reflect_constant_fn_p (const_tree fn)
 {
-  if (TREE_CODE (fn) != FUNCTION_DECL || !DECL_IOBJ_MEMBER_FUNCTION_P (fn))
+  if (TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+  /* -freflection-operator-template: the template-argument function
+     (P4340R1), whose object parameter may also be explicit.  */
+  if (flag_reflection_operator_template)
+    return (DECL_NAME (fn) == op_template_identifier
+	    && DECL_OBJECT_MEMBER_FUNCTION_P (fn));
+  if (!DECL_IOBJ_MEMBER_FUNCTION_P (fn))
     return false;
   if (flag_reflection_structural_metainfo_conversion)
     return (DECL_CONV_FN_P (fn)
@@ -4186,6 +4194,28 @@ defaulted_reflect_constant (tree t)
 static bool
 reflect_constant_shape_p (tree fn)
 {
+  /* A template-argument function's object parameter has type const C& or
+     C ([class.template.arg]), and it has no other parameters.  */
+  if (flag_reflection_operator_template)
+    {
+      tree ctx = DECL_CONTEXT (fn);
+      if (DECL_XOBJ_MEMBER_FUNCTION_P (fn))
+	{
+	  tree parms = TYPE_ARG_TYPES (TREE_TYPE (fn));
+	  if (!parms || TREE_CHAIN (parms) != void_list_node)
+	    return false;
+	  tree t = TREE_VALUE (parms);
+	  if (TYPE_REF_P (t))
+	    return (!TYPE_REF_IS_RVALUE (t)
+		    && cp_type_quals (TREE_TYPE (t)) == TYPE_QUAL_CONST
+		    && same_type_ignoring_top_level_qualifiers_p
+			 (TREE_TYPE (t), ctx));
+	  return same_type_p (t, ctx);
+	}
+      return (FUNCTION_FIRST_USER_PARMTYPE (fn) == void_list_node
+	      && (type_memfn_quals (TREE_TYPE (fn)) == TYPE_QUAL_CONST)
+	      && type_memfn_rqual (TREE_TYPE (fn)) != REF_QUAL_RVALUE);
+    }
   return (FUNCTION_FIRST_USER_PARMTYPE (fn) == void_list_node
 	  && (type_memfn_quals (TREE_TYPE (fn)) & TYPE_QUAL_CONST)
 	  && type_memfn_rqual (TREE_TYPE (fn)) == REF_QUAL_NONE
@@ -4215,7 +4245,38 @@ note_reflect_constant (tree t)
   for (tree f = TYPE_FIELDS (t); f; f = DECL_CHAIN (f))
     {
       tree fn = STRIP_TEMPLATE (f);
+      /* A template-argument function's declaration rules
+	 ([class.template.arg]).  */
+      if (flag_reflection_operator_template
+	  && TREE_CODE (fn) == FUNCTION_DECL
+	  && DECL_NAME (fn) == op_template_identifier
+	  && !DECL_ARTIFICIAL (fn))
+	{
+	  if (TREE_CODE (f) == TEMPLATE_DECL)
+	    {
+	      error_at (DECL_SOURCE_LOCATION (fn), "%<operator template%> "
+			"cannot be a function template");
+	      continue;
+	    }
+	  if (!DECL_OBJECT_MEMBER_FUNCTION_P (fn))
+	    {
+	      error_at (DECL_SOURCE_LOCATION (fn), "%<operator template%> "
+			"must be a non-static member function");
+	      continue;
+	    }
+	  if (!DECL_IMMEDIATE_FUNCTION_P (fn))
+	    error_at (DECL_SOURCE_LOCATION (fn), "%<operator template%> "
+		      "must be declared %<consteval%>");
+	  if (!reflect_constant_shape_p (fn))
+	    error_at (DECL_SOURCE_LOCATION (fn), "the object parameter of "
+		      "%<operator template%> must have type %<const %T&%> or "
+		      "%qT, and it can have no other parameters", t, t);
+	}
       if (!reflect_constant_fn_p (fn))
+	continue;
+      /* An implicitly-declared template-argument function changes nothing:
+	 the C++20 rules decide.  */
+      if (DECL_ARTIFICIAL (fn))
 	continue;
       if (DECL_DEFAULTED_FN (fn))
 	CLASSTYPE_STRUCTURAL (t) = 1;
@@ -4228,11 +4289,71 @@ note_reflect_constant (tree t)
 	 class that isn't otherwise structural structural, with
 	 template-argument-equivalence by its result
 	 (-freflection-structural-metainfo-conversion).  */
-      else if (flag_reflection_structural_metainfo_conversion
+      else if ((flag_reflection_structural_metainfo_conversion
+		|| flag_reflection_operator_template)
 	       && !DECL_DELETED_FN (fn)
 	       && reflect_constant_signature_p (fn))
 	CLASSTYPE_METAINFO_CONVERSION (t) = 1;
     }
+}
+
+/* Implicitly declare the template-argument function of class T, if it
+   doesn't declare one and isn't an anonymous union
+   (-freflection-operator-template, [class.template.arg]/4): a public
+   'consteval T::operator template () const', defaulted, and defined as
+   deleted if a direct base class or non-static data member isn't public,
+   or doesn't have a structural type ([class.template.arg]/9).  Unlike an
+   explicitly defaulted one, it doesn't make T structural regardless of
+   access.  */
+
+void
+maybe_declare_template_arg_fn (tree t)
+{
+  if (!flag_reflection_operator_template || ANON_AGGR_TYPE_P (t))
+    return;
+  for (tree f = TYPE_FIELDS (t); f; f = DECL_CHAIN (f))
+    if (DECL_DECLARES_FUNCTION_P (f)
+	&& DECL_NAME (STRIP_TEMPLATE (f)) == op_template_identifier)
+      return;
+
+  bool deleted_p = false;
+  tree binfo = TYPE_BINFO (t);
+  tree base_binfo;
+  for (int i = 0; binfo && BINFO_BASE_ITERATE (binfo, i, base_binfo); ++i)
+    if (BINFO_BASE_ACCESS (binfo, i) != access_public_node
+	|| !structural_type_p (BINFO_TYPE (base_binfo)))
+      deleted_p = true;
+  for (tree m = next_aggregate_field (TYPE_FIELDS (t)); m && !deleted_p;
+       m = next_aggregate_field (DECL_CHAIN (m)))
+    if (TREE_PRIVATE (m) || TREE_PROTECTED (m)
+	|| !structural_type_p (strip_array_types (TREE_TYPE (m))))
+      deleted_p = true;
+
+  tree fn_type
+    = build_method_type_directly (cp_build_qualified_type (t,
+							   TYPE_QUAL_CONST),
+				  meta_info_type_node, void_list_node);
+  tree fn = build_lang_decl (FUNCTION_DECL, op_template_identifier, fn_type);
+  DECL_SOURCE_LOCATION (fn) = DECL_SOURCE_LOCATION (TYPE_NAME (t));
+  SET_DECL_ALIGN (fn, MINIMUM_METHOD_BOUNDARY);
+  DECL_ARGUMENTS (fn) = build_this_parm (fn, fn_type, TYPE_QUAL_CONST);
+  grokclassfn (t, fn, NO_SPECIAL);
+  DECL_IN_AGGR_P (fn) = 1;
+  DECL_ARTIFICIAL (fn) = 1;
+  DECL_DEFAULTED_FN (fn) = 1;
+  DECL_DELETED_FN (fn) = deleted_p;
+  DECL_DECLARED_CONSTEXPR_P (fn) = 1;
+  SET_DECL_IMMEDIATE_FUNCTION_P (fn);
+  DECL_EXTERNAL (fn) = true;
+  DECL_NOT_REALLY_EXTERN (fn) = 1;
+  DECL_DECLARED_INLINE_P (fn) = 1;
+  set_linkage_according_to_type (t, fn);
+  if (TREE_PUBLIC (fn))
+    DECL_COMDAT (fn) = 1;
+  bool added = add_method (t, fn, false);
+  gcc_assert (added || errorcount);
+  DECL_CHAIN (fn) = TYPE_FIELDS (t);
+  TYPE_FIELDS (t) = fn;
 }
 
 /* Check defaulting FN, a reflect_constant member function: it has to be
@@ -4255,9 +4376,12 @@ defaultable_reflect_constant_check (tree fn)
     }
   if (!reflect_constant_signature_p (fn))
     {
-      error ("defaulted %qD must be a %<consteval%> %<const%> member "
-	     "function with no parameters and no ref-qualifier returning "
-	     "%<std::meta::info%>", fn);
+      if (flag_reflection_operator_template)
+	/* note_reflect_constant says what is wrong.  */;
+      else
+	error ("defaulted %qD must be a %<consteval%> %<const%> member "
+	       "function with no parameters and no ref-qualifier returning "
+	       "%<std::meta::info%>", fn);
       return false;
     }
   return true;

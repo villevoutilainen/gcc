@@ -5433,10 +5433,22 @@ structural_type_p (tree t, bool explain)
 bool
 metainfo_conversion_structural_p (tree t)
 {
+  if (!CLASS_TYPE_P (t)
+      || !CLASSTYPE_METAINFO_CONVERSION (t)
+      || CLASSTYPE_NOT_STRUCTURAL (t))
+    return false;
+  /* A user-provided template-argument function decides for any class
+     (P4340R1, [class.template.arg]/7), but a class with a mutable
+     subobject isn't structural.  */
+  if (flag_reflection_operator_template)
+    {
+      for (tree m = next_aggregate_field (TYPE_FIELDS (t)); m;
+	   m = next_aggregate_field (DECL_CHAIN (m)))
+	if (DECL_MUTABLE_P (m))
+	  return false;
+      return true;
+    }
   return (flag_reflection_structural_metainfo_conversion
-	  && CLASS_TYPE_P (t)
-	  && CLASSTYPE_METAINFO_CONVERSION (t)
-	  && !CLASSTYPE_NOT_STRUCTURAL (t)
 	  && !ordinary_structural_type_p (t, false));
 }
 

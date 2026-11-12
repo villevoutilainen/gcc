@@ -254,6 +254,7 @@ in the following sections.
 -fno-nonansi-builtins  -fnothrow-opt  -fno-operator-names
 -fno-optional-diags
 -fno-pretty-templates  -frange-for-ext-temps  -freflection
+-freflection-operator-template
 -freflection-structural-metainfo-conversion
 -freflection-transparent-using-decls
 -fno-rtti  -fsized-deallocation
@@ -3903,6 +3904,26 @@ in earlier versions of the standard.
 @opindex freflection
 @item -freflection
 Enable experimental C++26 Reflection.
+
+@opindex freflection-operator-template
+@item -freflection-operator-template
+Implement the template-argument function @code{operator template} of
+P4340R1, a special member function that decides whether and how a class
+type is usable as the type of a constant template parameter.  It is declared
+implicitly for every class that does not declare one (other than an
+anonymous union), and defined as deleted if a direct base class or
+non-static data member is not public; an explicitly defaulted one ignores
+access.  A defaulted one is defined as deleted if a subobject does not have a
+structural type.  A user-provided one must be @code{consteval}, and gives a
+reflection of the template parameter object: a variable with static storage
+duration of type @code{const C}, usable in constant expressions, or a
+subobject of one, for which it gives the same object again.  A subobject
+whose class has a user-provided one is normalized to a copy of its template
+parameter object.  @code{operator template} cannot be named outside the
+declarator of its declaration.  This option takes precedence over
+@option{-freflection-structural-metainfo-conversion}; it defines the macro
+@code{__GXX_REFLECTION_OPERATOR_TEMPLATE}, and libstdc++ defaults
+@code{operator template} instead of @code{reflect_constant}.
 
 @opindex freflection-structural-metainfo-conversion
 @item -freflection-structural-metainfo-conversion

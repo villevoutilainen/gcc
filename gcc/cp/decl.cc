@@ -5534,6 +5534,7 @@ initialize_predefined_identifiers (void)
     {"__dt_comp ", &complete_dtor_identifier, cik_dtor},
     {"__dt_del ", &deleting_dtor_identifier, cik_dtor},
     {"__conv_op ", &conv_op_identifier, cik_conv_op},
+    {"operator template", &op_template_identifier, cik_normal},
     {"__in_chrg", &in_charge_identifier, cik_normal},
     {"__as_base ", &as_base_identifier, cik_normal},
     {"this", &this_identifier, cik_normal},
@@ -14492,6 +14493,18 @@ check_special_function_return_type (special_function_kind sfk,
 	type = void_type_node;
       break;
 
+    case sfk_reflect_constant:
+      /* A template-argument function ([class.template.arg]).  */
+      if (maybe_strip_indirect_ref (declarator) || type)
+	error_at (rettype_loc,
+		  "return type specified for %<operator template%>");
+      else if (type_quals != TYPE_UNQUALIFIED)
+	error_at (smallest_type_quals_location (type_quals, locations),
+		  "qualifiers are not allowed on declaration of "
+		  "%<operator template%>");
+      type = optype;
+      break;
+
     case sfk_conversion:
       if (maybe_strip_indirect_ref (declarator) || type)
 	error_at (rettype_loc,
@@ -15117,6 +15130,13 @@ grokdeclarator (const cp_declarator *declarator,
 			   dname);
 		    name = identifier_to_locale (IDENTIFIER_POINTER (dname));
 		  }
+		else if (dname == op_template_identifier)
+		  {
+		    /* A template-argument function (P4340R1): typed like a
+		       conversion function to std::meta::info.  */
+		    sfk = sfk_reflect_constant;
+		    name = "operator template";
+		  }
 		else if (!IDENTIFIER_CONV_OP_P (dname))
 		  name = identifier_to_locale (IDENTIFIER_POINTER (dname));
 		else
@@ -15349,8 +15369,20 @@ grokdeclarator (const cp_declarator *declarator,
 
   if (sfk == sfk_conversion || sfk == sfk_deduction_guide)
     ctor_return_type = TREE_TYPE (dname);
+  else if (sfk == sfk_reflect_constant)
+    ctor_return_type = meta_info_type_node;
   else
     ctor_return_type = ctype;
+
+  /* A template-argument function is a member function
+     ([class.template.arg]).  */
+  if (sfk == sfk_reflect_constant
+      && decl_context != FIELD && !ctype)
+    {
+      error_at (id_loc, "%<operator template%> must be a non-static member "
+		"function");
+      return error_mark_node;
+    }
 
   if (sfk != sfk_none)
     {

@@ -1136,7 +1136,10 @@ c_cpp_builtins (cpp_reader *pfile)
 	    cpp_define (pfile, "__cpp_impl_reflection=202603L");
 	  else
 	    cpp_warn (pfile, "__cpp_impl_reflection");
-	  if (flag_reflection && flag_reflection_structural_metainfo_conversion)
+	  if (flag_reflection && flag_reflection_operator_template)
+	    cpp_define (pfile, "__GXX_REFLECTION_OPERATOR_TEMPLATE=1");
+	  else if (flag_reflection
+		   && flag_reflection_structural_metainfo_conversion)
 	    cpp_define (pfile, "__GXX_REFLECTION_METAINFO_CONVERSION=1");
 	  cpp_define (pfile, "__cpp_trivial_union=202603L");
 	}

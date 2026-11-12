@@ -2560,6 +2560,10 @@ freflection
 C++ ObjC++ Var(flag_reflection) Init(0)
 Enable experimental C++26 Reflection.
 
+freflection-operator-template
+C++ ObjC++ Var(flag_reflection_operator_template) Init(0)
+Make a class structural through the template-argument function operator template (P4340R1).
+
 freflection-structural-metainfo-conversion
 C++ ObjC++ Var(flag_reflection_structural_metainfo_conversion) Init(0)
 Make a class structural through a conversion operator to std::meta::info, instead of a reflect_constant member function.

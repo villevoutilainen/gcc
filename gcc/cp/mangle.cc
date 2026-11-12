@@ -1514,6 +1514,10 @@ write_unqualified_id (tree identifier)
     }
   else if (UDLIT_OPER_P (identifier))
     write_literal_operator_name (identifier);
+  else if (identifier == op_template_identifier)
+    /* A template-argument function (P4340R1): a vendor extended
+       operator, <operator-name> ::= v <digit> <source-name>.  */
+    write_string ("v08template");
   else
     write_source_name (identifier);
 }
