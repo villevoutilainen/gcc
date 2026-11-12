@@ -13619,6 +13619,11 @@ instantiate_class_template (tree type)
   input_location = DECL_SOURCE_LOCATION (typedecl);
 
   unreverse_member_declarations (type);
+  /* A conversion function of dependent type may be one to std::meta::info
+     only in this specialization (-freflection-structural-metainfo-
+     conversion): mark it from its own members too.  */
+  if (flag_reflection_structural_metainfo_conversion)
+    note_reflect_constant (type);
   finish_struct_1 (type);
   TYPE_BEING_DEFINED (type) = 0;
 

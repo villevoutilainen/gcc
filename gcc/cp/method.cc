@@ -4010,6 +4010,8 @@ maybe_delete_defaulted_fn (tree fn, tree implicit_fn)
 	    "expected signature: %qD", implicit_fn);
 }
 
+static bool reflect_constant_signature_p (tree);
+
 /* Gives any errors about defaulted functions which need to be deferred
    until the containing class is complete.  IMP_CONST is false or true
    if we are called from check_bases_and_members and signals whether
@@ -4021,6 +4023,27 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
   /* Complain about invalid signature for defaulted fn.  */
   tree ctx = DECL_CONTEXT (fn);
   special_function_kind kind = special_function_p (fn);
+
+  /* A defaulted conversion function of dependent type, in a specialization
+     (-freflection-structural-metainfo-conversion): only one to
+     std::meta::info, of the right shape, can be defaulted.  */
+  if (kind == sfk_conversion)
+    {
+      error ("%qD cannot be defaulted", fn);
+      DECL_DELETED_FN (fn) = true;
+      return;
+    }
+  if (kind == sfk_reflect_constant
+      && flag_reflection_structural_metainfo_conversion
+      && DECL_TEMPLATE_INSTANTIATION (fn)
+      && !reflect_constant_signature_p (fn))
+    {
+      error ("defaulted %qD must be a %<consteval%> %<const%> member "
+	     "function with no parameters and no ref-qualifier returning "
+	     "%<std::meta::info%>", fn);
+      DECL_DELETED_FN (fn) = true;
+      return;
+    }
 
   /* Nothing to synthesize or compare: see defaultable_fn_check.  */
   if (kind == sfk_reflect_constant)
@@ -4288,6 +4311,13 @@ defaultable_fn_check (tree fn)
 	return false;
       kind = sfk_reflect_constant;
     }
+  /* A conversion function of dependent type may be one to std::meta::info
+     in a specialization (-freflection-structural-metainfo-conversion):
+     check it there (defaulted_late_check).  */
+  else if (flag_reflection_structural_metainfo_conversion
+	   && DECL_CONV_FN_P (fn)
+	   && dependent_type_p (DECL_CONV_FN_TYPE (fn)))
+    return true;
 
   /* FIXME: We need to check for xobj member functions here to give better
      diagnostics for weird cases where unrelated xobj parameters are given.
