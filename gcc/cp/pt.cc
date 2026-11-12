@@ -7956,6 +7956,23 @@ template_arg_fn_object (tree type, tree value, tsubst_flags_t complain)
       return error_mark_node;
     }
 
+  /* The complete object of O is not TU-local unless the template argument
+     is ([class.template.arg]/7.4): its type is TU-local, or its value
+     refers to a TU-local entity.  */
+  if (tu_local_entity_p (base)
+      && !tu_local_entity_p (TYPE_NAME (TYPE_MAIN_VARIANT (type)))
+      && !tu_local_value_p (base, value))
+    {
+      if (complain & tf_error)
+	{
+	  auto_diagnostic_group d;
+	  error ("%qD gives a reflection of an object of TU-local %qD, but the "
+		 "template argument is not TU-local", fn, base);
+	  inform (DECL_SOURCE_LOCATION (base), "%qD declared here", base);
+	}
+      return error_mark_node;
+    }
+
   /* Idempotence ([class.template.arg]/7.5).  */
   tree r2 = invoke_template_arg_fn (type, fn, h, complain);
   if (r2 == error_mark_node)

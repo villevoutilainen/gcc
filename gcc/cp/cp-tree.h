@@ -7792,6 +7792,8 @@ extern bool defaultable_fn_check		(tree);
 extern bool reflect_constant_fn_p		(const_tree);
 extern tree defaulted_reflect_constant		(tree);
 extern void note_reflect_constant		(tree);
+extern bool tu_local_entity_p			(tree);
+extern bool tu_local_value_p			(tree, tree);
 extern void maybe_declare_template_arg_fn	(tree);
 extern bool metainfo_conversion_structural_p	(tree);
 extern void check_abi_tags			(tree);

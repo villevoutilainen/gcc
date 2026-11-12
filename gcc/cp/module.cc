@@ -14573,6 +14573,22 @@ is_tu_local_value (tree decl, tree expr, bool explain/*=false*/)
   return false;
 }
 
+/* Exported for [class.template.arg] (P4340R1): whether DECL is a TU-local
+   entity, and whether EXPR, the value of or an initializer for DECL, is a
+   TU-local value or object ([basic.link]).  */
+
+bool
+tu_local_entity_p (tree decl)
+{
+  return is_tu_local_entity (decl);
+}
+
+bool
+tu_local_value_p (tree decl, tree expr)
+{
+  return is_tu_local_value (decl, expr);
+}
+
 /* Complains if DECL is a TU-local entity imported from a named module.
    Returns TRUE if instantiation should fail.  */
 
