@@ -118,6 +118,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "tree-cfgcleanup.h"
 #include "cfgloop.h"
 #include "tree-scalar-evolution.h"
+#include "tree-ssa-loop-niter.h"
 
 /* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
    actual argument expressions -- the GIMPLE-level analogue of
@@ -19618,6 +19619,13 @@ pass_contracts_gimple::execute_1 (function *fun)
       scev_initialize ();
       own_scev = true;
     }
+  /* A loop's bounds from its exits only: one inferred from the undefined
+     behavior a statement in it would have after so many iterations
+     ('r += 1000000000' overflowing on the third) assumes what is being
+     proven here, and ranger would bound 'r' by it.  */
+  auto no_ub_bounds = make_temp_override (flag_aggressive_loop_optimizations,
+					  0);
+  free_numbers_of_iterations_estimates (fun);
   gimple_ranger *ranger = enable_ranger (fun, false);
 
   cg_assert_memory_verdict_map assert_memory_verdicts;
@@ -19820,6 +19828,8 @@ pass_contracts_gimple::execute_1 (function *fun)
   cg_short_circuit_sources = NULL;
   cg_array_bounds = NULL;
   disable_ranger (fun);
+  /* Later passes estimate them again, with the undefined behavior.  */
+  free_numbers_of_iterations_estimates (fun);
   if (own_scev)
     {
       scev_finalize ();
