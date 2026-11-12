@@ -36,6 +36,26 @@ int after () conveyor
 { int t = 0; for (int i = 0; i < 3; ++i) t += 700000000; return t + 40000000; }
 int exit_value () conveyor
 { int i = 0; for (; i < 10; ++i) {} return i * 200000000; }
-// A do-while loop: its body runs before the first test.
+// Nested loops, the inner bound the outer counter, three deep.
+int nested () conveyor
+{ int t = 0; for (int i = 0; i < 3; ++i) for (int j = 0; j < 3; ++j) t += 200000000; return t; }
+int triangle () conveyor
+{ int t = 0; for (int i = 0; i < 100; ++i) for (int j = 0; j < i; ++j) t += 1; return t; }
+int mixed () conveyor
+{ int t = 0; for (int i = 0; i < 10; ++i) { t += i; for (int j = 0; j < 10; ++j) t += j; } return t; }
+int deep () conveyor
+{ int t = 0; for (int i = 0; i < 4; ++i) for (int j = 0; j < 4; ++j) for (int k = 0; k < 4; ++k) t += 30000000; return t; }
+// A while loop whose increment ends its body, and a do-while loop, whose
+// body runs before the first test.
+int while_loop () conveyor
+{ int t = 0, i = 0; while (i < 10) { t += i; ++i; } return t; }
+int while_two () conveyor
+{ int r = 0, i = 0; while (i < 2) { r += 1000000000; i += 1; } return r; }
 int dowhile () conveyor
 { int r = 0, i = 0; do { r += 1000000000; ++i; } while (i < 2); return r; }
+int dowhile_once () conveyor
+{ int r = 0, i = 5; do { r += 1000000000; ++i; } while (i < 3); return r + 1000000000; }
+int while_after () conveyor
+{ int t = 0, i = 0; while (i < 3) { t += 700000000; ++i; } return t + 40000000; }
+int dowhile_after () conveyor
+{ int t = 0, i = 0; do { t += 700000000; ++i; } while (i < 3); return t + 40000000; }

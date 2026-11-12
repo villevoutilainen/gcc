@@ -40,7 +40,28 @@ int exit_value () conveyor
 { int i = 0; for (; i < 11; ++i) {} return i * 200000000; } // { dg-error "not provably free of overflow" }
 int nested () conveyor
 { int t = 0; for (int i = 0; i < 4; ++i) for (int j = 0; j < 3; ++j) t += 200000000; return t; } // { dg-error "not provably free of overflow" }
-// A do-while loop runs three times here, not two: an iteration bound
-// inferred from the overflow itself must not be used to prove it absent.
+int nested4 () conveyor
+{ int t = 0; for (int i = 0; i < 4; ++i) for (int j = 0; j < 3; ++j) t += 200000000; return t; } // { dg-error "not provably free of overflow" }
+int mixed () conveyor
+{ int t = 0; for (int i = 0; i < 10; ++i) { t += i; for (int j = 0; j < 10; ++j) t += 30000000; } return t; } // { dg-error "not provably free of overflow" }
+int inner_unbounded (int n) conveyor
+{ int t = 0; for (int i = 0; i < 3; ++i) for (int j = 0; j < n; ++j) t += 1; return t; } // { dg-error "not provably free of overflow" }
+int deep () conveyor
+{ int t = 0; for (int i = 0; i < 5; ++i) for (int j = 0; j < 4; ++j) for (int k = 0; k < 4; ++k) t += 30000000; return t; } // { dg-error "not provably free of overflow" }
+int while_three () conveyor
+{ int r = 0, i = 0; while (i < 3) { r += 1000000000; ++i; } return r; } // { dg-error "not provably free of overflow" }
+// A do-while loop runs three times here, not two.
 int dowhile () conveyor
 { int r = 0, i = 0; do { r += 1000000000; ++i; } while (i < 3); return r; } // { dg-error "not provably free of overflow" }
+// The continue statement skips the increment: the loop may not end.
+int while_continue (int k) conveyor
+{ int r = 0, i = 0; while (i < 2) { if (k) continue; r += 1000000000; ++i; } return r; } // { dg-error "not provably free of overflow" }
+// The increment isn't the only write.
+int while_reset (int k) conveyor
+{ int r = 0, i = 0; while (i < 2) { ++i; if (k) i = 0; r += 1000000000; } return r; } // { dg-error "not provably free of overflow" }
+int dowhile_once () conveyor
+{ int r = 0, i = 5; do { r += 1000000000; ++i; } while (i < 3); return r + 1200000000; } // { dg-error "not provably free of overflow" }
+int while_after () conveyor
+{ int t = 0, i = 0; while (i < 3) { t += 700000000; ++i; } return t + 100000000; } // { dg-error "not provably free of overflow" }
+int dowhile_after () conveyor
+{ int t = 0, i = 0; do { t += 700000000; ++i; } while (i < 3); return t + 100000000; } // { dg-error "not provably free of overflow" }

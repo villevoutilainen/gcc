@@ -33614,8 +33614,12 @@ oa_collect_loop_targets (tree *stmt, vec<tree> *ptr_out, vec<tree> *nz_out)
    check must start fresh from the real pre-loop ENV, not from another
    decl's already-updated result).  */
 
-static bool oa_for_loop_trip_bound (tree, tree, tree, oa_env &,
+static bool oa_for_loop_trip_bound (tree, tree, tree, bool, oa_env &,
 				    widest_int *);
+
+/* How deep in loops oa_handle_loop is, and how many more iterations of
+   counted loops it may walk one by one in the current outermost one.  */
+static unsigned oa_loop_nesting, oa_exact_budget;
 
 static void
 oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
@@ -33745,7 +33749,36 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
      start, if possibly with less.  The checking walk starts cold.  */
   tree loop_key = (body && *body ? *body
 		   : cond && *cond ? *cond : NULL_TREE);
-  if (oa_speculative_walk && oa_loop_head_cache && loop_key)
+  /* A loop whose iterations are counted (oa_for_loop_trip_bound), at
+     most TRIP: what each iteration starts from, W, iteration by
+     iteration, so no widening is needed ('t += i' over ten iterations
+     stays bounded).  HEAD is what the TRIP iterations that can run
+     start from, and the state after the last one leaves the loop
+     through its condition (LAST_EXIT; a 'do' loop's last iteration
+     ends in it).  The iterations walked so in a
+     whole loop nest are limited (oa_exact_budget): a nested loop's are
+     walked again in every iteration of the loops around it.  It
+     starts from the entry alone: a speculative walk's last head would
+     bring in states of the enclosing loop's later iterations.  */
+  unsigned trip_n = 0;
+  bool exact = false;
+  auto nesting = make_temp_override (oa_loop_nesting, oa_loop_nesting + 1);
+  if (oa_loop_nesting == 1)
+    oa_exact_budget = 8192;
+  {
+    widest_int trip;
+    if (cond && *cond && !(cond_prep && *cond_prep)
+	&& oa_for_loop_trip_bound (*cond, body ? *body : NULL_TREE,
+				   expr ? *expr : NULL_TREE, cond_last, env,
+				   &trip)
+	&& trip <= 1024 && trip < oa_exact_budget)
+      {
+	trip_n = trip.to_uhwi ();
+	exact = true;
+	oa_exact_budget -= trip_n + 1;
+      }
+  }
+  if (!exact && oa_speculative_walk && oa_loop_head_cache && loop_key)
     if (oa_env **cached = oa_loop_head_cache->get (loop_key))
       oa_merge_branch_envs (head, **cached, head_cond);
   {
@@ -33760,24 +33793,18 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
     bool saved_speculative = oa_speculative_walk;
     oa_speculative_walk = true;
     bool widened_any = false;
-    /* A 'for' loop whose iterations are counted (oa_for_loop_trip_bound),
-       at most TRIP: what each iteration starts from, W, iteration by
-       iteration, so no widening is needed ('t += i' over ten iterations
-       stays bounded).  HEAD is what the TRIP iterations that can run
-       start from, and the state after the last one leaves the loop
-       through its condition (LAST_EXIT).  Fewer iterations inside an
-       enclosing loop's fixed point, whose every round repeats them.  */
-    unsigned trip_n = 0;
-    {
-      widest_int trip;
-      if (expr && *expr && cond && *cond && !cond_last
-	  && !(cond_prep && *cond_prep)
-	  && oa_for_loop_trip_bound (*cond, body ? *body : NULL_TREE, *expr,
-				     env, &trip)
-	  && trip > 0 && trip <= (saved_speculative ? 16 : 128))
-	trip_n = trip.to_uhwi ();
-    }
-    if (trip_n)
+    if (exact && cond_last)
+      {
+	/* A 'do' loop's TRIP runs each end in its condition, which the
+	   checking walk from HEAD leaves the loop by.  */
+	oa_env w = head.copy ();
+	for (unsigned k = 1; k < trip_n; ++k)
+	  {
+	    walk_parts (w);
+	    oa_merge_branch_envs (head, w, head_cond);
+	  }
+      }
+    else if (exact)
       {
 	oa_env w = head.copy ();
 	for (unsigned k = 1; k <= trip_n; ++k)
@@ -34872,6 +34899,39 @@ oa_local_only_read_p (tree x)
   return true;
 }
 
+/* How many expressions in *TP write X directly ('x = ...', '++x').  */
+
+static unsigned
+oa_count_decl_writes (tree *tp, tree x)
+{
+  struct data_t { tree x; unsigned n; } d = { x, 0 };
+  cp_walk_tree_without_duplicates (tp, [] (tree *tp, int *, void *d_) -> tree
+    {
+      data_t *d = (data_t *) d_;
+      tree t = *tp;
+      switch (TREE_CODE (t))
+	{
+	case MODIFY_EXPR:
+	case INIT_EXPR:
+	case PREINCREMENT_EXPR:
+	case POSTINCREMENT_EXPR:
+	case PREDECREMENT_EXPR:
+	case POSTDECREMENT_EXPR:
+	  {
+	    tree lhs = TREE_OPERAND (t, 0);
+	    STRIP_ANY_LOCATION_WRAPPER (lhs);
+	    if (lhs == d->x)
+	      ++d->n;
+	  }
+	  break;
+	default:
+	  break;
+	}
+      return NULL_TREE;
+    }, &d);
+  return d.n;
+}
+
 /* Does anything in *TP write X directly ('x = ...', '++x')?  */
 
 static bool
@@ -34997,30 +35057,99 @@ oa_counted_loop_cond (tree loop, oa_env &env)
   return counted;
 }
 
-/* An upper bound, in *N, on how many times the body of the 'for' loop
-   with condition COND, body BODY and increment EXPR runs: COND compares
-   a local integer variable X with a constant or with a local variable B
-   the loop doesn't write, EXPR adds a constant to X ('++x', 'x += 2'),
-   and nothing else in the loop writes X.  X's start and B are bounded in
-   ENV, the state after the loop's init-statement.  The condition is
-   tested before every iteration, and a continue statement goes on to
-   EXPR, so every iteration moves X by the step.  X never wraps: the last
-   value staying in the loop plus the step is required to be within its
-   type, so an unsigned X is covered too.  No label in the loop, which a
-   jump from outside could enter it by.  */
+/* The last statement of the statement list BODY, or BODY.  */
+
+static tree
+oa_last_stmt (tree body)
+{
+  while (body)
+    {
+      if (TREE_CODE (body) == BIND_EXPR)
+	body = BIND_EXPR_BODY (body);
+      else if (TREE_CODE (body) == STATEMENT_LIST)
+	{
+	  if (tsi_end_p (tsi_last (body)))
+	    return NULL_TREE;
+	  body = tsi_stmt (tsi_last (body));
+	}
+      else
+	break;
+    }
+  return body;
+}
+
+/* Is there a continue statement in *TP for a loop around it?  */
 
 static bool
-oa_for_loop_trip_bound (tree cond, tree body, tree expr, oa_env &env,
-			widest_int *n)
+oa_has_own_continue_p (tree *tp)
 {
+  return cp_walk_tree_without_duplicates (tp,
+					  [] (tree *tp, int *walk_subtrees,
+					      void *) -> tree
+    {
+      switch (TREE_CODE (*tp))
+	{
+	case FOR_STMT:
+	case WHILE_STMT:
+	case DO_STMT:
+	case RANGE_FOR_STMT:
+	  /* Its continue statements are its own.  */
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	case CONTINUE_STMT:
+	  return *tp;
+	default:
+	  return NULL_TREE;
+	}
+    }, NULL) != NULL_TREE;
+}
+
+/* An upper bound, in *N, on how many times the body BODY of a loop with
+   condition COND runs, the loop's increment being EXPR ('for'), or else
+   BODY's last statement, BODY having no continue statement to skip it
+   ('while', and with DO_LOOP 'do'-'while', whose body runs before the
+   condition is first tested).  COND compares a local integer variable X
+   with a constant or with a local variable B the loop doesn't write, the
+   increment adds a constant to X ('++x', 'x += 2'), and nothing else in
+   the loop writes X.  X's start and B are bounded in ENV, the state
+   before the loop's first test.  Every iteration moves X by the step: a
+   'for' loop's continue statement goes on to EXPR.  X never wraps: the
+   last value staying in the loop plus the step is required to be within
+   its type, so an unsigned X is covered too.  No label in the loop,
+   which a jump from outside could enter it by.  */
+
+static bool
+oa_for_loop_trip_bound (tree cond, tree body, tree expr, bool do_loop,
+			oa_env &env, widest_int *n)
+{
+  bool in_body = !expr;
+  if (in_body)
+    {
+      if (!body || oa_has_own_continue_p (&body))
+	return false;
+      expr = oa_last_stmt (body);
+    }
+  else if (do_loop)
+    return false;
   if (!cond || !expr || !current_function_decl)
     return false;
   STRIP_ANY_LOCATION_WRAPPER (cond);
-  STRIP_ANY_LOCATION_WRAPPER (expr);
-  if (TREE_CODE (expr) == CLEANUP_POINT_EXPR)
-    expr = TREE_OPERAND (expr, 0);
-  if (TREE_CODE (expr) == CONVERT_EXPR && VOID_TYPE_P (TREE_TYPE (expr)))
-    expr = TREE_OPERAND (expr, 0);
+  /* The expression of an expression-statement, as a statement.  */
+  for (;;)
+    {
+      STRIP_ANY_LOCATION_WRAPPER (expr);
+      if (TREE_CODE (expr) == CLEANUP_POINT_EXPR)
+	expr = TREE_OPERAND (expr, 0);
+      else if (TREE_CODE (expr) == EXPR_STMT)
+	expr = EXPR_STMT_EXPR (expr);
+      else if (TREE_CODE (expr) == CONVERT_EXPR
+	       && VOID_TYPE_P (TREE_TYPE (expr)))
+	expr = TREE_OPERAND (expr, 0);
+      else
+	break;
+      if (!expr)
+	return false;
+    }
   /* The variable and its step.  */
   tree x;
   widest_int step;
@@ -35110,7 +35239,17 @@ oa_for_loop_trip_bound (tree cond, tree body, tree expr, oa_env &env,
 	      || (body && oa_writes_decl_p (&body, v))
 	      || (in_expr && oa_writes_decl_p (&expr, v)));
     };
-  if (writes (x, false) || (TREE_CODE (r) != INTEGER_CST && writes (r, true)))
+  if (TREE_CODE (r) != INTEGER_CST && writes (r, true))
+    return false;
+  if (in_body)
+    {
+      /* The increment is the only statement of BODY that writes X.  */
+      tree c = cond;
+      if (oa_writes_decl_p (&c, x)
+	  || oa_count_decl_writes (&body, x) != 1)
+	return false;
+    }
+  else if (writes (x, false))
     return false;
   /* No way into the loop but through its condition.  */
   if (body
@@ -35155,6 +35294,15 @@ oa_for_loop_trip_bound (tree cond, tree body, tree expr, oa_env &env,
   tree type = TREE_TYPE (x);
   widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
   widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
+  /* A 'do' loop's body runs once, then as a 'while' loop's would from
+     X's next value.  */
+  if (do_loop)
+    {
+      if (start.hi + step > tmax || start.lo + step < tmin)
+	return false;
+      start.lo += step;
+      start.hi += step;
+    }
   if (step > 0)
     {
       /* The largest value staying in the loop.  */
@@ -35190,6 +35338,8 @@ oa_for_loop_trip_bound (tree cond, tree body, tree expr, oa_env &env,
       *n = vmin > start.hi ? widest_int (0)
 			   : wi::udiv_trunc (start.hi - vmin, -step) + 1;
     }
+  if (do_loop)
+    *n += 1;
   return true;
 }
 
