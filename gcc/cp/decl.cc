@@ -21397,6 +21397,11 @@ maybe_return_this ()
    here and so isn't invalidated -- a known, narrower-than-ideal scope
    for now.  */
 
+/* Whether each class has a member function with a contract whose
+   control object is symbolic (class_has_symbolic_predicate_p).  */
+
+static GTY(()) hash_map<tree, tree> *symbolic_contract_classes;
+
 static bool
 class_has_symbolic_predicate_p (tree type)
 {
@@ -21408,22 +21413,50 @@ class_has_symbolic_predicate_p (tree type)
   if (!member_vec)
     return false;
 
+  if (symbolic_contract_classes)
+    if (tree *known = symbolic_contract_classes->get (type))
+      return *known == boolean_true_node;
+
+  bool found = false;
   tree slot;
-  for (unsigned i = 0; vec_safe_iterate (member_vec, i, &slot); ++i)
+  for (unsigned i = 0; !found && vec_safe_iterate (member_vec, i, &slot); ++i)
     {
       if (!slot || !is_overloaded_fn (slot))
 	continue;
       for (ovl_iterator iter (slot); iter; ++iter)
 	{
 	  tree fn = *iter;
-	  if (TREE_CODE (fn) == TEMPLATE_DECL)
+	  bool tmpl = TREE_CODE (fn) == TEMPLATE_DECL;
+	  if (tmpl)
 	    fn = DECL_TEMPLATE_RESULT (fn);
-	  if (fn && TREE_CODE (fn) == FUNCTION_DECL
-	      && DECL_DECLARED_SYMBOLIC_P (fn))
-	    return true;
+	  if (!fn || TREE_CODE (fn) != FUNCTION_DECL)
+	    continue;
+	  if (DECL_DECLARED_SYMBOLIC_P (fn))
+	    {
+	      found = true;
+	      break;
+	    }
+	  /* A contract with a symbolic control object records facts about
+	     the object too: a member function's 'post<report_v>
+	     (this->state >= 40)' a range of its field (P4445 2.3.2.1).  */
+	  /* Not a member function template's, whose contracts are
+	     dependent.  */
+	  if (flag_contract_control_objects && !tmpl)
+	    for (tree contract : fn_contracts (fn))
+	      if (oa_contract_symbolic_active_public (contract, fn))
+		{
+		  found = true;
+		  break;
+		}
+	  if (found)
+	    break;
 	}
     }
-  return false;
+  if (!symbolic_contract_classes)
+    symbolic_contract_classes = hash_map<tree, tree>::create_ggc (16);
+  symbolic_contract_classes->put (type, found ? boolean_true_node
+					      : boolean_false_node);
+  return found;
 }
 
 /* -fcontract-symbolic-runtime-checks: true if an object of TYPE contains

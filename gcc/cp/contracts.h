@@ -1122,6 +1122,15 @@ extern tree build_symbolic_invalidate_object_call (location_t, tree);
    lifetime: the end of an automatic object's or a temporary's scope
    (cp_genericize_r) and a delete-expression (init.cc, optimize.cc).  */
 extern tree build_symbolic_invalidate_range_call (location_t, tree, tree);
+/* -fcontract-symbolic-runtime-checks: calls of
+   __contracts_symbolic_epoch, and of
+   __contracts_symbolic_invalidate_range_before (ADDR, SIZE, EPOCH), which
+   together end, around a call that may change an object, the symbolic
+   records established for it before the call (see
+   cp_invalidate_symbolic_records_for_call).  */
+extern tree build_symbolic_epoch_call (location_t);
+extern tree build_symbolic_invalidate_range_before_call (location_t, tree,
+							 tree, tree);
 
 /* Recognize CONJUNCT as "RECEIVER.ACCESSOR () OP const" -- the call-
    range analogue of oa_match_field_range_comparison immediately above,

@@ -616,6 +616,19 @@ namespace contracts
   void __contracts_symbolic_invalidate_range(const void* obj,
 					     __SIZE_TYPE__ size) noexcept;
 
+  // -fcontract-symbolic-runtime-checks: around a call that isn't conveyor
+  // and is given a pointer or reference to such an object, which may
+  // change it, as the static analysis assumes ("any other call that takes
+  // its address"): __contracts_symbolic_epoch before the call, then
+  // __contracts_symbolic_invalidate_range_before removes the records in
+  // [OBJ, OBJ + SIZE) established no later than EPOCH -- before the call,
+  // not by the callee's own postconditions.
+  unsigned long long __contracts_symbolic_epoch() noexcept;
+  void __contracts_symbolic_invalidate_range_before(const void* obj,
+						    __SIZE_TYPE__ size,
+						    unsigned long long epoch)
+    noexcept;
+
   // Mirrors gcc/cp/contracts.cc's declare_terminate_wrapper /
   // __tu_terminate_wrapper, the existing P2900 workaround for GCC
   // PR121936 (see -fcontracts-conservative-ipa). default_control's and

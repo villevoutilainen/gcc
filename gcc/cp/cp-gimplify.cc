@@ -1381,6 +1381,8 @@ struct cp_genericize_data
      the calls already recorded.  */
   hash_map<tree, tree> *symbolic_scopes;
   hash_set<tree> *symbolic_recorded;
+  /* The calls cp_invalidate_symbolic_records_for_call has wrapped.  */
+  hash_set<tree> *symbolic_wrapped;
 };
 
 /* Emit an error about taking the address of an immediate function.
@@ -1980,6 +1982,105 @@ cp_invalidate_symbolic_records_for_mem_call (tree *stmt_p)
   if (tree clear = build_symbolic_invalidate_range_call (EXPR_LOCATION (call),
 							 addr, size))
     *stmt_p = build2 (COMPOUND_EXPR, TREE_TYPE (call), clear, call);
+}
+
+/* -fcontract-symbolic-runtime-checks: a call that isn't conveyor and is
+   given a pointer or reference to an object whose type
+   type_has_symbolic_predicate_p is true for may change it, so its symbolic
+   facts end, as the static analysis assumes ("any other call that takes
+   its address", P4425): the symbolic records established for the object
+   before the call are removed after it -- not the ones the callee's own
+   postconditions establish, nor before it, while the callee's own
+   preconditions consult them.  On every exit from the call, an
+   exception's included.  For a call returning void, or a scalar kept in a
+   temporary, right after the call; for one returning a class, which is
+   initialized in place, at the end of the full-expression, through the
+   cleanup of a temporary holding the epoch.  Returns true if *STMT_P was
+   wrapped so.  */
+
+static bool
+cp_invalidate_symbolic_records_for_call (tree *stmt_p, cp_genericize_data *wtd)
+{
+  tree call = *stmt_p;
+  if (wtd->symbolic_wrapped && wtd->symbolic_wrapped->contains (call))
+    return false;
+  if (tree fn = cp_get_callee_fndecl_nofold (call))
+    {
+      if (DECL_DECLARED_CONVEYOR_P (fn) || fndecl_built_in_p (fn)
+	  || DECL_IMMEDIATE_FUNCTION_P (fn)
+	  || (DECL_NAME (fn)
+	      && startswith (IDENTIFIER_POINTER (DECL_NAME (fn)),
+			     "__contracts_symbolic_")))
+	return false;
+    }
+  auto_vec<unsigned> objs;
+  for (int i = 0; i < call_expr_nargs (call); ++i)
+    {
+      tree t = TREE_TYPE (CALL_EXPR_ARG (call, i));
+      if (!INDIRECT_TYPE_P (t))
+	continue;
+      tree pt = TREE_TYPE (t);
+      if (COMPLETE_TYPE_P (pt) && type_has_symbolic_predicate_p (pt))
+	objs.safe_push (i);
+    }
+  if (objs.is_empty ())
+    return false;
+
+  location_t loc = EXPR_LOCATION (call);
+  tree ret = TREE_TYPE (call);
+  bool in_place = (!VOID_TYPE_P (ret)
+		   && (AGGREGATE_TYPE_P (ret) || TREE_ADDRESSABLE (ret)));
+  tree epoch_call = build_symbolic_epoch_call (loc);
+  if (!epoch_call)
+    return false;
+  /* The epoch: a value saved before the call, or, for a call initializing
+     a class in place, a temporary whose cleanup does the clearing.  */
+  tree epoch = (in_place ? build_local_temp (TREE_TYPE (epoch_call))
+		: save_expr (epoch_call));
+  tree cleanups = NULL_TREE;
+  for (unsigned i : objs)
+    {
+      tree &arg = CALL_EXPR_ARG (call, i);
+      arg = save_expr (arg);
+      tree pt = TREE_TYPE (TREE_TYPE (arg));
+      if (tree clear = build_symbolic_invalidate_range_before_call
+	    (loc, arg, size_in_bytes (pt), epoch))
+	append_to_statement_list (clear, &cleanups);
+    }
+  if (!cleanups)
+    return false;
+  if (!wtd->symbolic_wrapped)
+    wtd->symbolic_wrapped = new hash_set<tree>;
+  wtd->symbolic_wrapped->add (call);
+  /* The arguments, then the epoch, then the call.  */
+  tree pre = NULL_TREE;
+  for (unsigned i : objs)
+    pre = pre ? build2 (COMPOUND_EXPR, void_type_node, pre,
+			CALL_EXPR_ARG (call, i))
+	      : CALL_EXPR_ARG (call, i);
+  if (in_place)
+    pre = build2 (COMPOUND_EXPR, void_type_node, pre,
+		  build4 (TARGET_EXPR, TREE_TYPE (epoch), epoch, epoch_call,
+			  cleanups, NULL_TREE));
+  else
+    pre = build2 (COMPOUND_EXPR, void_type_node, pre, epoch);
+
+  tree body;
+  if (in_place)
+    body = call;
+  else if (VOID_TYPE_P (ret))
+    body = build2 (TRY_FINALLY_EXPR, ret, call, cleanups);
+  else
+    {
+      /* A try/finally gives no value: the call initializes a temporary
+	 inside it.  */
+      tree slot = build_local_temp (ret);
+      tree init = build2 (TRY_FINALLY_EXPR, void_type_node,
+			  build2 (INIT_EXPR, ret, slot, call), cleanups);
+      body = build4 (TARGET_EXPR, ret, slot, init, NULL_TREE, NULL_TREE);
+    }
+  *stmt_p = build2_loc (loc, COMPOUND_EXPR, ret, pre, body);
+  return true;
 }
 
 /* -fcontract-symbolic-runtime-checks: the symbolic records of an object of
@@ -2680,6 +2781,10 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
 	return cp_genericize_r (stmt_p, walk_subtrees, data);
       if (flag_contract_symbolic_runtime_checks)
 	cp_invalidate_symbolic_records_for_mem_call (stmt_p);
+      if (flag_contract_symbolic_runtime_checks
+	  && TREE_CODE (*stmt_p) == CALL_EXPR
+	  && cp_invalidate_symbolic_records_for_call (stmt_p, wtd))
+	return cp_genericize_r (stmt_p, walk_subtrees, data);
       if (tree fn = cp_get_callee_fndecl_nofold (stmt))
 	if (tree call = maybe_replace_d4324_violation_handler_call (stmt, fn))
 	  {
@@ -2917,10 +3022,12 @@ cp_genericize_tree (tree* t_p, bool handle_invisiref_parm_p)
   wtd.handle_invisiref_parm_p = handle_invisiref_parm_p;
   wtd.symbolic_scopes = NULL;
   wtd.symbolic_recorded = NULL;
+  wtd.symbolic_wrapped = NULL;
   cp_walk_tree (t_p, cp_genericize_r, &wtd, NULL);
   delete wtd.p_set;
   delete wtd.symbolic_scopes;
   delete wtd.symbolic_recorded;
+  delete wtd.symbolic_wrapped;
   if (sanitize_flags_p (SANITIZE_VPTR))
     cp_ubsan_instrument_member_accesses (t_p);
 }

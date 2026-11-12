@@ -179,9 +179,14 @@ namespace
     bool has_hi;
     long long lo;
     long long hi;
+    // When it was established (symbolic_epoch), so that a call's
+    // invalidation spares what the call itself established
+    // (__contracts_symbolic_invalidate_range_before).
+    unsigned long long epoch;
   };
 
   std::mutex symbolic_mutex;
+  unsigned long long symbolic_epoch;
   std::unordered_map<symbolic_record_key, symbolic_record_value,
 		      symbolic_record_key_hash> symbolic_records;
 
@@ -196,6 +201,7 @@ namespace
     bool polarity;
     const void* scope;
     std::vector<const void*> objs;
+    unsigned long long epoch;
   };
 
   std::unordered_map<std::string, symbolic_relation_value> symbolic_relations;
@@ -233,6 +239,7 @@ __contracts_symbolic_establish_bool(const void* key, const void* obj,
   v.is_range = false;
   v.bool_val = polarity;
   std::lock_guard<std::mutex> lock(symbolic_mutex);
+  v.epoch = ++symbolic_epoch;
   symbolic_records[symbolic_record_key{key, obj}] = v;
 }
 
@@ -259,6 +266,7 @@ __contracts_symbolic_establish_range(const void* key, const void* obj,
   v.has_hi = has_hi;
   v.hi = hi;
   std::lock_guard<std::mutex> lock(symbolic_mutex);
+  v.epoch = ++symbolic_epoch;
   symbolic_records[symbolic_record_key{key, obj}] = v;
 }
 
@@ -293,9 +301,10 @@ __contracts_symbolic_establish_relation(const void* key, unsigned n,
 {
   const void* args[4] = { a0, a1, a2, a3 };
   const std::size_t sizes[4] = { s0, s1, s2, s3 };
-  symbolic_relation_value v{polarity, scope, {}};
+  symbolic_relation_value v{polarity, scope, {}, 0};
   std::string k = relation_key(key, n, args, sizes, &v.objs);
   std::lock_guard<std::mutex> lock(symbolic_mutex);
+  v.epoch = ++symbolic_epoch;
   symbolic_relations[std::move(k)] = std::move(v);
 }
 
@@ -335,6 +344,37 @@ __contracts_symbolic_invalidate_object(const void* obj) noexcept
 		{
 		  for (const void* o : entry.second.objs)
 		    if (o == obj)
+		      return true;
+		  return false;
+		});
+}
+
+unsigned long long
+__contracts_symbolic_epoch() noexcept
+{
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  return symbolic_epoch;
+}
+
+void
+__contracts_symbolic_invalidate_range_before(const void* obj,
+					     std::size_t size,
+					     unsigned long long epoch) noexcept
+{
+  auto first = reinterpret_cast<std::uintptr_t>(obj);
+  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::erase_if(symbolic_records,
+		[first, size, epoch](const auto& entry) {
+		  auto addr = reinterpret_cast<std::uintptr_t>(entry.first.obj);
+		  return addr - first < size && entry.second.epoch <= epoch;
+		});
+  std::erase_if(symbolic_relations,
+		[first, size, epoch](const auto& entry)
+		{
+		  if (entry.second.epoch > epoch)
+		    return false;
+		  for (const void* o : entry.second.objs)
+		    if (reinterpret_cast<std::uintptr_t>(o) - first < size)
 		      return true;
 		  return false;
 		});

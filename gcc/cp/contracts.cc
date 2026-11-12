@@ -6171,6 +6171,40 @@ build_symbolic_invalidate_object_call (location_t loc, tree obj_ptr)
   return build_call_n (fn, 1, obj);
 }
 
+static GTY(()) tree symbolic_epoch_decl;
+static GTY(()) tree symbolic_invalidate_range_before_decl;
+
+/* See contracts.h.  */
+
+tree
+build_symbolic_epoch_call (location_t loc)
+{
+  tree fn = lookup_symbolic_runtime_fn (loc, &symbolic_epoch_decl,
+					"__contracts_symbolic_epoch");
+  if (fn == error_mark_node)
+    return NULL_TREE;
+  tree call = build_call_n (fn, 0);
+  SET_EXPR_LOCATION (call, loc);
+  return call;
+}
+
+/* See contracts.h.  */
+
+tree
+build_symbolic_invalidate_range_before_call (location_t loc, tree addr,
+					     tree size, tree epoch)
+{
+  tree fn = lookup_symbolic_runtime_fn
+    (loc, &symbolic_invalidate_range_before_decl,
+     "__contracts_symbolic_invalidate_range_before");
+  if (fn == error_mark_node)
+    return NULL_TREE;
+  tree call = build_call_n (fn, 3, fold_convert (ptr_type_node, addr),
+			    fold_convert (size_type_node, size), epoch);
+  SET_EXPR_LOCATION (call, loc);
+  return call;
+}
+
 /* See contracts.h.  */
 
 tree
