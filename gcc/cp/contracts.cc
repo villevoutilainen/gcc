@@ -542,6 +542,43 @@ maybe_warn_fnptr_contract_mismatch (location_t loc, tree dest_decl,
 		"%qD", src_owner, dest_decl);
 }
 
+/* -Wfunction-pointer-contract-mismatch: warn at LOC if SRC_EXPR, whose
+   function pointer (or reference) has its own contract, is copied where
+   no contract can be -- KIND says where: the function's return value
+   (fnptr_contract_return) or an element of an array, such as the backing
+   array of a std::initializer_list (fnptr_contract_element) -- so that
+   calls through the copy aren't checked against it (P4445 2.4.2.1).
+   DEST_TYPE is the type of the destination.  */
+
+void
+maybe_warn_fnptr_contract_dropped (location_t loc, tree dest_type,
+				    tree src_expr, fnptr_contract_dest kind)
+{
+  if (!warn_function_pointer_contract_mismatch
+      || dest_type == NULL_TREE || dest_type == error_mark_node
+      || src_expr == NULL_TREE || src_expr == error_mark_node)
+    return;
+  tree t = TYPE_REF_P (dest_type) ? TREE_TYPE (dest_type) : dest_type;
+  if (!TYPE_PTRFN_P (t) && !TYPE_PTRMEMFUNC_P (t)
+      && TREE_CODE (t) != FUNCTION_TYPE)
+    return;
+  if (warning_suppressed_p (src_expr, OPT_Wfunction_pointer_contract_mismatch))
+    return;
+  tree src_owner = fnptr_contract_owner (src_expr);
+  if (src_owner == NULL_TREE || TREE_CODE (src_owner) == FUNCTION_DECL
+      || get_fn_contract_specifiers (src_owner) == NULL_TREE)
+    return;
+  if (kind == fnptr_contract_return)
+    warning_at (loc, OPT_Wfunction_pointer_contract_mismatch,
+		"returning %qD, which has its own contract; calls through the "
+		"result are not checked against it", src_owner);
+  else
+    warning_at (loc, OPT_Wfunction_pointer_contract_mismatch,
+		"copying %qD, which has its own contract, into an element of "
+		"an array or initializer list; calls through the element are "
+		"not checked against it", src_owner);
+}
+
 static bool contract_control_is_ignored (tree, contract_check_side, tree, bool = false);
 static bool contract_control_validates (tree, contract_check_side, tree, bool = false);
 static bool contract_control_assumable (tree, contract_check_side, tree, bool = false);

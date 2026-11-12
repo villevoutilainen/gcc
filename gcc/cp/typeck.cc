@@ -12194,9 +12194,15 @@ check_return_expr (tree retval, bool *no_warning, bool *dangling)
 	 to the type of return value's location to handle the
 	 case that functype is smaller than the valtype.  */
       if (!converted)
-	retval = convert_for_initialization
-	  (NULL_TREE, functype, retval, flags, ICR_RETURN, NULL_TREE, 0,
-	   tf_warning_or_error);
+	{
+	  /* A contracted function pointer returned (P4445 2.4.2.1).  */
+	  maybe_warn_fnptr_contract_dropped (cp_expr_loc_or_input_loc (retval),
+					     functype, retval,
+					     fnptr_contract_return);
+	  retval = convert_for_initialization
+	    (NULL_TREE, functype, retval, flags, ICR_RETURN, NULL_TREE, 0,
+	     tf_warning_or_error);
+	}
       retval = convert (valtype, retval);
 
       /* If the conversion failed, treat this just like `return;'.  */

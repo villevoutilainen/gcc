@@ -1904,6 +1904,11 @@ process_init_constructor_array (tree type, tree init, int nested, int flags,
       else if (!check_array_designated_initializer (ce, j))
 	ce->index = error_mark_node;
       gcc_assert (ce->value);
+      if (complain & tf_warning)
+	maybe_warn_fnptr_contract_dropped (cp_expr_loc_or_input_loc
+					     (ce->value),
+					   TREE_TYPE (type), ce->value,
+					   fnptr_contract_element);
       ce->value
 	= massage_init_elt (TREE_TYPE (type), ce->value, nested, flags,
 			    complain);
@@ -2073,6 +2078,11 @@ process_init_constructor_record (tree type, tree init, int nested, int flags,
 	  if (ce)
 	    {
 	      gcc_assert (ce->value);
+	      /* A member initialized from a contracted function pointer
+		 (P4445 2.4.2.1).  */
+	      if (complain & tf_warning)
+		maybe_warn_fnptr_contract_mismatch
+		  (cp_expr_loc_or_input_loc (next), field, next);
 	      next = massage_init_elt (fldtype, next, nested, flags, complain);
 	      ++idx;
 	    }

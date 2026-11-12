@@ -1498,6 +1498,9 @@ extern tree fnptr_contract_owner		(tree);
    function's own comment in contracts.cc for the exact (deliberately
    asymmetric) semantics.  */
 extern void maybe_warn_fnptr_contract_mismatch	(location_t, tree, tree);
+enum fnptr_contract_dest { fnptr_contract_return, fnptr_contract_element };
+extern void maybe_warn_fnptr_contract_dropped	(location_t, tree, tree,
+						 fnptr_contract_dest);
 
 extern tree make_postcondition_variable		(cp_expr);
 extern tree make_postcondition_variable		(cp_expr, tree);
