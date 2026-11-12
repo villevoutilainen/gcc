@@ -821,6 +821,9 @@ _GLIBCXX_BEGIN_NAMESPACE_CONTAINER
     class bitset
     : private _Base_bitset<_GLIBCXX_BITSET_WORDS(_Nb)>
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       typedef _Base_bitset<_GLIBCXX_BITSET_WORDS(_Nb)> _Base;
       typedef unsigned long _WordT;

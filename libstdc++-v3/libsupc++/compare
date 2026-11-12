@@ -126,6 +126,9 @@ namespace std _GLIBCXX_VISIBILITY(default)
 
   class partial_ordering
   {
+  public:
+    _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+  private:
     // less=0xff, equiv=0x00, greater=0x01, unordered=0x80
     __cmp_cat::type _M_value;
 
@@ -230,6 +233,9 @@ namespace std _GLIBCXX_VISIBILITY(default)
 
   class weak_ordering
   {
+  public:
+    _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+  private:
     __cmp_cat::type _M_value;
 
     constexpr explicit
@@ -324,6 +330,9 @@ namespace std _GLIBCXX_VISIBILITY(default)
 
   class strong_ordering
   {
+  public:
+    _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+  private:
     __cmp_cat::type _M_value;
 
     constexpr explicit

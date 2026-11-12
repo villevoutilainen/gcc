@@ -848,10 +848,15 @@ namespace std
 // template's specializations are then structural wherever their bases
 // and members are, regardless of their access, and its reflect_constant
 // is deleted (so the specialization isn't structural) elsewhere.  With
+// -freflection-operator-template, a defaulted template-argument function
+// (P4340R1) does the same instead, and with
 // -freflection-structural-metainfo-conversion, a defaulted explicit
-// conversion to std::meta::info does the same instead.
+// conversion to std::meta::info.
 #ifndef _GLIBCXX_DEFAULT_REFLECT_CONSTANT
-# if defined(__GXX_REFLECTION_METAINFO_CONVERSION)
+# if defined(__GXX_REFLECTION_OPERATOR_TEMPLATE)
+#  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT \
+  consteval operator template() const = default;
+# elif defined(__GXX_REFLECTION_METAINFO_CONVERSION)
 #  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT \
   consteval explicit operator decltype(^^int)() const = default;
 # elif defined(__cpp_impl_reflection)
@@ -859,6 +864,18 @@ namespace std
   consteval decltype(^^int) reflect_constant() const = default;
 # else
 #  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT
+# endif
+#endif
+
+// A defaulted template-argument function (P4340R1, with
+// -freflection-operator-template), for the types that paper adds beyond the
+// ones that _GLIBCXX_DEFAULT_REFLECT_CONSTANT covers in every mode.
+#ifndef _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+# if defined(__GXX_REFLECTION_OPERATOR_TEMPLATE)
+#  define _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE \
+  consteval operator template() const = default;
+# else
+#  define _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
 # endif
 #endif
 

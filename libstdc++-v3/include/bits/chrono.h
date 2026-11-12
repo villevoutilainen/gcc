@@ -525,6 +525,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     template<typename _Rep, typename _Period>
       class duration
       {
+      public:
+        _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+      private:
 	// _GLIBCXX_RESOLVE_LIB_DEFECTS
 	// 4481. Disallow chrono::duration<const T, P>
 	static_assert(is_same<_Rep, __remove_cvref_t<_Rep>>::value,
@@ -943,6 +946,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     template<typename _Clock, typename _Dur>
       class time_point
       {
+      public:
+        _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+      private:
 	static_assert(__is_duration<_Dur>::value,
 	    "duration must be a specialization of std::chrono::duration");
 

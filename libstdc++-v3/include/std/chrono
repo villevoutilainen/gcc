@@ -584,6 +584,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class day
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       unsigned char _M_d;
 
@@ -697,6 +700,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class month
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       unsigned char _M_m;
 
@@ -847,6 +853,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class year
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       short _M_y;
 
@@ -1001,6 +1010,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class weekday
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       unsigned char _M_wd;
 
@@ -1142,6 +1154,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class weekday_indexed
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::weekday _M_wd;
       unsigned char _M_index;
@@ -1194,6 +1209,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class weekday_last
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::weekday _M_wd;
 
@@ -1233,6 +1251,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class month_day
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::month _M_m;
       chrono::day _M_d;
@@ -1300,6 +1321,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class month_day_last
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::month _M_m;
 
@@ -1352,6 +1376,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class month_weekday
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::month _M_m;
       chrono::weekday_indexed _M_wdi;
@@ -1411,6 +1438,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class month_weekday_last
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::month _M_m;
       chrono::weekday_last _M_wdl;
@@ -1490,6 +1520,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class year_month
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::year _M_y;
       chrono::month _M_m;
@@ -1614,6 +1647,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class year_month_day
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::year _M_y;
       chrono::month _M_m;
@@ -1836,6 +1872,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class year_month_day_last
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::year _M_y;
       chrono::month_day_last _M_mdl;
@@ -2016,6 +2055,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class year_month_weekday
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::year _M_y;
       chrono::month _M_m;
@@ -2194,6 +2236,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
     class year_month_weekday_last
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     private:
       chrono::year _M_y;
       chrono::month _M_m;

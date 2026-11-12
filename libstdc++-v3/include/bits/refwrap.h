@@ -314,6 +314,9 @@ _GLIBCXX_MEM_FN_TRAITS(&& noexcept, false_type, true_type)
     : public _Reference_wrapper_base_memfun<typename remove_cv<_Tp>::type>
 #endif
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
       _Tp* _M_data;
 
       _GLIBCXX20_CONSTEXPR

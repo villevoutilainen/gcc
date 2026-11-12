@@ -157,6 +157,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     class complex
     {
     public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
+    public:
       /// Value typedef.
       typedef _Tp value_type;
 
@@ -1437,6 +1440,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     class complex<float>
     {
     public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
+    public:
       typedef float value_type;
       typedef __complex__ float _ComplexT;
 
@@ -1596,6 +1602,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     class complex<double>
     {
     public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
+    public:
       typedef double value_type;
       typedef __complex__ double _ComplexT;
 
@@ -1754,6 +1763,9 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   template<>
     class complex<long double>
     {
+    public:
+      _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
+    private:
     public:
       typedef long double value_type;
       typedef __complex__ long double _ComplexT;
