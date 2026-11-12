@@ -6955,7 +6955,8 @@ mark_used (tree decl, tsubst_flags_t complain /* = tf_warning_or_error */)
      no definition, and an odr-use of it is ill-formed
      ([class.reflect.constant]).  */
   if (TREE_CODE (decl) == FUNCTION_DECL && DECL_DEFAULTED_FN (decl)
-      && !DECL_DELETED_FN (decl) && reflect_constant_fn_p (decl))
+      && !DECL_DELETED_FN (decl) && reflect_constant_fn_p (decl)
+      && !flag_reflection_structural_metainfo_conversion)
     {
       if (complain & tf_error)
 	{

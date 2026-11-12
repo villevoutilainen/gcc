@@ -5402,11 +5402,51 @@ zero_init_expr_p (tree t)
   return false;
 }
 
+static bool ordinary_structural_type_p (tree, bool);
+
 /* True IFF T is a C++20 structural type (P1907R1) that can be used as a
-   non-type template parameter.  If EXPLAIN, explain why not.  */
+   non-type template parameter.  If EXPLAIN, explain why not.  With
+   -freflection-structural-metainfo-conversion, a literal class with a
+   user-provided conversion to std::meta::info is one too
+   (metainfo_conversion_structural_p); not as a subobject, though, whose
+   value would be compared member-wise.  */
+
+static int structural_subobject_depth;
 
 bool
 structural_type_p (tree t, bool explain)
+{
+  if (structural_subobject_depth == 0
+      && metainfo_conversion_structural_p (t))
+    {
+      if (literal_type_p (t))
+	return true;
+      if (explain)
+	explain_non_literal_class (t);
+      return false;
+    }
+  return ordinary_structural_type_p (t, explain);
+}
+
+/* True if T is a class that is structural only through its user-provided
+   conversion to std::meta::info: its template-argument-equivalence is by
+   that conversion's result.  */
+
+bool
+metainfo_conversion_structural_p (tree t)
+{
+  return (flag_reflection_structural_metainfo_conversion
+	  && CLASS_TYPE_P (t)
+	  && CLASSTYPE_METAINFO_CONVERSION (t)
+	  && !CLASSTYPE_NOT_STRUCTURAL (t)
+	  && !ordinary_structural_type_p (t, false));
+}
+
+/* structural_type_p, without -freflection-structural-metainfo-conversion's
+   user-provided conversions.  */
+
+static bool
+ordinary_structural_type_p (tree t, bool explain)
 {
   /* A structural type is one of the following: */
 
@@ -5484,7 +5524,10 @@ structural_type_p (tree t, bool explain)
 	  return false;
 	}
       tree mtype = strip_array_types (TREE_TYPE (m));
-      if (!structural_type_p (mtype))
+      ++structural_subobject_depth;
+      bool sub_ok = structural_type_p (mtype);
+      --structural_subobject_depth;
+      if (!sub_ok)
 	{
 	  if (explain)
 	    {
@@ -5493,7 +5536,9 @@ structural_type_p (tree t, bool explain)
 			"type", TREE_TYPE (m));
 	      else
 		inform (location_of (m), "%qD has a non-structural type", m);
+	      ++structural_subobject_depth;
 	      structural_type_p (mtype, true);
+	      --structural_subobject_depth;
 	    }
 	  return false;
 	}
@@ -7187,6 +7232,10 @@ special_function_p (const_tree decl)
     return sfk_base_destructor;
   if (DECL_DELETING_DESTRUCTOR_P (decl))
     return sfk_deleting_destructor;
+  /* With -freflection-structural-metainfo-conversion, a defaulted
+     conversion to std::meta::info.  */
+  if (reflect_constant_fn_p (decl) && DECL_DEFAULTED_FN (decl))
+    return sfk_reflect_constant;
   if (DECL_CONV_FN_P (decl))
     return sfk_conversion;
   if (deduction_guide_p (decl))
@@ -7194,9 +7243,6 @@ special_function_p (const_tree decl)
   if (DECL_OVERLOADED_OPERATOR_CODE_RAW (decl) >= OVL_OP_EQ_EXPR
       && DECL_OVERLOADED_OPERATOR_CODE_RAW (decl) <= OVL_OP_SPACESHIP_EXPR)
     return sfk_comparison;
-  if (reflect_constant_fn_p (decl) && DECL_DEFAULTED_FN (decl))
-    return sfk_reflect_constant;
-
   return sfk_none;
 }
 

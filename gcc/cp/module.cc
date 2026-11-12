@@ -6329,6 +6329,7 @@ trees_out::lang_type_bools (tree t, bits_out& bits)
   WB (lang->non_pod_aggregate);
   WB (lang->non_aggregate_pod);
   WB (lang->not_structural);
+  WB (lang->metainfo_conversion);
 #undef WB
 }
 
@@ -6403,6 +6404,7 @@ trees_in::lang_type_bools (tree t, bits_in& bits)
   RB (lang->non_pod_aggregate);
   RB (lang->non_aggregate_pod);
   RB (lang->not_structural);
+  RB (lang->metainfo_conversion);
 #undef RB
   return !get_overrun ();
 }

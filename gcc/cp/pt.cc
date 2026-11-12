@@ -7698,6 +7698,74 @@ create_template_parm_object (tree expr, tsubst_flags_t complain)
   return get_template_parm_object (expr, mangle_template_parm_object (expr));
 }
 
+/* The keys, T{R}, of the template parameter objects of classes that are
+   structural only through a user-provided conversion to std::meta::info
+   giving R (-freflection-structural-metainfo-conversion): mangled in
+   place of their values, which may differ between equivalent arguments.  */
+
+static GTY(()) hash_map<tree, tree> *tparm_obj_keys;
+
+/* Return a VAR_DECL for the template parameter object corresponding to
+   template argument EXPR of class TYPE, which is structural only through a
+   user-provided conversion to std::meta::info
+   (-freflection-structural-metainfo-conversion).  Two arguments are
+   template-argument-equivalent if that conversion gives the same
+   reflection R for both, so the object is found by T{R}; the first
+   argument found for it is copied into it.  */
+
+static tree
+create_metainfo_conversion_tparm_object (tree type, tree expr,
+					 tsubst_flags_t complain)
+{
+  tree orig = expr;
+  if (TREE_CODE (expr) == TARGET_EXPR)
+    expr = TARGET_EXPR_INITIAL (expr);
+  if (!TREE_CONSTANT (expr) || !reduced_constant_expression_p (expr))
+    {
+      if ((complain & tf_error)
+	  && require_rvalue_constant_expression (orig))
+	cxx_constant_value (orig);
+      return error_mark_node;
+    }
+
+  tree conv = NULL_TREE;
+  for (tree f = TYPE_FIELDS (TYPE_MAIN_VARIANT (type)); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FUNCTION_DECL && reflect_constant_fn_p (f)
+	&& !DECL_DEFAULTED_FN (f) && !DECL_DELETED_FN (f))
+      {
+	conv = f;
+	break;
+      }
+  gcc_checking_assert (conv);
+  tree info_type = DECL_CONV_FN_TYPE (conv);
+  tree obj = force_target_expr (type, unshare_expr (expr), complain);
+  tree call = build_static_cast (input_location, info_type, obj, complain);
+  if (call == error_mark_node)
+    return error_mark_node;
+  tree r = cxx_constant_value (call, complain);
+  if (r == error_mark_node)
+    return error_mark_node;
+  if (TREE_CODE (r) != REFLECT_EXPR)
+    {
+      if (complain & tf_error)
+	error ("%qD did not give a reflection constant", conv);
+      return error_mark_node;
+    }
+
+  tree key = build_constructor_single (TYPE_MAIN_VARIANT (type), NULL_TREE, r);
+  TREE_HAS_CONSTRUCTOR (key) = 1;
+  tree name = mangle_template_parm_object (key);
+  if (tree decl = get_global_binding (name))
+    return decl;
+
+  if (invalid_tparm_referent_p (type, expr, complain))
+    return error_mark_node;
+  tree decl = get_template_parm_object (expr, name);
+  if (decl != error_mark_node)
+    hash_map_safe_put<hm_ggc> (tparm_obj_keys, decl, key);
+  return decl;
+}
+
 /* The template arguments corresponding to template parameter objects of types
    that contain pointers to members.  */
 
@@ -7764,6 +7832,9 @@ get_template_parm_object (tree expr, tree name, bool check_init/*=true*/)
 tree
 tparm_object_argument (tree var)
 {
+  if (tparm_obj_keys)
+    if (tree *key = tparm_obj_keys->get (var))
+      return *key;
   if (zero_init_p (TREE_TYPE (var)))
     return DECL_INITIAL (var);
   return *(tparm_obj_values->get (var));
@@ -8236,7 +8307,13 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
       /* Replace the argument with a reference to the corresponding template
 	 parameter object.  */
       if (!val_dep_p)
-	expr = create_template_parm_object (expr, complain);
+	{
+	  if (metainfo_conversion_structural_p (type))
+	    expr = create_metainfo_conversion_tparm_object (type, expr,
+							   complain);
+	  else
+	    expr = create_template_parm_object (expr, complain);
+	}
       if (expr == error_mark_node)
 	return NULL_TREE;
     }
@@ -13154,6 +13231,8 @@ instantiate_class_template (tree type)
       CLASSTYPE_FINAL (type) = CLASSTYPE_FINAL (pattern);
       CLASSTYPE_STRUCTURAL (type) = CLASSTYPE_STRUCTURAL (pattern);
       CLASSTYPE_NOT_STRUCTURAL (type) = CLASSTYPE_NOT_STRUCTURAL (pattern);
+      CLASSTYPE_METAINFO_CONVERSION (type)
+	= CLASSTYPE_METAINFO_CONVERSION (pattern);
     }
 
   pbinfo = TYPE_BINFO (pattern);

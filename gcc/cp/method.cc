@@ -1785,6 +1785,33 @@ decl_remember_implicit_trigger_p (tree decl)
 	  && sfk != sfk_comparison);
 }
 
+/* The body of a defaulted conversion to std::meta::info
+   (-freflection-structural-metainfo-conversion): a reflection of the
+   template parameter object template-argument-equivalent to *this, which
+   std::meta::reflect_constant gives for its structural class --
+   'return std::meta::reflect_constant (*this);'.  */
+
+static void
+build_metainfo_conversion_body ()
+{
+  tree compound_stmt = begin_compound_stmt (BCS_FN_BODY);
+  tree meta = lookup_qualified_name (std_node, get_identifier ("meta"));
+  tree fn = (TREE_CODE (meta) == NAMESPACE_DECL
+	     ? lookup_qualified_name (meta, get_identifier ("reflect_constant"))
+	     : error_mark_node);
+  if (fn == error_mark_node || !fn)
+    error ("%<std::meta::reflect_constant%> has not been declared");
+  else
+    {
+      releasing_vec args;
+      vec_safe_push (args, current_class_ref);
+      tree call = finish_call_expr (fn, &args, /*disallow_virtual=*/false,
+				    /*koenig_p=*/false, tf_warning_or_error);
+      finish_return_stmt (call);
+    }
+  finish_compound_stmt (compound_stmt);
+}
+
 /* Synthesize FNDECL, a non-static member function.   */
 
 void
@@ -1797,8 +1824,10 @@ synthesize_method (tree fndecl)
   int warning_count = warningcount + werrorcount;
   special_function_kind sfk = special_function_p (fndecl);
   /* A defaulted reflect_constant has no definition to synthesize
-     (defaultable_reflect_constant_check).  */
-  if (sfk == sfk_reflect_constant)
+     (defaultable_reflect_constant_check); a defaulted conversion to
+     std::meta::info does.  */
+  if (sfk == sfk_reflect_constant
+      && !flag_reflection_structural_metainfo_conversion)
     return;
   auto_diagnostic_group d;
 
@@ -1856,6 +1885,11 @@ synthesize_method (tree fndecl)
     {
       /* Pass tf_none so the function is just deleted if there's a problem.  */
       build_comparison_op (fndecl, true, tf_none);
+      need_body = false;
+    }
+  else if (sfk == sfk_reflect_constant)
+    {
+      build_metainfo_conversion_body ();
       need_body = false;
     }
 
@@ -4088,15 +4122,21 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
 /* Whether FN is a member function named reflect_constant: a class that
    defaults one, 'consteval std::meta::info reflect_constant () const
    = default;' (P4340), is a structural class, exactly as if it were
-   declared with the class-property-specifier 'structural'.  */
+   declared with the class-property-specifier 'structural'.  With
+   -freflection-structural-metainfo-conversion, a conversion function to
+   std::meta::info, possibly explicit, takes its place, and a member named
+   reflect_constant is an ordinary function.  */
 
 bool
 reflect_constant_fn_p (const_tree fn)
 {
-  return (TREE_CODE (fn) == FUNCTION_DECL
-	  && DECL_NAME (fn)
-	  && id_equal (DECL_NAME (fn), "reflect_constant")
-	  && DECL_IOBJ_MEMBER_FUNCTION_P (fn));
+  if (TREE_CODE (fn) != FUNCTION_DECL || !DECL_IOBJ_MEMBER_FUNCTION_P (fn))
+    return false;
+  if (flag_reflection_structural_metainfo_conversion)
+    return (DECL_CONV_FN_P (fn)
+	    && REFLECTION_TYPE_P (DECL_CONV_FN_TYPE (fn)));
+  return (DECL_NAME (fn)
+	  && id_equal (DECL_NAME (fn), "reflect_constant"));
 }
 
 /* The defaulted reflect_constant member function of class T, if it has
@@ -4161,6 +4201,14 @@ note_reflect_constant (tree t)
 	 that.  */
       else if (DECL_DELETED_FN (fn) && reflect_constant_shape_p (fn))
 	CLASSTYPE_NOT_STRUCTURAL (t) = 1;
+      /* A user-provided consteval conversion to std::meta::info makes a
+	 class that isn't otherwise structural structural, with
+	 template-argument-equivalence by its result
+	 (-freflection-structural-metainfo-conversion).  */
+      else if (flag_reflection_structural_metainfo_conversion
+	       && !DECL_DELETED_FN (fn)
+	       && reflect_constant_signature_p (fn))
+	CLASSTYPE_METAINFO_CONVERSION (t) = 1;
     }
 }
 

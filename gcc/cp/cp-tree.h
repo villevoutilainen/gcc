@@ -2660,6 +2660,7 @@ struct GTY(()) lang_type {
   bool non_pod_aggregate : 1;
   bool non_aggregate_pod : 1;
   bool not_structural : 1;
+  bool metainfo_conversion : 1;
 
   /* When adding a flag here, consider whether or not it ought to
      apply to a template instance if it applies to the template.  If
@@ -2669,8 +2670,7 @@ struct GTY(()) lang_type {
 
   /* There are some bits left to fill out a 32-bit word.  Keep track
      of this by updating the size of this bitfield whenever you add or
-     remove a flag.  */
-  unsigned dummy : 1;
+     remove a flag.  (None are left.)  */
 
   tree primary_base;
   vec<tree_pair_s, va_gc> *vcall_indices;
@@ -2771,6 +2771,15 @@ struct GTY(()) lang_type {
    (P4340): it is not a structural type, whatever its members.  */
 #define CLASSTYPE_NOT_STRUCTURAL(NODE) \
   (LANG_TYPE_CLASS_CHECK (NODE)->not_structural)
+
+/* True if this class has a user-provided
+   'consteval std::meta::info operator std::meta::info () const', possibly
+   explicit (-freflection-structural-metainfo-conversion): if it is not
+   otherwise a structural type, it is one, and two of its values are
+   template-argument-equivalent if that conversion gives the same
+   reflection for both.  */
+#define CLASSTYPE_METAINFO_CONVERSION(NODE) \
+  (LANG_TYPE_CLASS_CHECK (NODE)->metainfo_conversion)
 
 
 /* Nonzero means that this _CLASSTYPE node overloads operator=(X&).  */
@@ -7778,6 +7787,7 @@ extern bool defaultable_fn_check		(tree);
 extern bool reflect_constant_fn_p		(const_tree);
 extern tree defaulted_reflect_constant		(tree);
 extern void note_reflect_constant		(tree);
+extern bool metainfo_conversion_structural_p	(tree);
 extern void check_abi_tags			(tree);
 extern tree missing_abi_tags			(tree);
 extern void fixup_type_variants			(tree, bool = false);

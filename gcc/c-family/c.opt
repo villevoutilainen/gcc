@@ -2560,6 +2560,10 @@ freflection
 C++ ObjC++ Var(flag_reflection) Init(0)
 Enable experimental C++26 Reflection.
 
+freflection-structural-metainfo-conversion
+C++ ObjC++ Var(flag_reflection_structural_metainfo_conversion) Init(0)
+Make a class structural through a conversion operator to std::meta::info, instead of a reflect_constant member function.
+
 freflection-transparent-using-decls
 C++ ObjC++ Var(flag_reflection_transparent_using_decls) Init(0)
 Let a reflect-expression look through every namespace-scope using-declarator.

@@ -254,6 +254,7 @@ in the following sections.
 -fno-nonansi-builtins  -fnothrow-opt  -fno-operator-names
 -fno-optional-diags
 -fno-pretty-templates  -frange-for-ext-temps  -freflection
+-freflection-structural-metainfo-conversion
 -freflection-transparent-using-decls
 -fno-rtti  -fsized-deallocation
 -fstrict-enums  -fstrong-eval-order@r{[}=@var{kind}@r{]}
@@ -3902,6 +3903,26 @@ in earlier versions of the standard.
 @opindex freflection
 @item -freflection
 Enable experimental C++26 Reflection.
+
+@opindex freflection-structural-metainfo-conversion
+@item -freflection-structural-metainfo-conversion
+Make a class a structural type, if it otherwise isn't, through a
+@code{consteval} @code{const} conversion function to
+@code{std::meta::info}, possibly @code{explicit}, with no ref-qualifier,
+instead of through a @code{reflect_constant} member function.  Defaulting
+the conversion function makes the class structural regardless of the access
+of its bases and non-static data members, with member-wise
+template-argument-equivalence, and calling it gives the reflection
+@code{std::meta::reflect_constant} gives; deleting it makes the class not
+structural.  A user-provided one makes a literal class that is not otherwise
+structural a structural type whose values are template-argument-equivalent
+when the conversion gives the same reflection for them; the template
+parameter object is a copy of the first such argument.  Such a class is
+structural only as a template parameter's own type, not as a subobject.
+With this option, a member function named @code{reflect_constant} has no
+special meaning.  The macro @code{__GXX_REFLECTION_METAINFO_CONVERSION} is
+defined, and libstdc++ defaults the conversion function instead of
+@code{reflect_constant}.
 
 @opindex freflection-transparent-using-decls
 @item -freflection-transparent-using-decls
