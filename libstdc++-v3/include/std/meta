@@ -189,6 +189,10 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       op_plus_plus,
       op_minus_minus,
       op_comma
+#ifdef __GXX_REFLECTION_OPERATOR_TEMPLATE
+      // P4340R1, the template-argument function operator template.
+      , op_template
+#endif
     };
     using enum operators;
     consteval operators operator_of(info);

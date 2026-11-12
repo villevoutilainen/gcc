@@ -1259,6 +1259,24 @@ maybe_init_meta_operators (location_t loc)
 	}
 }
 
+/* The value of std::meta::operators::op_template, which libstdc++ declares
+   with -freflection-operator-template (P4340R1), or -1.  */
+
+static HOST_WIDE_INT
+meta_op_template_value ()
+{
+  tree operators = lookup_qualified_name (std_meta_node, "operators");
+  if (TREE_CODE (operators) != TYPE_DECL
+      || TREE_CODE (TREE_TYPE (operators)) != ENUMERAL_TYPE)
+    return -1;
+  tree t = lookup_enumerator (TREE_TYPE (operators),
+			      get_identifier ("op_template"));
+  if (t == NULL_TREE || TREE_CODE (t) != CONST_DECL
+      || !tree_fits_shwi_p (DECL_INITIAL (t)))
+    return -1;
+  return tree_to_shwi (DECL_INITIAL (t));
+}
+
 /* Process std::meta::is_variable.
    Returns: true if r represents a variable.  Otherwise, false.  */
 
@@ -2281,6 +2299,11 @@ eval_is_operator_function (tree r)
       && DECL_OVERLOADED_OPERATOR_P (r)
       && !DECL_CONV_FN_P (r))
     return boolean_true_node;
+  /* A template-argument function is an operator function
+     ([over.oper.general]).  */
+  else if (TREE_CODE (r) == FUNCTION_DECL
+	   && DECL_NAME (r) == op_template_identifier)
+    return boolean_true_node;
   else
     return boolean_false_node;
 }
@@ -2522,6 +2545,15 @@ eval_operator_of (location_t loc, const constexpr_ctx *ctx, tree r,
 			    fun, non_constant_p, jump_target);
   r = maybe_get_first_fn (r);
   r = STRIP_TEMPLATE (r);
+  if (DECL_NAME (r) == op_template_identifier)
+    {
+      HOST_WIDE_INT v = meta_op_template_value ();
+      if (v < 0)
+	return throw_exception (loc, ctx, "%<std::meta::operators%> has no "
+				"%<op_template%>", fun, non_constant_p,
+				jump_target);
+      return build_int_cst (ret_type, v);
+    }
   maybe_init_meta_operators (loc);
   int i = IDENTIFIER_ASSIGN_OP_P (DECL_NAME (r)) ? 1 : 0;
   int j = IDENTIFIER_CP_INDEX (DECL_NAME (r));
@@ -2571,6 +2603,18 @@ eval_symbol_of (location_t loc, const constexpr_ctx *ctx, tree expr,
 			      fun, non_constant_p, jump_target);
     }
   unsigned HOST_WIDE_INT val = tree_to_uhwi (expr);
+  HOST_WIDE_INT opt = meta_op_template_value ();
+  if (opt >= 0 && val == (unsigned HOST_WIDE_INT) opt)
+    {
+      tree str = get_string_literal ("template", elt_type);
+      gcc_checking_assert (str);
+      releasing_vec args (make_tree_vector_single (str));
+      tree r = build_special_member_call (NULL_TREE,
+					  complete_ctor_identifier,
+					  &args, ret_type, LOOKUP_NORMAL,
+					  tf_warning_or_error);
+      return build_cplus_new (ret_type, r, tf_warning_or_error);
+    }
   for (int i = 0; i < 2; ++i)
     for (int j = OVL_OP_ERROR_MARK + 1; j < OVL_OP_MAX; ++j)
       if (ovl_op_info[i][j].meta_name && meta_operators[i][j] == val)
@@ -7856,7 +7900,11 @@ extract_member_or_function (location_t loc, const constexpr_ctx *ctx,
 			    bool *non_constant_p, tree *jump_target, tree fun)
 {
   r = MAYBE_BASELINK_FUNCTIONS (r);
-  if (!can_extract_member_or_function_p (T, r, kind))
+  if (!can_extract_member_or_function_p (T, r, kind)
+      /* A template-argument function can't be named
+	 ([meta.reflection.extract]/7).  */
+      || (TREE_CODE (r) == FUNCTION_DECL
+	  && DECL_NAME (r) == op_template_identifier))
     return throw_exception (loc, ctx, "value cannot be extracted", fun,
 			    non_constant_p, jump_target);
 
