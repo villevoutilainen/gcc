@@ -2083,6 +2083,114 @@ cp_invalidate_symbolic_records_for_call (tree *stmt_p, cp_genericize_data *wtd)
   return true;
 }
 
+/* -fcontract-symbolic-runtime-checks: storage that a call gives, which
+   holds no object yet -- from a replaceable operator new, malloc, calloc,
+   realloc or aligned_alloc -- or in which it creates objects implicitly --
+   std::start_lifetime_as and std::start_lifetime_as_array -- has no
+   symbolic records: objects that lived there before, released without
+   their records being cleared, aren't the new ones (P4445 2.3.2.3).
+   Clear its range after the call.  Returns true if *STMT_P was wrapped
+   so.  */
+
+static bool
+cp_invalidate_symbolic_records_for_storage_call (tree *stmt_p,
+						 cp_genericize_data *wtd)
+{
+  tree call = *stmt_p;
+  if (wtd->symbolic_wrapped && wtd->symbolic_wrapped->contains (call))
+    return false;
+  tree fn = cp_get_callee_fndecl_nofold (call);
+  if (!fn || !POINTER_TYPE_P (TREE_TYPE (call)))
+    return false;
+  int nargs = call_expr_nargs (call);
+  tree size = NULL_TREE;
+  /* The argument that is the size, saved for the clearing.  */
+  int size_arg = -1;
+  if (DECL_IS_REPLACEABLE_OPERATOR_NEW_P (fn) && nargs >= 1)
+    size_arg = 0;
+  else if ((fndecl_built_in_p (fn, BUILT_IN_MALLOC) && nargs == 1)
+	   || (fndecl_built_in_p (fn, BUILT_IN_REALLOC) && nargs == 2)
+	   || (fndecl_built_in_p (fn, BUILT_IN_ALIGNED_ALLOC) && nargs == 2))
+    size_arg = nargs - 1;
+  if (size_arg >= 0)
+    {
+      tree &arg = CALL_EXPR_ARG (call, size_arg);
+      arg = save_expr (arg);
+      size = arg;
+    }
+  else if (fndecl_built_in_p (fn, BUILT_IN_CALLOC) && nargs == 2)
+    {
+      CALL_EXPR_ARG (call, 0) = save_expr (CALL_EXPR_ARG (call, 0));
+      CALL_EXPR_ARG (call, 1) = save_expr (CALL_EXPR_ARG (call, 1));
+      size = build2 (MULT_EXPR, size_type_node,
+		     fold_convert (size_type_node, CALL_EXPR_ARG (call, 0)),
+		     fold_convert (size_type_node, CALL_EXPR_ARG (call, 1)));
+    }
+  else if (DECL_NAME (fn) && decl_in_std_namespace_p (fn)
+	   && (id_equal (DECL_NAME (fn), "start_lifetime_as")
+	       || id_equal (DECL_NAME (fn), "start_lifetime_as_array"))
+	   && COMPLETE_TYPE_P (TREE_TYPE (TREE_TYPE (call))))
+    {
+      size = size_in_bytes (TREE_TYPE (TREE_TYPE (call)));
+      if (id_equal (DECL_NAME (fn), "start_lifetime_as_array") && nargs == 2)
+	{
+	  CALL_EXPR_ARG (call, 1) = save_expr (CALL_EXPR_ARG (call, 1));
+	  size = build2 (MULT_EXPR, size_type_node, size,
+			 fold_convert (size_type_node,
+				       CALL_EXPR_ARG (call, 1)));
+	}
+    }
+  if (!size)
+    return false;
+  location_t loc = EXPR_LOCATION (call);
+  tree val = save_expr (call);
+  tree clear = build_symbolic_invalidate_range_call (loc, val, size,
+						     /*quiet=*/true);
+  if (!clear)
+    return false;
+  if (!wtd->symbolic_wrapped)
+    wtd->symbolic_wrapped = new hash_set<tree>;
+  wtd->symbolic_wrapped->add (call);
+  *stmt_p = build2_loc (loc, COMPOUND_EXPR, TREE_TYPE (call),
+			build2 (COMPOUND_EXPR, void_type_node, val, clear),
+			val);
+  return true;
+}
+
+/* -fcontract-symbolic-runtime-checks: assigning a member of a union makes
+   it the active one, ending the previously active one's lifetime, so the
+   symbolic records of the union's storage end (P4445 2.3.2.3).  Returns
+   true if *STMT_P, the assignment, was wrapped so.  */
+
+static bool
+cp_invalidate_symbolic_records_for_union_store (tree *stmt_p,
+						cp_genericize_data *wtd)
+{
+  tree stmt = *stmt_p;
+  tree lhs = TREE_OPERAND (stmt, 0);
+  if (TREE_CODE (lhs) != COMPONENT_REF
+      || TREE_CODE (TREE_TYPE (TREE_OPERAND (lhs, 0))) != UNION_TYPE
+      || TREE_CLOBBER_P (TREE_OPERAND (stmt, 1))
+      || (wtd->symbolic_wrapped && wtd->symbolic_wrapped->contains (stmt)))
+    return false;
+  tree u = TREE_OPERAND (lhs, 0);
+  if (!COMPLETE_TYPE_P (TREE_TYPE (u)))
+    return false;
+  tree addr = cp_build_addr_expr (u, tf_none);
+  if (addr == error_mark_node)
+    return false;
+  tree clear = build_symbolic_invalidate_range_call
+    (EXPR_LOCATION (stmt), addr, size_in_bytes (TREE_TYPE (u)),
+     !type_has_symbolic_predicate_p (TREE_TYPE (u)));
+  if (!clear)
+    return false;
+  if (!wtd->symbolic_wrapped)
+    wtd->symbolic_wrapped = new hash_set<tree>;
+  wtd->symbolic_wrapped->add (stmt);
+  *stmt_p = build2 (COMPOUND_EXPR, TREE_TYPE (stmt), clear, stmt);
+  return true;
+}
+
 /* -fcontract-symbolic-runtime-checks: the symbolic records of an object of
    BIND's scope whose type type_has_symbolic_predicate_p is true for end
    with it.  Its storage may be reused for another object, which mustn't
@@ -2101,12 +2209,17 @@ cp_invalidate_symbolic_records_at_scope_end (tree bind)
     if (VAR_P (v) && !TREE_STATIC (v) && !DECL_EXTERNAL (v)
 	&& !DECL_HAS_VALUE_EXPR_P (v)
 	&& DECL_CONTEXT (v) == current_function_decl
-	&& type_has_symbolic_predicate_p (TREE_TYPE (v)))
+	&& COMPLETE_TYPE_P (TREE_TYPE (v))
+	/* Or of any type, if its address is taken: a free symbolic
+	   function can describe an int (P4445 2.3.2.3).  */
+	&& (type_has_symbolic_predicate_p (TREE_TYPE (v))
+	    || TREE_ADDRESSABLE (v)))
       {
+	bool sym = type_has_symbolic_predicate_p (TREE_TYPE (v));
 	cxx_mark_addressable (v);
 	if (tree call = build_symbolic_invalidate_range_call
 	      (DECL_SOURCE_LOCATION (v), build_address (v),
-	       size_in_bytes (TREE_TYPE (v))))
+	       size_in_bytes (TREE_TYPE (v)), !sym))
 	  append_to_statement_list (call, &cleanups);
       }
   if (cleanups)
@@ -2785,6 +2898,10 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
 	  && TREE_CODE (*stmt_p) == CALL_EXPR
 	  && cp_invalidate_symbolic_records_for_call (stmt_p, wtd))
 	return cp_genericize_r (stmt_p, walk_subtrees, data);
+      if (flag_contract_symbolic_runtime_checks
+	  && TREE_CODE (*stmt_p) == CALL_EXPR
+	  && cp_invalidate_symbolic_records_for_storage_call (stmt_p, wtd))
+	return cp_genericize_r (stmt_p, walk_subtrees, data);
       if (tree fn = cp_get_callee_fndecl_nofold (stmt))
 	if (tree call = maybe_replace_d4324_violation_handler_call (stmt, fn))
 	  {
@@ -2979,6 +3096,9 @@ cp_genericize_r (tree *stmt_p, int *walk_subtrees, void *data)
       break;
 
     case MODIFY_EXPR:
+      if (flag_contract_symbolic_runtime_checks
+	  && cp_invalidate_symbolic_records_for_union_store (stmt_p, wtd))
+	return cp_genericize_r (stmt_p, walk_subtrees, data);
       /* Mark stores to parts of complex automatic non-addressable
 	 variables as DECL_NOT_GIMPLE_REG_P for -O0.  This can't be
 	 done during gimplification.  See PR119120.  */

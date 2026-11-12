@@ -1121,7 +1121,11 @@ extern tree build_symbolic_invalidate_object_call (location_t, tree);
    type_has_symbolic_predicate_p (decl.cc) is true for ends its
    lifetime: the end of an automatic object's or a temporary's scope
    (cp_genericize_r) and a delete-expression (init.cc, optimize.cc).  */
-extern tree build_symbolic_invalidate_range_call (location_t, tree, tree);
+/* QUIET: return NULL_TREE without a diagnostic if <contracts> hasn't
+   declared the run-time entry point, for a site that involves no type
+   with a symbolic predicate, where there can't be a record yet.  */
+extern tree build_symbolic_invalidate_range_call (location_t, tree, tree,
+						  bool quiet = false);
 /* -fcontract-symbolic-runtime-checks: calls of
    __contracts_symbolic_epoch, and of
    __contracts_symbolic_invalidate_range_before (ADDR, SIZE, EPOCH), which

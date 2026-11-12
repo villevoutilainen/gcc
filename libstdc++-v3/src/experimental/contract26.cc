@@ -187,8 +187,38 @@ namespace
 
   std::mutex symbolic_mutex;
   unsigned long long symbolic_epoch;
-  std::unordered_map<symbolic_record_key, symbolic_record_value,
-		      symbolic_record_key_hash> symbolic_records;
+
+  // Whether this thread is inside a record operation.  Recording a fact
+  // can allocate while symbolic_mutex is held, and an allocation in a
+  // translation unit built with -fcontract-symbolic-runtime-checks clears
+  // the records of the storage it gives -- a replacement operator new, or
+  // one with a local whose type declares a symbolic predicate, would
+  // otherwise deadlock on the mutex (P4445 2.3.2.3).  Such a nested call
+  // concerns storage the outer operation just allocated, which has no
+  // records: it does nothing.
+  thread_local bool symbolic_busy;
+
+  struct symbolic_entry
+  {
+    bool ok;
+    symbolic_entry() noexcept : ok(!symbolic_busy) { symbolic_busy = true; }
+    ~symbolic_entry() { if (ok) symbolic_busy = false; }
+  };
+  using symbolic_record_map
+    = std::unordered_map<symbolic_record_key, symbolic_record_value,
+			 symbolic_record_key_hash>;
+
+  // The records, constructed on first use and never destroyed: a fact can
+  // be established or cleared by a constructor or destructor of a global
+  // object, before this library's own static initialization or after its
+  // static destruction (P4445 2.3.2.3).  symbolic_mutex needs neither: it
+  // is constant-initialized.
+  symbolic_record_map&
+  symbolic_records()
+  {
+    static symbolic_record_map* records = new symbolic_record_map;
+    return *records;
+  }
 
   // A relation's record (symbolic facts about several objects and
   // values): keyed by the predicate's tag and, for each argument, an
@@ -204,7 +234,15 @@ namespace
     unsigned long long epoch;
   };
 
-  std::unordered_map<std::string, symbolic_relation_value> symbolic_relations;
+  using symbolic_relation_map
+    = std::unordered_map<std::string, symbolic_relation_value>;
+
+  symbolic_relation_map&
+  symbolic_relations()
+  {
+    static symbolic_relation_map* relations = new symbolic_relation_map;
+    return *relations;
+  }
 
   std::string
   relation_key(const void* key, unsigned n, const void* const* args,
@@ -235,21 +273,27 @@ void
 __contracts_symbolic_establish_bool(const void* key, const void* obj,
 				     bool polarity) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return;
   symbolic_record_value v{};
   v.is_range = false;
   v.bool_val = polarity;
   std::lock_guard<std::mutex> lock(symbolic_mutex);
   v.epoch = ++symbolic_epoch;
-  symbolic_records[symbolic_record_key{key, obj}] = v;
+  symbolic_records()[symbolic_record_key{key, obj}] = v;
 }
 
 bool
 __contracts_symbolic_check_bool(const void* key, const void* obj,
 				 bool polarity) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return false;
   std::lock_guard<std::mutex> lock(symbolic_mutex);
-  auto it = symbolic_records.find(symbolic_record_key{key, obj});
-  if (it == symbolic_records.end() || it->second.is_range)
+  auto it = symbolic_records().find(symbolic_record_key{key, obj});
+  if (it == symbolic_records().end() || it->second.is_range)
     return false;
   return it->second.bool_val == polarity;
 }
@@ -259,6 +303,9 @@ __contracts_symbolic_establish_range(const void* key, const void* obj,
 				      bool has_lo, long long lo,
 				      bool has_hi, long long hi) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return;
   symbolic_record_value v{};
   v.is_range = true;
   v.has_lo = has_lo;
@@ -267,7 +314,7 @@ __contracts_symbolic_establish_range(const void* key, const void* obj,
   v.hi = hi;
   std::lock_guard<std::mutex> lock(symbolic_mutex);
   v.epoch = ++symbolic_epoch;
-  symbolic_records[symbolic_record_key{key, obj}] = v;
+  symbolic_records()[symbolic_record_key{key, obj}] = v;
 }
 
 bool
@@ -275,9 +322,12 @@ __contracts_symbolic_check_range(const void* key, const void* obj,
 				  bool has_lo, long long lo,
 				  bool has_hi, long long hi) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return false;
   std::lock_guard<std::mutex> lock(symbolic_mutex);
-  auto it = symbolic_records.find(symbolic_record_key{key, obj});
-  if (it == symbolic_records.end() || !it->second.is_range)
+  auto it = symbolic_records().find(symbolic_record_key{key, obj});
+  if (it == symbolic_records().end() || !it->second.is_range)
     return false;
   const symbolic_record_value& est = it->second;
   // The established range must entail (be a subset of) the required
@@ -299,13 +349,16 @@ __contracts_symbolic_establish_relation(const void* key, unsigned n,
 					 bool polarity,
 					 const void* scope) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return;
   const void* args[4] = { a0, a1, a2, a3 };
   const std::size_t sizes[4] = { s0, s1, s2, s3 };
   symbolic_relation_value v{polarity, scope, {}, 0};
   std::string k = relation_key(key, n, args, sizes, &v.objs);
   std::lock_guard<std::mutex> lock(symbolic_mutex);
   v.epoch = ++symbolic_epoch;
-  symbolic_relations[std::move(k)] = std::move(v);
+  symbolic_relations()[std::move(k)] = std::move(v);
 }
 
 bool
@@ -316,19 +369,25 @@ __contracts_symbolic_check_relation(const void* key, unsigned n,
 				     const void* a3, std::size_t s3,
 				     bool polarity) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return false;
   const void* args[4] = { a0, a1, a2, a3 };
   const std::size_t sizes[4] = { s0, s1, s2, s3 };
   std::string k = relation_key(key, n, args, sizes, nullptr);
   std::lock_guard<std::mutex> lock(symbolic_mutex);
-  auto it = symbolic_relations.find(k);
-  return it != symbolic_relations.end() && it->second.polarity == polarity;
+  auto it = symbolic_relations().find(k);
+  return it != symbolic_relations().end() && it->second.polarity == polarity;
 }
 
 void
 __contracts_symbolic_end_scope(const void* scope) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return;
   std::lock_guard<std::mutex> lock(symbolic_mutex);
-  std::erase_if(symbolic_relations,
+  std::erase_if(symbolic_relations(),
 		[scope](const auto& entry)
 		{ return entry.second.scope == scope; });
 }
@@ -336,10 +395,13 @@ __contracts_symbolic_end_scope(const void* scope) noexcept
 void
 __contracts_symbolic_invalidate_object(const void* obj) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return;
   std::lock_guard<std::mutex> lock(symbolic_mutex);
-  std::erase_if(symbolic_records,
+  std::erase_if(symbolic_records(),
 		[obj](const auto& entry) { return entry.first.obj == obj; });
-  std::erase_if(symbolic_relations,
+  std::erase_if(symbolic_relations(),
 		[obj](const auto& entry)
 		{
 		  for (const void* o : entry.second.objs)
@@ -352,6 +414,9 @@ __contracts_symbolic_invalidate_object(const void* obj) noexcept
 unsigned long long
 __contracts_symbolic_epoch() noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return 0;
   std::lock_guard<std::mutex> lock(symbolic_mutex);
   return symbolic_epoch;
 }
@@ -361,14 +426,17 @@ __contracts_symbolic_invalidate_range_before(const void* obj,
 					     std::size_t size,
 					     unsigned long long epoch) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return;
   auto first = reinterpret_cast<std::uintptr_t>(obj);
   std::lock_guard<std::mutex> lock(symbolic_mutex);
-  std::erase_if(symbolic_records,
+  std::erase_if(symbolic_records(),
 		[first, size, epoch](const auto& entry) {
 		  auto addr = reinterpret_cast<std::uintptr_t>(entry.first.obj);
 		  return addr - first < size && entry.second.epoch <= epoch;
 		});
-  std::erase_if(symbolic_relations,
+  std::erase_if(symbolic_relations(),
 		[first, size, epoch](const auto& entry)
 		{
 		  if (entry.second.epoch > epoch)
@@ -384,14 +452,17 @@ void
 __contracts_symbolic_invalidate_range(const void* obj,
 				      std::size_t size) noexcept
 {
+  symbolic_entry entry;
+  if (!entry.ok)
+    return;
   auto first = reinterpret_cast<std::uintptr_t>(obj);
   std::lock_guard<std::mutex> lock(symbolic_mutex);
-  std::erase_if(symbolic_records,
+  std::erase_if(symbolic_records(),
 		[first, size](const auto& entry) {
 		  auto addr = reinterpret_cast<std::uintptr_t>(entry.first.obj);
 		  return addr - first < size;
 		});
-  std::erase_if(symbolic_relations,
+  std::erase_if(symbolic_relations(),
 		[first, size](const auto& entry)
 		{
 		  for (const void* o : entry.second.objs)

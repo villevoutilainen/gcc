@@ -6082,7 +6082,8 @@ build_contract_handler_call (tree violation)
    per compilation.  */
 
 static tree
-lookup_symbolic_runtime_fn (location_t loc, tree *cache, const char *name)
+lookup_symbolic_runtime_fn (location_t loc, tree *cache, const char *name,
+			    bool quiet = false)
 {
   if (*cache)
     return *cache;
@@ -6096,9 +6097,11 @@ lookup_symbolic_runtime_fn (location_t loc, tree *cache, const char *name)
 
   if (!res || res == error_mark_node || TREE_CODE (res) != FUNCTION_DECL)
     {
-      error_at (loc, "%<std::contracts::%s%> has not been declared; "
-		"include %<<contracts>%> before using %qs", name,
-		"-fcontract-symbolic-runtime-checks");
+      /* QUIET: there can't be a record to clear yet.  */
+      if (!quiet)
+	error_at (loc, "%<std::contracts::%s%> has not been declared; "
+		  "include %<<contracts>%> before using %qs", name,
+		  "-fcontract-symbolic-runtime-checks");
       return error_mark_node;
     }
   *cache = res;
@@ -6208,10 +6211,12 @@ build_symbolic_invalidate_range_before_call (location_t loc, tree addr,
 /* See contracts.h.  */
 
 tree
-build_symbolic_invalidate_range_call (location_t loc, tree addr, tree size)
+build_symbolic_invalidate_range_call (location_t loc, tree addr, tree size,
+				      bool quiet)
 {
   tree fn = lookup_symbolic_runtime_fn (loc, &symbolic_invalidate_range_decl,
-					"__contracts_symbolic_invalidate_range");
+					"__contracts_symbolic_invalidate_range",
+					quiet);
   if (fn == error_mark_node)
     return NULL_TREE;
 

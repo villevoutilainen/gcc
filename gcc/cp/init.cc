@@ -3667,8 +3667,7 @@ build_new_1 (vec<tree, va_gc> **placement, tree type, tree nelts,
   /* -fcontract-symbolic-runtime-checks: see the clearing of the new
      objects' symbolic records below.  */
   const bool clear_symbolic
-    = (flag_contract_symbolic_runtime_checks && !processing_template_decl
-       && type_has_symbolic_predicate_p (elt_type));
+    = (flag_contract_symbolic_runtime_checks && !processing_template_decl);
 
   /* In the simple case, we can stop now.  */
   pointer_type = build_pointer_type (type);
@@ -4041,14 +4040,18 @@ build_new_1 (vec<tree, va_gc> **placement, tree type, tree nelts,
   if (clobber_expr)
     rval = build2 (COMPOUND_EXPR, TREE_TYPE (rval), clobber_expr, rval);
   /* -fcontract-symbolic-runtime-checks: the objects begin their lifetime
-     with no symbolic records, whatever storage they're created in:
+     with no symbolic records, whatever their type -- an object of any type
+     created there ends the ones before it, which may have had them, as may
+     an int a free symbolic function describes -- whatever storage they're
+     created in:
      records left at its addresses by objects that lived there before
      aren't theirs.  Storage reused without a delete-expression ending
      its previous objects' -- by an allocator, a placement new -- still
      starts clean (see build_symbolic_invalidate_range_call).  */
   if (clear_symbolic)
-    if (tree call = build_symbolic_invalidate_range_call (input_location,
-							  alloc_node, size))
+    if (tree call = build_symbolic_invalidate_range_call
+	  (input_location, alloc_node, size,
+	   !type_has_symbolic_predicate_p (elt_type)))
       rval = build2 (COMPOUND_EXPR, TREE_TYPE (rval), call, rval);
   if (cookie_expr)
     rval = build2 (COMPOUND_EXPR, TREE_TYPE (rval), cookie_expr, rval);

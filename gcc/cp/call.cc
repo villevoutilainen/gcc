@@ -10338,8 +10338,20 @@ build_trivial_dtor_call (tree instance, bool no_ptr_deref)
 
   /* A trivial destructor should still clobber the object.  */
   tree clobber = build_clobber (TREE_TYPE (instance), CLOBBER_OBJECT_END);
-  return build2 (MODIFY_EXPR, void_type_node,
-		 instance, clobber);
+  tree end = build2 (MODIFY_EXPR, void_type_node, instance, clobber);
+  /* -fcontract-symbolic-runtime-checks: the object's symbolic records end
+     with it (P4445 2.3.2.3), whatever its type.  */
+  if (flag_contract_symbolic_runtime_checks && !processing_template_decl
+      /* Not in an unevaluated operand, such as a trait's, which recognizes
+	 a trivial destructor call by this shape.  */
+      && !cp_unevaluated_operand
+      && COMPLETE_TYPE_P (TREE_TYPE (instance)))
+    if (tree call = build_symbolic_invalidate_range_call
+	  (input_location, cp_build_addr_expr (instance, tf_none),
+	   size_in_bytes (TREE_TYPE (instance)),
+	   !type_has_symbolic_predicate_p (TREE_TYPE (instance))))
+      end = build2 (COMPOUND_EXPR, void_type_node, call, end);
+  return end;
 }
 
 /* Return true if in an immediate function context, or an unevaluated operand,
