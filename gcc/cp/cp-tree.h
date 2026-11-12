@@ -8588,6 +8588,9 @@ extern tree dependent_alias_template_spec_p     (const_tree, bool);
 extern bool dependent_opaque_alias_p            (const_tree);
 extern tree get_template_parm_object		(tree expr, tree mangle,
 						 bool check_init = true);
+extern tree tparm_object_value		(tree);
+extern tree tparm_object_key			(tree);
+extern void set_tparm_object_key		(tree, tree);
 extern tree tparm_object_argument		(tree);
 extern bool explicit_class_specialization_p     (tree);
 extern bool push_tinst_level                    (tree);

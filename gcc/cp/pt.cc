@@ -7705,13 +7705,146 @@ create_template_parm_object (tree expr, tsubst_flags_t complain)
 
 static GTY(()) hash_map<tree, tree> *tparm_obj_keys;
 
+/* True if TYPE, a class or array, has a subobject whose class is
+   structural only through a user-provided conversion to std::meta::info
+   (-freflection-structural-metainfo-conversion), at any depth.  */
+
+static bool
+has_metainfo_conversion_subobject_p (tree type)
+{
+  if (TREE_CODE (type) == ARRAY_TYPE)
+    {
+      tree elt = strip_array_types (type);
+      return (metainfo_conversion_structural_p (elt)
+	      || has_metainfo_conversion_subobject_p (elt));
+    }
+  if (!CLASS_TYPE_P (type))
+    return false;
+  for (tree f = next_aggregate_field (TYPE_FIELDS (type)); f;
+       f = next_aggregate_field (DECL_CHAIN (f)))
+    {
+      tree ftype = strip_array_types (TREE_TYPE (f));
+      if (metainfo_conversion_structural_p (ftype)
+	  || has_metainfo_conversion_subobject_p (ftype))
+	return true;
+    }
+  return false;
+}
+
+/* The key T{R} of VALUE, of class TYPE that is structural only through a
+   user-provided conversion to std::meta::info giving R; *CANON is set to
+   the value of the object R reflects, which must be a variable of type
+   const TYPE with static storage duration, usable in constant expressions:
+   the canonical value equivalent to VALUE.  */
+
+static tree
+metainfo_conversion_key (tree type, tree value, tsubst_flags_t complain,
+			 tree *canon)
+{
+  tree conv = NULL_TREE;
+  for (tree f = TYPE_FIELDS (TYPE_MAIN_VARIANT (type)); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FUNCTION_DECL && reflect_constant_fn_p (f)
+	&& !DECL_DEFAULTED_FN (f) && !DECL_DELETED_FN (f))
+      {
+	conv = f;
+	break;
+      }
+  gcc_checking_assert (conv);
+  tree info_type = DECL_CONV_FN_TYPE (conv);
+  tree obj = force_target_expr (type, unshare_expr (value), complain);
+  tree call = build_static_cast (input_location, info_type, obj, complain);
+  if (call == error_mark_node)
+    return error_mark_node;
+  tree r = cxx_constant_value (call, complain);
+  if (r == error_mark_node)
+    return error_mark_node;
+  tree h = TREE_CODE (r) == REFLECT_EXPR ? REFLECT_EXPR_HANDLE (r) : NULL_TREE;
+  if (!h
+      || !VAR_P (h)
+      || !TREE_STATIC (h)
+      || CP_DECL_THREAD_LOCAL_P (h)
+      || !CP_TYPE_CONST_P (TREE_TYPE (h))
+      || !same_type_ignoring_top_level_qualifiers_p (TREE_TYPE (h), type)
+      || !decl_constant_var_p (h))
+    {
+      if (complain & tf_error)
+	{
+	  auto_diagnostic_group d;
+	  error ("%qD must give a reflection of a variable of type %qT "
+		 "with static storage duration, usable in constant "
+		 "expressions", conv, cp_build_qualified_type (type,
+							       TYPE_QUAL_CONST));
+	  inform (DECL_SOURCE_LOCATION (conv), "its value is the template "
+		  "parameter object of every argument it is given for");
+	}
+      return error_mark_node;
+    }
+  tree v = cxx_constant_value (h, complain);
+  if (v == error_mark_node)
+    return error_mark_node;
+  if (TREE_CODE (v) == TARGET_EXPR)
+    v = TARGET_EXPR_INITIAL (v);
+  *canon = v;
+  tree key = build_constructor_single (TYPE_MAIN_VARIANT (type), NULL_TREE, r);
+  TREE_HAS_CONSTRUCTOR (key) = 1;
+  return key;
+}
+
+/* VALUE, of TYPE, for mangling and comparison as a template argument: each
+   subobject, or VALUE itself, whose class is structural only through a
+   user-provided conversion to std::meta::info is replaced by its key T{R};
+   VALUE itself if there is none.  *CANON is set to VALUE with each such
+   object replaced by its canonical value instead (metainfo_conversion_key):
+   the value of the template parameter object, the same for every
+   equivalent argument.  */
+
+static tree
+normalize_metainfo_conversion_value (tree type, tree value,
+				     tsubst_flags_t complain, tree *canon)
+{
+  *canon = value;
+  if (metainfo_conversion_structural_p (type))
+    return metainfo_conversion_key (type, value, complain, canon);
+  if (TREE_CODE (value) != CONSTRUCTOR
+      || !has_metainfo_conversion_subobject_p (type))
+    return value;
+
+  tree key = copy_node (value);
+  CONSTRUCTOR_ELTS (key) = vec_safe_copy (CONSTRUCTOR_ELTS (value));
+  tree cvalue = copy_node (value);
+  CONSTRUCTOR_ELTS (cvalue) = vec_safe_copy (CONSTRUCTOR_ELTS (value));
+  constructor_elt *ce;
+  for (unsigned HOST_WIDE_INT ix = 0;
+       vec_safe_iterate (CONSTRUCTOR_ELTS (key), ix, &ce); ++ix)
+    {
+      tree etype;
+      if (TREE_CODE (type) == ARRAY_TYPE)
+	etype = TREE_TYPE (type);
+      else if (ce->index && TREE_CODE (ce->index) == FIELD_DECL)
+	etype = TREE_TYPE (ce->index);
+      else
+	continue;
+      tree c;
+      tree k = normalize_metainfo_conversion_value (etype, ce->value,
+						    complain, &c);
+      if (k == error_mark_node)
+	return error_mark_node;
+      ce->value = k;
+      (*CONSTRUCTOR_ELTS (cvalue))[ix].value = c;
+    }
+  *canon = cvalue;
+  return key;
+}
+
 /* Return a VAR_DECL for the template parameter object corresponding to
    template argument EXPR of class TYPE, which is structural only through a
-   user-provided conversion to std::meta::info
+   user-provided conversion to std::meta::info, or has a subobject that is
    (-freflection-structural-metainfo-conversion).  Two arguments are
-   template-argument-equivalent if that conversion gives the same
-   reflection R for both, so the object is found by T{R}; the first
-   argument found for it is copied into it.  */
+   template-argument-equivalent if their values agree once each such
+   object is replaced by its key T{R}, R being what its conversion gives,
+   so the object is found by that key; its value has each such object
+   replaced by the value of the variable R reflects, so that it is the same
+   for every equivalent argument, wherever it is created.  */
 
 static tree
 create_metainfo_conversion_tparm_object (tree type, tree expr,
@@ -7728,42 +7861,42 @@ create_metainfo_conversion_tparm_object (tree type, tree expr,
       return error_mark_node;
     }
 
-  tree conv = NULL_TREE;
-  for (tree f = TYPE_FIELDS (TYPE_MAIN_VARIANT (type)); f; f = DECL_CHAIN (f))
-    if (TREE_CODE (f) == FUNCTION_DECL && reflect_constant_fn_p (f)
-	&& !DECL_DEFAULTED_FN (f) && !DECL_DELETED_FN (f))
-      {
-	conv = f;
-	break;
-      }
-  gcc_checking_assert (conv);
-  tree info_type = DECL_CONV_FN_TYPE (conv);
-  tree obj = force_target_expr (type, unshare_expr (expr), complain);
-  tree call = build_static_cast (input_location, info_type, obj, complain);
-  if (call == error_mark_node)
+  tree canon;
+  tree key = normalize_metainfo_conversion_value (type, expr, complain,
+						  &canon);
+  if (key == error_mark_node)
     return error_mark_node;
-  tree r = cxx_constant_value (call, complain);
-  if (r == error_mark_node)
-    return error_mark_node;
-  if (TREE_CODE (r) != REFLECT_EXPR)
-    {
-      if (complain & tf_error)
-	error ("%qD did not give a reflection constant", conv);
-      return error_mark_node;
-    }
-
-  tree key = build_constructor_single (TYPE_MAIN_VARIANT (type), NULL_TREE, r);
-  TREE_HAS_CONSTRUCTOR (key) = 1;
   tree name = mangle_template_parm_object (key);
   if (tree decl = get_global_binding (name))
     return decl;
 
-  if (invalid_tparm_referent_p (type, expr, complain))
+  if (invalid_tparm_referent_p (type, canon, complain))
     return error_mark_node;
-  tree decl = get_template_parm_object (expr, name);
+  tree decl = get_template_parm_object (canon, name);
   if (decl != error_mark_node)
     hash_map_safe_put<hm_ggc> (tparm_obj_keys, decl, key);
   return decl;
+}
+
+/* The key of template parameter object VAR, if it has one
+   (create_metainfo_conversion_tparm_object), otherwise NULL_TREE.  */
+
+tree
+tparm_object_key (tree var)
+{
+  if (tparm_obj_keys)
+    if (tree *key = tparm_obj_keys->get (var))
+      return *key;
+  return NULL_TREE;
+}
+
+/* Record KEY as the key of template parameter object VAR, read from a
+   module.  */
+
+void
+set_tparm_object_key (tree var, tree key)
+{
+  hash_map_safe_put<hm_ggc> (tparm_obj_keys, var, key);
 }
 
 /* The template arguments corresponding to template parameter objects of types
@@ -7832,9 +7965,16 @@ get_template_parm_object (tree expr, tree name, bool check_init/*=true*/)
 tree
 tparm_object_argument (tree var)
 {
-  if (tparm_obj_keys)
-    if (tree *key = tparm_obj_keys->get (var))
-      return *key;
+  if (tree key = tparm_object_key (var))
+    return key;
+  return tparm_object_value (var);
+}
+
+/* The value template parameter object VAR was initialized with.  */
+
+tree
+tparm_object_value (tree var)
+{
   if (zero_init_p (TREE_TYPE (var)))
     return DECL_INITIAL (var);
   return *(tparm_obj_values->get (var));
@@ -8308,7 +8448,9 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
 	 parameter object.  */
       if (!val_dep_p)
 	{
-	  if (metainfo_conversion_structural_p (type))
+	  if (metainfo_conversion_structural_p (type)
+	      || (flag_reflection_structural_metainfo_conversion
+		  && has_metainfo_conversion_subobject_p (type)))
 	    expr = create_metainfo_conversion_tparm_object (type, expr,
 							   complain);
 	  else

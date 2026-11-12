@@ -5408,16 +5408,14 @@ static bool ordinary_structural_type_p (tree, bool);
    non-type template parameter.  If EXPLAIN, explain why not.  With
    -freflection-structural-metainfo-conversion, a literal class with a
    user-provided conversion to std::meta::info is one too
-   (metainfo_conversion_structural_p); not as a subobject, though, whose
-   value would be compared member-wise.  */
-
-static int structural_subobject_depth;
+   (metainfo_conversion_structural_p), also as a subobject: such a
+   subobject is compared by its conversion's result
+   (normalize_metainfo_conversion_value in pt.cc).  */
 
 bool
 structural_type_p (tree t, bool explain)
 {
-  if (structural_subobject_depth == 0
-      && metainfo_conversion_structural_p (t))
+  if (metainfo_conversion_structural_p (t))
     {
       if (literal_type_p (t))
 	return true;
@@ -5524,10 +5522,7 @@ ordinary_structural_type_p (tree t, bool explain)
 	  return false;
 	}
       tree mtype = strip_array_types (TREE_TYPE (m));
-      ++structural_subobject_depth;
-      bool sub_ok = structural_type_p (mtype);
-      --structural_subobject_depth;
-      if (!sub_ok)
+      if (!structural_type_p (mtype))
 	{
 	  if (explain)
 	    {
@@ -5536,9 +5531,7 @@ ordinary_structural_type_p (tree t, bool explain)
 			"type", TREE_TYPE (m));
 	      else
 		inform (location_of (m), "%qD has a non-structural type", m);
-	      ++structural_subobject_depth;
 	      structural_type_p (mtype, true);
-	      --structural_subobject_depth;
 	    }
 	  return false;
 	}

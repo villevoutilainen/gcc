@@ -8,16 +8,18 @@
 #include <type_traits>
 
 // User-provided, of dependent type.
-template <auto V>
+template <typename R> class Wrap;
+template <typename R> constexpr Wrap<R> wrap_canon {};
+template <typename R>
 class Wrap
 {
   int x = 0;
 public:
-  consteval explicit operator decltype (V) () const { return V; }
+  consteval explicit operator R () const { return ^^wrap_canon<R>; }
 };
-template <Wrap<^^int> W> struct A {};
-static_assert (std::is_same_v<A<Wrap<^^int>{}>, A<Wrap<^^int>{}>>);
-template <Wrap<5> W> struct A5 {};	// { dg-error "not a valid type for a template non-type parameter" }
+template <Wrap<std::meta::info> W> struct A {};
+static_assert (std::is_same_v<A<Wrap<std::meta::info>{}>, A<Wrap<std::meta::info>{}>>);
+template <Wrap<int> W> struct A5 {};	// { dg-error "not a valid type for a template non-type parameter" }
 
 // Defaulted, of dependent type.
 template <typename R>

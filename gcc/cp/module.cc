@@ -9462,7 +9462,8 @@ trees_out::decl_node (tree decl, walk_kind ref)
 	  /* A NTTP parm object.  */
 	  if (streaming_p ())
 	    i (tt_nttp_var);
-	  tree_node (tparm_object_argument (decl));
+	  tree_node (tparm_object_value (decl));
+	  tree_node (tparm_object_key (decl));
 	  tree_node (DECL_NAME (decl));
 	  int tag = insert (decl);
 	  if (streaming_p ())
@@ -10916,6 +10917,7 @@ trees_in::tree_node (bool is_use)
       /* An NTTP object. */
       {
 	tree init = tree_node ();
+	tree key = tree_node ();
 	tree name = tree_node ();
 	if (!get_overrun ())
 	  {
@@ -10924,6 +10926,8 @@ trees_in::tree_node (bool is_use)
 	       Instead we know that INIT is already valid so we can just
 	       apply that directly.  */
 	    res = get_template_parm_object (init, name, /*check_init=*/false);
+	    if (key)
+	      set_tparm_object_key (res, key);
 	    int tag = insert (res);
 	    dump (dumper::TREE)
 	      && dump ("Created nttp object:%d %N", tag, name);

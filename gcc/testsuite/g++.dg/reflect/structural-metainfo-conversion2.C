@@ -2,8 +2,8 @@
 // function to std::meta::info makes a literal class that isn't otherwise
 // structural a structural type, whose values are
 // template-argument-equivalent when the conversion gives the same
-// reflection for them.  The template parameter object is a copy of the
-// first such argument.
+// reflection for them.  That reflection must be of a variable of type
+// const T, whose value is the template parameter object.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-freflection -freflection-structural-metainfo-conversion" }
 
@@ -19,12 +19,18 @@ public:
   consteval Frac (int x, int y) : n (x), d (y) {}
   consteval int num () const { return n; }
   consteval int den () const { return d; }
-  consteval explicit operator std::meta::info () const
-  {
-    int g = gcd (n, d);
-    return std::meta::reflect_constant (std::pair<int, int> (n / g, d / g));
-  }
+  consteval explicit operator std::meta::info () const;
 };
+// The canonical, lowest-terms value: the template parameter object of every
+// equivalent argument.
+template <int N, int D> constexpr Frac frac_canon (N, D);
+consteval Frac::operator std::meta::info () const
+{
+  int g = gcd (n, d);
+  return std::meta::substitute (^^frac_canon,
+				{ std::meta::reflect_constant (n / g),
+				  std::meta::reflect_constant (d / g) });
+}
 
 template <Frac F> struct A
 {
@@ -33,13 +39,13 @@ template <Frac F> struct A
 };
 static_assert (std::is_same_v<A<Frac (1, 2)>, A<Frac (2, 4)>>);
 static_assert (!std::is_same_v<A<Frac (1, 2)>, A<Frac (1, 3)>>);
-// A<Frac (1, 2)> and A<Frac (1, 3)> came first: their arguments are the
-// ones that were copied.
+// The template parameter object is the canonical value, whichever
+// argument came first.
 static_assert (A<Frac (2, 4)>::num == 1);
 static_assert (A<Frac (3, 9)>::num == 1);
 static_assert (A<Frac (3, 9)>::den == 3);
-static_assert (A<Frac (6, 8)>::num == 6);	// first for 3/4
-static_assert (A<Frac (3, 4)>::num == 6);
+static_assert (A<Frac (6, 8)>::num == 3);
+static_assert (A<Frac (6, 8)>::den == 4);
 
 // The key includes the type: an auto parameter tells them apart.
 template <auto V> struct B {};
@@ -61,7 +67,20 @@ struct Pub
 template <Pub V> struct C {};
 static_assert (!std::is_same_v<C<Pub{1}>, C<Pub{2}>>);
 
-// Only as a template parameter's own type, not as a subobject.
+// Also as a subobject, compared by its conversion's result
+// (structural-metainfo-conversion6.C).
 struct Outer { Frac f; };
-template <Outer V> struct D {};	// { dg-error "not a valid type for a template non-type parameter" }
+template <Outer V> struct D {};
+static_assert (std::is_same_v<D<Outer{Frac (1, 2)}>, D<Outer{Frac (2, 4)}>>);
 
+
+// The conversion must give a reflection of a variable of type const T.
+class Bad
+{
+  int x;
+public:
+  consteval Bad (int v) : x (v) {}
+  consteval explicit operator std::meta::info () const { return ^^int; }
+};
+template <Bad V> struct E {};
+E<Bad (1)> e;	// { dg-error "must give a reflection of a variable of type .const Bad." }

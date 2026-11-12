@@ -3914,12 +3914,14 @@ the conversion function makes the class structural regardless of the access
 of its bases and non-static data members, with member-wise
 template-argument-equivalence, and calling it gives the reflection
 @code{std::meta::reflect_constant} gives; deleting it makes the class not
-structural.  A user-provided one makes a literal class that is not otherwise
-structural a structural type whose values are template-argument-equivalent
-when the conversion gives the same reflection for them; the template
-parameter object is a copy of the first such argument.  Such a class is
-structural only as a template parameter's own type, not as a subobject.
-With this option, a member function named @code{reflect_constant} has no
+structural.  A user-provided one makes a literal class @code{T} that is not
+otherwise structural a structural type whose values are
+template-argument-equivalent when the conversion gives the same reflection
+for them.  That reflection must be of a variable of type @code{const T}
+with static storage duration, usable in constant expressions, typically a
+canonical value: its value is the template parameter object's, so that it is
+the same for every equivalent argument.  Such a class is structural as a
+subobject too, compared there in the same way.  With this option, a member function named @code{reflect_constant} has no
 special meaning.  The macro @code{__GXX_REFLECTION_METAINFO_CONVERSION} is
 defined, and libstdc++ defaults the conversion function instead of
 @code{reflect_constant}.
