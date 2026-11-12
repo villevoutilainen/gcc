@@ -10,6 +10,7 @@
 #include <span>
 #include <string_view>
 #include <tuple>
+#include <utility>
 #include <type_traits>
 #include <variant>
 
@@ -36,3 +37,13 @@ static_assert (std::is_same_v<A<std::string_view {str, 3}>,
 // They're found as conversions, not as reflect_constant.
 static_assert (static_cast<std::meta::info> (std::optional<int> (3))
 	       == std::meta::reflect_constant (std::optional<int> (3)));
+
+// std::constant_wrapper has a conversion to std::meta::info when it wraps
+// one, but no non-static data members: it is structural anyway, and its
+// conversion isn't consulted.
+using CW = std::remove_cv_t<decltype (std::cw<^^int>)>;
+static_assert (std::meta::info (std::cw<^^int>) == ^^int);
+static_assert (std::is_same_v<A<std::cw<^^int>>, A<std::cw<^^int>>>);
+static_assert (!std::is_same_v<A<std::cw<^^int>>, A<std::cw<^^float>>>);
+template <CW V> struct B {};
+B<std::cw<^^int>> b;
