@@ -10297,6 +10297,29 @@ cp_parser_reflect_expression (cp_parser *parser)
   /* Get the location of the operand.  */
   const location_t loc = cp_lexer_peek_token (parser->lexer)->location;
 
+  /* A template-argument function can't be named, so not reflected by
+     name either ([class.template.arg]): say so for
+     ^^ nested-name-specifier operator template.  */
+  if (flag_reflection_operator_template)
+    for (size_t n = 1; ; ++n)
+      {
+	cp_token *tok = cp_lexer_peek_nth_token (parser->lexer, n);
+	if (tok->type == CPP_NAME || tok->type == CPP_SCOPE
+	    || tok->type == CPP_NESTED_NAME_SPECIFIER)
+	  continue;
+	if (tok->keyword == RID_OPERATOR
+	    && cp_lexer_nth_token_is_keyword (parser->lexer, n + 1,
+					      RID_TEMPLATE))
+	  {
+	    error_at (tok->location, "%<operator template%> cannot be named "
+		      "outside the declarator of its declaration");
+	    for (size_t i = 0; i <= n; ++i)
+	      cp_lexer_consume_token (parser->lexer);
+	    return error_mark_node;
+	  }
+	break;
+      }
+
   /* We don't know what this might be.  Try and see what works.  */
   cp_parser_parse_tentatively (parser);
   tree t = cp_parser_reflection_name (parser);

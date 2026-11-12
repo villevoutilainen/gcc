@@ -27,7 +27,11 @@ struct J { consteval operator template() const; };
 consteval J::operator template() const = default;               // { dg-error "can only be defaulted in its class" }
 struct K : A { using A::operator template; };                    // { dg-error "cannot be named" }
 consteval std::meta::info f (A a) { return a.operator template(); }   // { dg-error "cannot be named" }
-constexpr std::meta::info r = ^^A::operator template;           // { dg-error "cannot be applied" }
+constexpr std::meta::info r = ^^A::operator template;           // { dg-error "cannot be named" }
+namespace N { struct B { int j; }; }
+constexpr std::meta::info r2 = ^^N::B::operator template;       // { dg-error "cannot be named" }
+constexpr std::meta::info r3 = ^^::N::B::operator template;     // { dg-error "cannot be named" }
+constexpr std::meta::info r4 = ^^A::i;                          // OK
 consteval operator template();                                   // { dg-error "must be a non-static member function" }
 struct L { consteval operator template(int) const; };           // { dg-error "object parameter of .operator template. must have type" }
 struct M { template <class T> consteval operator template() const; };  // { dg-error "cannot be a function template" }
