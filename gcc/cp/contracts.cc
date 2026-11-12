@@ -33614,6 +33614,9 @@ oa_collect_loop_targets (tree *stmt, vec<tree> *ptr_out, vec<tree> *nz_out)
    check must start fresh from the real pre-loop ENV, not from another
    decl's already-updated result).  */
 
+static bool oa_for_loop_trip_bound (tree, tree, tree, oa_env &,
+				    widest_int *);
+
 static void
 oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 		oa_env &env, bool cond_last = false)
@@ -33733,6 +33736,8 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
      further below.  */
   tree head_cond = cond ? *cond : NULL_TREE;
   oa_env head = env.copy ();
+  oa_env last_exit;
+  bool have_last_exit = false;
   /* In a speculative walk (an enclosing loop's fixed point), start from
      this loop's last head joined with the entry: no stronger than the
      entry, and the rounds below re-establish that each iteration keeps
@@ -33755,6 +33760,39 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
     bool saved_speculative = oa_speculative_walk;
     oa_speculative_walk = true;
     bool widened_any = false;
+    /* A 'for' loop whose iterations are counted (oa_for_loop_trip_bound),
+       at most TRIP: what each iteration starts from, W, iteration by
+       iteration, so no widening is needed ('t += i' over ten iterations
+       stays bounded).  HEAD is what the TRIP iterations that can run
+       start from, and the state after the last one leaves the loop
+       through its condition (LAST_EXIT).  Fewer iterations inside an
+       enclosing loop's fixed point, whose every round repeats them.  */
+    unsigned trip_n = 0;
+    {
+      widest_int trip;
+      if (expr && *expr && cond && *cond && !cond_last
+	  && !(cond_prep && *cond_prep)
+	  && oa_for_loop_trip_bound (*cond, body ? *body : NULL_TREE, *expr,
+				     env, &trip)
+	  && trip > 0 && trip <= (saved_speculative ? 16 : 128))
+	trip_n = trip.to_uhwi ();
+    }
+    if (trip_n)
+      {
+	oa_env w = head.copy ();
+	for (unsigned k = 1; k <= trip_n; ++k)
+	  {
+	    walk_parts (w);
+	    if (k < trip_n)
+	      oa_merge_branch_envs (head, w, head_cond);
+	  }
+	oa_env then_env, else_env;
+	oa_process_condition (*cond, w, &then_env, &else_env);
+	oa_apply_increments (*cond, else_env);
+	last_exit.assign (else_env);
+	have_last_exit = true;
+      }
+    else
     for (unsigned round = 0; ; ++round)
       {
 	oa_env probe = head.copy ();
@@ -33771,7 +33809,8 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 		       && measure == head.loop_fact_measure ());
 	/* Widen only from the third round on, so a bound that settles
 	   after one iteration ('last = 10 / i') is kept.  */
-	head.assign (round >= 2 ? widened : next);
+	bool widen = round >= 2;
+	head.assign (widen ? widened : next);
 	if (stable)
 	  break;
 	if (round == 100)
@@ -33781,7 +33820,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
 	    head.assign (nothing);
 	    break;
 	  }
-	widened_any |= round >= 2;
+	widened_any |= widen;
       }
     /* Narrowing: HEAD holds on every iteration, so what one more
        iteration from it leaves (joined with the entry) does too -- and
@@ -33813,6 +33852,8 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
   oa_jump_collector loop_breaks, loop_exits;
   oa_env scratch = head.copy ();
   walk_parts (scratch, &loop_breaks, &loop_exits);
+  if (have_last_exit)
+    loop_exits.add (last_exit);
   /* -fcontract-symbolic-runtime-checks (Mechanism B): SCRATCH is where
      any shadow the loop body itself establishes actually gets created
      (get_or_build_scalar_shadow registers it via whichever env
@@ -34784,42 +34825,14 @@ oa_stmt_terminates_p (tree stmt)
     }
 }
 
-/* A counted loop, 'for (x = A; x != C; ++x)' (or '--x' with A >= C), whose
-   variable only the increment writes and which starts on the near side of
-   C: since X moves towards C by one each iteration and the loop ends on
-   reaching it, the body sees the bound a '<' (or '>') would give.  Return
-   that condition, for analysing the loop with, or NULL_TREE.  ENV is the
-   state after the loop's init-statement.  */
+/* X, a local variable, has its address taken only to read it, as a
+   reference or pointer to const -- an argument printed, for example; a
+   call given that doesn't change X, as everywhere else in this analysis
+   -- or not at all.  */
 
-static tree
-oa_counted_loop_cond (tree loop, oa_env &env)
+static bool
+oa_local_only_read_p (tree x)
 {
-  if (FOR_COND_PREP (loop))
-    return NULL_TREE;
-  tree cond = FOR_COND (loop), expr = FOR_EXPR (loop);
-  if (!cond || !expr)
-    return NULL_TREE;
-  STRIP_ANY_LOCATION_WRAPPER (cond);
-  STRIP_ANY_LOCATION_WRAPPER (expr);
-  if (TREE_CODE (expr) == CLEANUP_POINT_EXPR)
-    expr = TREE_OPERAND (expr, 0);
-  if (TREE_CODE (expr) == CONVERT_EXPR && VOID_TYPE_P (TREE_TYPE (expr)))
-    expr = TREE_OPERAND (expr, 0);
-  if (TREE_CODE (cond) != NE_EXPR)
-    return NULL_TREE;
-  tree x = TREE_OPERAND (cond, 0), c = TREE_OPERAND (cond, 1);
-  STRIP_ANY_LOCATION_WRAPPER (x);
-  STRIP_ANY_LOCATION_WRAPPER (c);
-  if (TREE_CODE (x) == INTEGER_CST)
-    std::swap (x, c);
-  if (!VAR_P (x) || TREE_CODE (c) != INTEGER_CST
-      || !INTEGRAL_TYPE_P (TREE_TYPE (x))
-      || TREE_STATIC (x) || DECL_EXTERNAL (x)
-      || DECL_CONTEXT (x) != current_function_decl)
-    return NULL_TREE;
-  /* Its address taken only to read it, as a reference or pointer to const
-     -- an argument printed, for example; a call given that doesn't change
-     X, as everywhere else in this analysis -- and nowhere else.  */
   if (TREE_ADDRESSABLE (x)
       && (!DECL_SAVED_TREE (current_function_decl)
 	  || cp_walk_tree_without_duplicates
@@ -34855,6 +34868,76 @@ oa_counted_loop_cond (tree loop, oa_env &env)
 		      }
 		    return NULL_TREE;
 		  }, x)))
+    return false;
+  return true;
+}
+
+/* Does anything in *TP write X directly ('x = ...', '++x')?  */
+
+static bool
+oa_writes_decl_p (tree *tp, tree x)
+{
+  return cp_walk_tree_without_duplicates (tp,
+					  [] (tree *tp, int *, void *d) -> tree
+    {
+      tree t = *tp;
+      tree x = (tree) d;
+      switch (TREE_CODE (t))
+	{
+	case MODIFY_EXPR:
+	case INIT_EXPR:
+	case PREINCREMENT_EXPR:
+	case POSTINCREMENT_EXPR:
+	case PREDECREMENT_EXPR:
+	case POSTDECREMENT_EXPR:
+	  {
+	    tree lhs = TREE_OPERAND (t, 0);
+	    STRIP_ANY_LOCATION_WRAPPER (lhs);
+	    if (lhs == x)
+	      return t;
+	  }
+	  break;
+	default:
+	  break;
+	}
+      return NULL_TREE;
+    }, x) != NULL_TREE;
+}
+
+/* A counted loop, 'for (x = A; x != C; ++x)' (or '--x' with A >= C), whose
+   variable only the increment writes and which starts on the near side of
+   C: since X moves towards C by one each iteration and the loop ends on
+   reaching it, the body sees the bound a '<' (or '>') would give.  Return
+   that condition, for analysing the loop with, or NULL_TREE.  ENV is the
+   state after the loop's init-statement.  */
+
+static tree
+oa_counted_loop_cond (tree loop, oa_env &env)
+{
+  if (FOR_COND_PREP (loop))
+    return NULL_TREE;
+  tree cond = FOR_COND (loop), expr = FOR_EXPR (loop);
+  if (!cond || !expr)
+    return NULL_TREE;
+  STRIP_ANY_LOCATION_WRAPPER (cond);
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (TREE_CODE (expr) == CLEANUP_POINT_EXPR)
+    expr = TREE_OPERAND (expr, 0);
+  if (TREE_CODE (expr) == CONVERT_EXPR && VOID_TYPE_P (TREE_TYPE (expr)))
+    expr = TREE_OPERAND (expr, 0);
+  if (TREE_CODE (cond) != NE_EXPR)
+    return NULL_TREE;
+  tree x = TREE_OPERAND (cond, 0), c = TREE_OPERAND (cond, 1);
+  STRIP_ANY_LOCATION_WRAPPER (x);
+  STRIP_ANY_LOCATION_WRAPPER (c);
+  if (TREE_CODE (x) == INTEGER_CST)
+    std::swap (x, c);
+  if (!VAR_P (x) || TREE_CODE (c) != INTEGER_CST
+      || !INTEGRAL_TYPE_P (TREE_TYPE (x))
+      || TREE_STATIC (x) || DECL_EXTERNAL (x)
+      || DECL_CONTEXT (x) != current_function_decl)
+    return NULL_TREE;
+  if (!oa_local_only_read_p (x))
     return NULL_TREE;
   bool up;
   switch (TREE_CODE (expr))
@@ -34912,6 +34995,202 @@ oa_counted_loop_cond (tree loop, oa_env &env)
 			 x, c);
   protected_set_expr_location (counted, cp_expr_loc_or_input_loc (cond));
   return counted;
+}
+
+/* An upper bound, in *N, on how many times the body of the 'for' loop
+   with condition COND, body BODY and increment EXPR runs: COND compares
+   a local integer variable X with a constant or with a local variable B
+   the loop doesn't write, EXPR adds a constant to X ('++x', 'x += 2'),
+   and nothing else in the loop writes X.  X's start and B are bounded in
+   ENV, the state after the loop's init-statement.  The condition is
+   tested before every iteration, and a continue statement goes on to
+   EXPR, so every iteration moves X by the step.  X never wraps: the last
+   value staying in the loop plus the step is required to be within its
+   type, so an unsigned X is covered too.  No label in the loop, which a
+   jump from outside could enter it by.  */
+
+static bool
+oa_for_loop_trip_bound (tree cond, tree body, tree expr, oa_env &env,
+			widest_int *n)
+{
+  if (!cond || !expr || !current_function_decl)
+    return false;
+  STRIP_ANY_LOCATION_WRAPPER (cond);
+  STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (TREE_CODE (expr) == CLEANUP_POINT_EXPR)
+    expr = TREE_OPERAND (expr, 0);
+  if (TREE_CODE (expr) == CONVERT_EXPR && VOID_TYPE_P (TREE_TYPE (expr)))
+    expr = TREE_OPERAND (expr, 0);
+  /* The variable and its step.  */
+  tree x;
+  widest_int step;
+  switch (TREE_CODE (expr))
+    {
+    case PREINCREMENT_EXPR:
+    case POSTINCREMENT_EXPR:
+    case PREDECREMENT_EXPR:
+    case POSTDECREMENT_EXPR:
+      x = TREE_OPERAND (expr, 0);
+      if (TREE_CODE (TREE_OPERAND (expr, 1)) != INTEGER_CST)
+	return false;
+      step = wi::to_widest (TREE_OPERAND (expr, 1));
+      if (TREE_CODE (expr) == PREDECREMENT_EXPR
+	  || TREE_CODE (expr) == POSTDECREMENT_EXPR)
+	step = -step;
+      break;
+    case MODIFY_EXPR:
+      {
+	x = TREE_OPERAND (expr, 0);
+	tree rhs = TREE_OPERAND (expr, 1);
+	STRIP_ANY_LOCATION_WRAPPER (rhs);
+	if ((TREE_CODE (rhs) != PLUS_EXPR && TREE_CODE (rhs) != MINUS_EXPR)
+	    || TREE_CODE (TREE_OPERAND (rhs, 1)) != INTEGER_CST)
+	  return false;
+	tree a = TREE_OPERAND (rhs, 0);
+	STRIP_ANY_LOCATION_WRAPPER (a);
+	STRIP_ANY_LOCATION_WRAPPER (x);
+	if (a != x)
+	  return false;
+	step = wi::to_widest (TREE_OPERAND (rhs, 1));
+	if (TREE_CODE (rhs) == MINUS_EXPR)
+	  step = -step;
+      }
+      break;
+    default:
+      return false;
+    }
+  STRIP_ANY_LOCATION_WRAPPER (x);
+  auto local_p = [] (tree v)
+    {
+      return ((VAR_P (v) || TREE_CODE (v) == PARM_DECL)
+	      && INTEGRAL_TYPE_P (TREE_TYPE (v))
+	      && !TREE_STATIC (v) && !DECL_EXTERNAL (v)
+	      && DECL_CONTEXT (v) == current_function_decl
+	      && oa_local_only_read_p (v));
+    };
+  if (step == 0 || !local_p (x))
+    return false;
+  /* The comparison, as 'x CODE b'.  */
+  tree_code code = TREE_CODE (cond);
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != NE_EXPR)
+    return false;
+  tree l = TREE_OPERAND (cond, 0), r = TREE_OPERAND (cond, 1);
+  /* A conversion that keeps every value, as an integer promotion.  */
+  auto strip = [] (tree t)
+    {
+      STRIP_ANY_LOCATION_WRAPPER (t);
+      while (CONVERT_EXPR_P (t)
+	     && INTEGRAL_TYPE_P (TREE_TYPE (t))
+	     && INTEGRAL_TYPE_P (TREE_TYPE (TREE_OPERAND (t, 0)))
+	     && oa_integral_conversion_value_preserving_p
+		  (TREE_TYPE (TREE_OPERAND (t, 0)), TREE_TYPE (t)))
+	{
+	  t = TREE_OPERAND (t, 0);
+	  STRIP_ANY_LOCATION_WRAPPER (t);
+	}
+      return t;
+    };
+  l = strip (l);
+  r = strip (r);
+  if (r == x)
+    {
+      std::swap (l, r);
+      code = swap_tree_comparison (code);
+    }
+  if (l != x)
+    return false;
+  if (TREE_CODE (r) != INTEGER_CST && !local_p (r))
+    return false;
+  /* Nothing else in the loop writes X, nor B at all.  */
+  auto writes = [&] (tree v, bool in_expr)
+    {
+      tree c = cond;
+      return (oa_writes_decl_p (&c, v)
+	      || (body && oa_writes_decl_p (&body, v))
+	      || (in_expr && oa_writes_decl_p (&expr, v)));
+    };
+  if (writes (x, false) || (TREE_CODE (r) != INTEGER_CST && writes (r, true)))
+    return false;
+  /* No way into the loop but through its condition.  */
+  if (body
+      && cp_walk_tree_without_duplicates (&body,
+					  [] (tree *tp, int *walk_subtrees,
+					      void *) -> tree
+	{
+	  tree t = *tp;
+	  if (TREE_CODE (t) == LABEL_EXPR)
+	    return t;
+	  /* A case label of a switch around the loop.  Those of a switch
+	     in it don't count, but labels in it do.  */
+	  if (TREE_CODE (t) == SWITCH_STMT)
+	    {
+	      *walk_subtrees = 0;
+	      if (cp_walk_tree_without_duplicates (&SWITCH_STMT_BODY (t),
+						   [] (tree *tp, int *,
+						       void *) -> tree
+		    {
+		      return (TREE_CODE (*tp) == LABEL_EXPR ? *tp
+			      : NULL_TREE);
+		    }, NULL))
+		return t;
+	      return NULL_TREE;
+	    }
+	  if (TREE_CODE (t) == CASE_LABEL_EXPR)
+	    return t;
+	  return NULL_TREE;
+	}, NULL))
+    return false;
+  oa_range_fact start, bound;
+  if (!env.range_get (x, &start) || start.base || !start.has_lo
+      || !start.has_hi)
+    return false;
+  if (TREE_CODE (r) == INTEGER_CST)
+    {
+      bound.has_lo = bound.has_hi = true;
+      bound.lo = bound.hi = wi::to_widest (r);
+    }
+  else if (!env.range_get (r, &bound) || bound.base)
+    return false;
+  tree type = TREE_TYPE (x);
+  widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
+  widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
+  if (step > 0)
+    {
+      /* The largest value staying in the loop.  */
+      widest_int vmax;
+      if (code == LT_EXPR && bound.has_hi)
+	vmax = bound.hi - 1;
+      else if (code == LE_EXPR && bound.has_hi)
+	vmax = bound.hi;
+      else if (code == NE_EXPR && step == 1 && bound.has_lo && bound.has_hi
+	       && start.hi <= bound.lo)
+	vmax = bound.hi - 1;
+      else
+	return false;
+      if (vmax + step > tmax || start.hi + step > tmax)
+	return false;
+      *n = vmax < start.lo ? widest_int (0)
+			   : wi::udiv_trunc (vmax - start.lo, step) + 1;
+    }
+  else
+    {
+      widest_int vmin;
+      if (code == GT_EXPR && bound.has_lo)
+	vmin = bound.lo + 1;
+      else if (code == GE_EXPR && bound.has_lo)
+	vmin = bound.lo;
+      else if (code == NE_EXPR && step == -1 && bound.has_lo && bound.has_hi
+	       && start.lo >= bound.hi)
+	vmin = bound.lo + 1;
+      else
+	return false;
+      if (vmin + step < tmin || start.lo + step < tmin)
+	return false;
+      *n = vmin > start.hi ? widest_int (0)
+			   : wi::udiv_trunc (start.hi - vmin, -step) + 1;
+    }
+  return true;
 }
 
 /* The forward statement walker: processes *STMT (an arbitrary
