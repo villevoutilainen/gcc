@@ -7731,6 +7731,155 @@ has_metainfo_conversion_subobject_p (tree type)
   return false;
 }
 
+/* The template parameter object PS for string literal object S
+   ([temp.arg.nontype], P4340R1): of the same type as S, with the same
+   elements, the object std::meta::reflect_constant_string (S) represents.  */
+
+static tree
+string_literal_tparm_object (tree s)
+{
+  tree decl = get_template_parm_object (s, mangle_template_parm_object (s));
+  DECL_MERGEABLE (decl) = 1;
+  return decl;
+}
+
+static tree normalize_string_literal_value (tree);
+
+/* LVAL with a string literal object it designates, or is a subobject of,
+   replaced by the corresponding object of its PS.  */
+
+static tree
+normalize_string_literal_lvalue (tree lval)
+{
+  switch (TREE_CODE (lval))
+    {
+    case STRING_CST:
+      return string_literal_tparm_object (lval);
+    case ARRAY_REF:
+    case COMPONENT_REF:
+      {
+	tree op = normalize_string_literal_lvalue (TREE_OPERAND (lval, 0));
+	if (op == TREE_OPERAND (lval, 0))
+	  return lval;
+	tree copy = copy_node (lval);
+	TREE_OPERAND (copy, 0) = op;
+	return copy;
+      }
+    default:
+      return lval;
+    }
+}
+
+/* The normalized value of VAL ([temp.arg.nontype], P4340R1): each pointer
+   into, or reference to, a string literal object or a subobject of one
+   points into, or refers to, the corresponding object of its PS.  */
+
+static tree
+normalize_string_literal_value (tree val)
+{
+  switch (TREE_CODE (val))
+    {
+    case ADDR_EXPR:
+      {
+	tree op = normalize_string_literal_lvalue (TREE_OPERAND (val, 0));
+	if (op == TREE_OPERAND (val, 0))
+	  return val;
+	return build_address (op);
+      }
+    case POINTER_PLUS_EXPR:
+      {
+	tree op = normalize_string_literal_value (TREE_OPERAND (val, 0));
+	if (op == TREE_OPERAND (val, 0))
+	  return val;
+	/* &PS + N is the address of an element of PS, written so as an
+	   address constant.  */
+	tree addr = tree_strip_nop_conversions (op);
+	tree off = TREE_OPERAND (val, 1);
+	if (TREE_CODE (addr) == ADDR_EXPR && TREE_CODE (off) == INTEGER_CST)
+	  {
+	    tree lval = TREE_OPERAND (addr, 0);
+	    tree arr = lval;
+	    offset_int k = 0;
+	    if (TREE_CODE (lval) == ARRAY_REF
+		&& TREE_CODE (TREE_OPERAND (lval, 1)) == INTEGER_CST)
+	      {
+		arr = TREE_OPERAND (lval, 0);
+		k = wi::to_offset (TREE_OPERAND (lval, 1));
+	      }
+	    if (TREE_CODE (TREE_TYPE (arr)) == ARRAY_TYPE)
+	      {
+		tree elt = TREE_TYPE (TREE_TYPE (arr));
+		offset_int sz = wi::to_offset (TYPE_SIZE_UNIT (elt));
+		offset_int o = wi::sext (wi::to_offset (off),
+					 TYPE_PRECISION (sizetype));
+		if (sz != 0 && wi::multiple_of_p (o, sz, SIGNED))
+		  {
+		    k += wi::sdiv_trunc (o, sz);
+		    tree ref = build4 (ARRAY_REF, elt, arr,
+				       wide_int_to_tree (ptrdiff_type_node, k),
+				       NULL_TREE, NULL_TREE);
+		    return build_nop (TREE_TYPE (val), build_address (ref));
+		  }
+	      }
+	  }
+	tree copy = copy_node (val);
+	TREE_OPERAND (copy, 0) = op;
+	return copy;
+      }
+    CASE_CONVERT:
+      {
+	tree op = normalize_string_literal_value (TREE_OPERAND (val, 0));
+	if (op == TREE_OPERAND (val, 0))
+	  return val;
+	/* The array-to-pointer conversion of PS gives the address of its
+	   first element, written so, as for a pointer into it.  */
+	tree addr = tree_strip_nop_conversions (op);
+	if (TREE_CODE (addr) == ADDR_EXPR
+	    && TREE_CODE (TREE_TYPE (TREE_OPERAND (addr, 0))) == ARRAY_TYPE
+	    && TYPE_PTR_P (TREE_TYPE (val))
+	    && same_type_ignoring_top_level_qualifiers_p
+		 (TREE_TYPE (TREE_TYPE (val)),
+		  TREE_TYPE (TREE_TYPE (TREE_OPERAND (addr, 0)))))
+	  {
+	    tree arr = TREE_OPERAND (addr, 0);
+	    tree ref = build4 (ARRAY_REF, TREE_TYPE (TREE_TYPE (arr)), arr,
+			       build_int_cst (ptrdiff_type_node, 0),
+			       NULL_TREE, NULL_TREE);
+	    return build_nop (TREE_TYPE (val), build_address (ref));
+	  }
+	tree copy = copy_node (val);
+	TREE_OPERAND (copy, 0) = op;
+	return copy;
+      }
+    case CONSTRUCTOR:
+      {
+	tree copy = NULL_TREE;
+	constructor_elt *ce;
+	for (unsigned HOST_WIDE_INT ix = 0;
+	     vec_safe_iterate (CONSTRUCTOR_ELTS (val), ix, &ce); ++ix)
+	  {
+	    tree v = normalize_string_literal_value (ce->value);
+	    if (v == ce->value)
+	      continue;
+	    if (!copy)
+	      {
+		copy = copy_node (val);
+		CONSTRUCTOR_ELTS (copy) = vec_safe_copy (CONSTRUCTOR_ELTS (val));
+	      }
+	    (*CONSTRUCTOR_ELTS (copy))[ix].value = v;
+	  }
+	return copy ? copy : val;
+      }
+    case TARGET_EXPR:
+      {
+	tree init = normalize_string_literal_value (TARGET_EXPR_INITIAL (val));
+	return init == TARGET_EXPR_INITIAL (val) ? val : init;
+      }
+    default:
+      return val;
+    }
+}
+
 /* The user-provided template-argument function of class TYPE
    (-freflection-operator-template, P4340R1).  */
 
@@ -8120,7 +8269,9 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
      catch this later), but only to provide better diagnostic for this
      common user mistake. As suggested by DR 100, we do not mention
      linkage issues in the diagnostic as this is not the point.  */
-  if (TREE_CODE (expr) == STRING_CST && !CLASS_TYPE_P (type))
+  if (TREE_CODE (expr) == STRING_CST && !CLASS_TYPE_P (type)
+      /* P4340R1 makes them valid.  */
+      && !flag_reflection_operator_template)
     {
       if (complain & tf_error)
 	error ("%qE is not a valid template argument for type %qT "
@@ -8324,6 +8475,18 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
      conversion (_conv.array_) are applied.  */
   else if (TYPE_PTROBV_P (type))
     {
+      /* A pointer into a string literal object (P4340R1).  The
+	 replacement is folded again, so that pointer arithmetic on the
+	 object's address becomes the address of an element.  */
+      if (flag_reflection_operator_template && !val_dep_p)
+	{
+	  tree n = normalize_string_literal_value (expr);
+	  if (n != expr)
+	    {
+	      expr = maybe_constant_value (n, NULL_TREE, mce_true);
+	      expr_type = TREE_TYPE (expr);
+	    }
+	}
       tree decayed = expr;
 
       /* Look through any NOP_EXPRs around an ADDR_EXPR, whether they come from
@@ -8429,6 +8592,9 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
       else
 	{
 	  expr = build_address (expr);
+	  /* A reference to a string literal object (P4340R1).  */
+	  if (flag_reflection_operator_template)
+	    expr = normalize_string_literal_value (expr);
 
 	  if (invalid_tparm_referent_p (type, expr, complain))
 	    return NULL_TREE;
@@ -8554,6 +8720,11 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
     {
       /* Replace the argument with a reference to the corresponding template
 	 parameter object.  */
+      if (!val_dep_p && flag_reflection_operator_template
+	  && !metainfo_conversion_structural_p (type))
+	/* Pointers and references into string literal objects
+	   (P4340R1).  */
+	expr = normalize_string_literal_value (expr);
       if (!val_dep_p)
 	{
 	  if (flag_reflection_operator_template

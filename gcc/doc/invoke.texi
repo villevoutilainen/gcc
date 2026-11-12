@@ -3919,8 +3919,12 @@ reflection of the template parameter object: a variable with static storage
 duration of type @code{const C}, usable in constant expressions, or a
 subobject of one, for which it gives the same object again.  A subobject
 whose class has a user-provided one is normalized to a copy of its template
-parameter object.  @code{operator template} cannot be named outside the
-declarator of its declaration.  This option takes precedence over
+parameter object.  A string literal can be a template argument: a pointer
+into, or a reference to, a string literal object is normalized to the
+corresponding object of the template parameter object that
+@code{std::meta::reflect_constant_string} gives for it.
+@code{operator template} cannot be named outside the declarator of its
+declaration.  This option takes precedence over
 @option{-freflection-structural-metainfo-conversion}; it defines the macro
 @code{__GXX_REFLECTION_OPERATOR_TEMPLATE}, and libstdc++ defaults
 @code{operator template} instead of @code{reflect_constant}.
