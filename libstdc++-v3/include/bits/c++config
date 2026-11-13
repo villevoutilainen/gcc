@@ -849,13 +849,18 @@ namespace std
 // and members are, regardless of their access, and its reflect_constant
 // is deleted (so the specialization isn't structural) elsewhere.  With
 // -freflection-operator-template, a defaulted template-argument function
-// (P4340R1) does the same instead, and with
+// (P4340R1) does the same instead -- with
+// -freflection-structural-newmetainfo-conversion, spelled as a conversion
+// to std::meta::template_object_info -- and with
 // -freflection-structural-metainfo-conversion, a defaulted explicit
 // conversion to std::meta::info.
 #ifndef _GLIBCXX_DEFAULT_REFLECT_CONSTANT
 # if defined(__GXX_REFLECTION_OPERATOR_TEMPLATE)
 #  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT \
   consteval operator template() const = default;
+# elif defined(__GXX_REFLECTION_TEMPLATE_OBJECT_INFO)
+#  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT \
+  consteval explicit operator std::meta::template_object_info() const = default;
 # elif defined(__GXX_REFLECTION_METAINFO_CONVERSION)
 #  define _GLIBCXX_DEFAULT_REFLECT_CONSTANT \
   consteval explicit operator decltype(^^int)() const = default;
@@ -868,12 +873,17 @@ namespace std
 #endif
 
 // A defaulted template-argument function (P4340R1, with
-// -freflection-operator-template), for the types that paper adds beyond the
-// ones that _GLIBCXX_DEFAULT_REFLECT_CONSTANT covers in every mode.
+// -freflection-operator-template, or its conversion-function spelling with
+// -freflection-structural-newmetainfo-conversion), for the types that paper
+// adds beyond the ones that _GLIBCXX_DEFAULT_REFLECT_CONSTANT covers in every
+// mode.
 #ifndef _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
 # if defined(__GXX_REFLECTION_OPERATOR_TEMPLATE)
 #  define _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE \
   consteval operator template() const = default;
+# elif defined(__GXX_REFLECTION_TEMPLATE_OBJECT_INFO)
+#  define _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE \
+  consteval explicit operator std::meta::template_object_info() const = default;
 # else
 #  define _GLIBCXX_DEFAULT_OPERATOR_TEMPLATE
 # endif

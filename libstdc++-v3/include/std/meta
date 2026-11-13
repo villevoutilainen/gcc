@@ -86,6 +86,28 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
   {
     using info = decltype(^^int);
 
+#ifdef __GXX_REFLECTION_TEMPLATE_OBJECT_INFO
+    // -freflection-structural-newmetainfo-conversion: what a class's
+    // template-argument function, 'consteval operator template_object_info
+    // () const', gives -- a reflection of the class's template parameter
+    // object for a value.  Consteval-only, as info is.  Constructible from
+    // a reflection, but not implicitly, so no conversion to info is taken
+    // for one; converts back to the reflection it holds.
+    struct template_object_info
+    {
+      consteval explicit
+      template_object_info(info __r) noexcept : _M_r(__r) { }
+
+      consteval operator info() const noexcept { return _M_r; }
+
+      consteval friend bool
+      operator==(template_object_info, template_object_info) = default;
+
+    private:
+      info _M_r;
+    };
+#endif
+
     // [meta.reflection.exception], class exception
     class exception : public std::exception {
     private:
