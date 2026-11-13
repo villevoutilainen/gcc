@@ -76,6 +76,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
       {
 	_GLIBCXX_CONVEYOR_TRUST_THIS;
 	__glibcxx_assert(!this->empty());
+	// Not empty: the allocator is the union's active member.
+	_GLIBCXX_CONVEYOR_TRUST(_M_alloc._M_alloc);
 	return allocator_type(_M_alloc._M_alloc);
       }
 
@@ -213,6 +215,7 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	void
 	operator=(_NodeAlloc&& __alloc) noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(_M_alloc);
 	  using _ATr = _AllocTraits;
 	  if constexpr (_ATr::propagate_on_container_move_assignment::value)
 	    _M_alloc = std::move(__alloc);
@@ -224,6 +227,8 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	void
 	swap(_Optional_alloc& __other) noexcept
 	{
+	  _GLIBCXX_CONVEYOR_TRUST(_M_alloc);
+	  _GLIBCXX_CONVEYOR_TRUST(__other._M_alloc);
 	  using std::swap;
 	  if constexpr (_AllocTraits::propagate_on_container_swap::value)
 	    swap(_M_alloc, __other._M_alloc);
@@ -232,12 +237,17 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 	}
 
 	// Precondition: _M_alloc is the active member of the union.
-	_NodeAlloc& operator*() noexcept _GLIBCXX_CONVEYOR { return _M_alloc; }
+	_NodeAlloc& operator*() noexcept _GLIBCXX_CONVEYOR
+	{
+	  _GLIBCXX_CONVEYOR_TRUST(_M_alloc);
+	  return _M_alloc;
+	}
 
 	// Precondition: _M_alloc is the active member of the union.
 	_NodeAlloc release() noexcept
 	{
 	  _GLIBCXX_CONVEYOR_TRUST_THIS;
+	  _GLIBCXX_CONVEYOR_TRUST(_M_alloc);
 	  _NodeAlloc __tmp = std::move(_M_alloc);
 	  _M_alloc.~_NodeAlloc();
 	  return __tmp;

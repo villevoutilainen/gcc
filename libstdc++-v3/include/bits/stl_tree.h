@@ -2175,6 +2175,8 @@ namespace __rb_tree
 	  __ret.position = end();
 	else
 	  {
+	    // Not empty: its allocator is the union's active member.
+	    _GLIBCXX_CONVEYOR_TRUST(__nh._M_alloc._M_alloc);
 	    __glibcxx_assert_noconveyor
 	      (static_cast<const _Rb_tree&>(*this)._M_get_Node_allocator()
 	       == __nh._M_alloc._M_alloc);
@@ -2207,6 +2209,8 @@ namespace __rb_tree
 	  __ret = end();
 	else
 	  {
+	    // Not empty: its allocator is the union's active member.
+	    _GLIBCXX_CONVEYOR_TRUST(__nh._M_alloc._M_alloc);
 	    __glibcxx_assert_noconveyor
 	      (static_cast<const _Rb_tree&>(*this)._M_get_Node_allocator()
 	       == __nh._M_alloc._M_alloc);
@@ -2230,6 +2234,8 @@ namespace __rb_tree
 	  __ret = end();
 	else
 	  {
+	    // Not empty: its allocator is the union's active member.
+	    _GLIBCXX_CONVEYOR_TRUST(__nh._M_alloc._M_alloc);
 	    __glibcxx_assert_noconveyor
 	      (static_cast<const _Rb_tree&>(*this)._M_get_Node_allocator()
 	       == __nh._M_alloc._M_alloc);
@@ -2255,6 +2261,8 @@ namespace __rb_tree
 	  __ret = end();
 	else
 	  {
+	    // Not empty: its allocator is the union's active member.
+	    _GLIBCXX_CONVEYOR_TRUST(__nh._M_alloc._M_alloc);
 	    __glibcxx_assert_noconveyor
 	      (static_cast<const _Rb_tree&>(*this)._M_get_Node_allocator()
 	       == __nh._M_alloc._M_alloc);
