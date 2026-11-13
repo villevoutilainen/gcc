@@ -7746,6 +7746,23 @@ cp_build_addr_expr_1 (tree arg, bool strict_lvalue, tsubst_flags_t complain)
 
   gcc_assert (!(identifier_p (arg) && IDENTIFIER_ANY_OP_P (arg)));
 
+  /* D4324 (P4425): a function declared 'symbolic' names a fact; it has no
+     definition and is never called, so it has no address either.  */
+  if (!cp_unevaluated_operand)
+    {
+      tree f = MAYBE_BASELINK_FUNCTIONS (tree_strip_any_location_wrapper
+					    (arg));
+      if (TREE_CODE (f) == OVERLOAD && !OVL_CHAIN (f))
+	f = OVL_FUNCTION (f);
+      if (TREE_CODE (f) == FUNCTION_DECL && DECL_LANG_SPECIFIC (f)
+	  && DECL_DECLARED_SYMBOLIC_P (f))
+	{
+	  if (complain & tf_error)
+	    error_at (loc, "%qD, declared %<symbolic%>, has no address", f);
+	  return error_mark_node;
+	}
+    }
+
   if (TREE_CODE (arg) == COMPONENT_REF && type_unknown_p (arg)
       && !really_overloaded_fn (arg))
     {

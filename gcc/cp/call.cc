@@ -296,7 +296,13 @@ build_addr_func (tree function, tsubst_flags_t complain)
       function = build_address (function);
     }
   else if (TREE_CODE (function) == FUNCTION_DECL
-	   && DECL_IMMEDIATE_FUNCTION_P (function))
+	   && (DECL_IMMEDIATE_FUNCTION_P (function)
+	       /* A call of a function declared 'symbolic', which has no
+		  address of its own (cp_build_addr_expr_1): only the
+		  condition of a symbolic contract makes one, and it is never
+		  evaluated.  */
+	       || (DECL_LANG_SPECIFIC (function)
+		   && DECL_DECLARED_SYMBOLIC_P (function))))
     function = build_address (function);
   else
     function = decay_conversion (function, complain, /*reject_builtin=*/false);

@@ -9389,6 +9389,16 @@ resolve_address_of_overloaded_function (tree target_type,
       perform_or_defer_access_check (access_path, fn, fn, complain);
     }
 
+  /* A function declared 'symbolic' has no address
+     (cp_build_addr_expr_1), nor can a reference bind to it.  */
+  if (DECL_LANG_SPECIFIC (fn) && DECL_DECLARED_SYMBOLIC_P (fn)
+      && !cp_unevaluated_operand)
+    {
+      if (complain & tf_error)
+	error ("%qD, declared %<symbolic%>, has no address", fn);
+      return error_mark_node;
+    }
+
   if (TYPE_PTRFN_P (target_type) || TYPE_PTRMEMFUNC_P (target_type))
     return cp_build_addr_expr (fn, complain);
   else

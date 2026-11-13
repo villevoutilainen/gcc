@@ -5168,6 +5168,73 @@ build_comment (cp_expr condition)
 
 /* Build a contract statement.  */
 
+/* The first call in *TP of a function declared 'symbolic', or
+   NULL_TREE.  Unevaluated operands leave no call behind.  */
+
+static tree
+find_symbolic_call (tree *tp)
+{
+  return cp_walk_tree_without_duplicates (tp, [] (tree *tp, int *,
+						  void *) -> tree
+    {
+      tree t = *tp;
+      if (TREE_CODE (t) != CALL_EXPR && TREE_CODE (t) != AGGR_INIT_EXPR)
+	return NULL_TREE;
+      tree callee = cp_get_callee_fndecl_nofold (t);
+      if (callee && TREE_CODE (callee) == FUNCTION_DECL
+	  && DECL_LANG_SPECIFIC (callee) && DECL_DECLARED_SYMBOLIC_P (callee))
+	return t;
+      return NULL_TREE;
+    }, NULL);
+}
+
+/* D4324 (P4425): a function declared 'symbolic' names a fact and is
+   never called: it may be named only in the condition of a symbolic
+   contract, whose whole predicate is ghost code -- not in a strict one,
+   which is evaluated, nor in an ordinary one.  So a control object is not
+   both strict and symbolic.  Checked where CONTRACT's condition is
+   written; one whose control object is dependent is checked where it is
+   instantiated (build_contract_check, oa_resolve_condition).  */
+
+static void
+check_contract_symbolic_use (tree contract)
+{
+  tree cond = CONTRACT_CONDITION (contract);
+  if (!cond || cond == error_mark_node || TREE_CODE (cond) == DEFERRED_PARSE)
+    return;
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  bool symbolic = false;
+  if (ctrl && ctrl != error_mark_node && flag_contract_control_objects)
+    {
+      if (instantiation_dependent_expression_p (ctrl))
+	return;
+      contract_check_side side = contract_side_of (contract, NULL_TREE);
+      symbolic = contract_control_symbolic_like (ctrl, side, NULL_TREE,
+						 /*quiet=*/true);
+      if (symbolic
+	  && contract_control_conveyor_like (ctrl, side, NULL_TREE,
+					     /*quiet=*/true))
+	{
+	  error_at (EXPR_LOCATION (contract), "a control object cannot be "
+		    "both strict and symbolic");
+	  CONTRACT_CONDITION (contract) = error_mark_node;
+	  return;
+	}
+    }
+  if (symbolic)
+    return;
+  if (tree call = find_symbolic_call (&cond))
+    {
+      tree callee = cp_get_callee_fndecl_nofold (call);
+      auto_diagnostic_group d;
+      error_at (EXPR_LOC_OR_LOC (call, EXPR_LOCATION (contract)),
+		"%qD, declared %<symbolic%>, may only be used in the "
+		"condition of a symbolic contract", callee);
+      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+      CONTRACT_CONDITION (contract) = error_mark_node;
+    }
+}
+
 tree
 grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
 	       location_t loc, tree control_object /* = NULL_TREE */)
@@ -5260,6 +5327,7 @@ grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
     return error_mark_node;
 
   CONTRACT_CONDITION (contract) = condition;
+  check_contract_symbolic_use (contract);
 
   return contract;
 }
@@ -5279,6 +5347,7 @@ update_late_contract (tree contract, tree result, cp_expr condition)
   /* The condition is converted to bool.  */
   condition = finish_contract_condition (condition);
   CONTRACT_CONDITION (contract) = condition;
+  check_contract_symbolic_use (contract);
 }
 
 /* Returns the precondition function for FNDECL, or null if not set.  */
@@ -21638,7 +21707,7 @@ oa_resolve_condition (tree *cond, oa_env &env, bool conveyor_ok,
 	 is neither symbolic- nor conveyor-checked would evaluate it at run
 	 time, and fail to link (P4445 BUG-28).  A strict one evaluates it
 	 as true, or the recorded fact (contract_symbolic_call_value).  */
-      if (!d->symbolic_ok && !d->conveyor_ok
+      if (!d->symbolic_ok
 	  && (TREE_CODE (*tp) == CALL_EXPR || TREE_CODE (*tp) == AGGR_INIT_EXPR))
 	{
 	  tree callee = cp_get_callee_fndecl_nofold (*tp);
@@ -32489,12 +32558,6 @@ oa_scan_stray_is_object_address (tree *expr)
 static void
 oa_scan_stray_symbolic_call (tree *expr)
 {
-  /* A conveyor function may call one: it gets true, or the recorded fact
-     (contract_symbolic_call_value).  */
-  if (current_function_decl
-      && TREE_CODE (current_function_decl) == FUNCTION_DECL
-      && DECL_DECLARED_CONVEYOR_P (current_function_decl))
-    return;
   tree found = cp_walk_tree (expr, [](tree *tp, int *, void *) -> tree
     {
       tree t = *tp;
@@ -32511,8 +32574,7 @@ oa_scan_stray_symbolic_call (tree *expr)
     {
       tree callee = cp_get_callee_fndecl_nofold (found);
       error_at (EXPR_LOCATION (found), "%qD, declared %<symbolic%>, may "
-		"only be used directly inside a %<contract_assert%>, "
-		"%<pre%>, or %<post%> condition", callee);
+		"only be used in the condition of a symbolic contract", callee);
     }
 }
 
@@ -45020,13 +45082,18 @@ build_contract_check (tree contract)
      processing as every other contract.  */
   bool symbolic_runtime = false;
   bool symbolic_mark = false;
-  /* A control object both strict and symbolic is checked at run time as a
-     strict one: its symbolic calls evaluate to true, or to the recorded
-     fact under -fcontract-symbolic-runtime-checks
-     (contract_symbolic_call_value).  */
+  /* A control object is not both strict and symbolic
+     (check_contract_symbolic_use, for one dependent where it was
+     written).  */
   if (ctrl && contract_control_symbolic_like (ctrl, side, current_function_decl)
-      && !contract_control_conveyor_like (ctrl, side, current_function_decl,
-					  /*quiet=*/true))
+      && contract_control_conveyor_like (ctrl, side, current_function_decl,
+					 /*quiet=*/true))
+    {
+      error_at (EXPR_LOCATION (contract), "a control object cannot be both "
+		"strict and symbolic");
+      return void_node;
+    }
+  if (ctrl && contract_control_symbolic_like (ctrl, side, current_function_decl))
     {
       /* Still nothing at runtime, but the GIMPLE engine needs to know
 	 where the contract is, and what it is about: a marker
