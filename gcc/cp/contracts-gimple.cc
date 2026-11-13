@@ -1654,7 +1654,7 @@ cg_loop_max_latch_count (class loop *loop,
 	  widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
 	  /* The counter's values staying in the loop: at most VMAX counting
 	     up, at least VMIN counting down; how many steps reach it.  */
-	  widest_int count;
+	  widest_int count = 0;
 	  if (step > 0)
 	    {
 	      cg_range_lite b = cg_comparison_bound (c, yr);
@@ -9035,7 +9035,7 @@ cg_conjunct_covered_p (tree conjunct, tree callee, bool require_conveyor)
 {
   tree t1, t2, t3, t4;
   tree_code code;
-  widest_int offset;
+  widest_int offset = 0;
   bool negated;
   if (is_object_address_call_p (conjunct, &t1)
       || cg_nonzero_rule_conjunct_p (conjunct)
@@ -12404,7 +12404,7 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
   {
     tree param, receiver, accessor;
     tree_code shifted_code;
-    widest_int offset;
+    widest_int offset = 0;
     if (oa_match_shifted_comparison_against_call_text
 	  (conjunct, &param, &shifted_code, &receiver, &accessor, &offset,
 	   /*allow_symbolic_accessor=*/!require_conveyor))

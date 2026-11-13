@@ -17395,7 +17395,7 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
       /* A value it is known not to be, at an end of its range (or of its
 	 type's): the range is one narrower there ('if (n == 32) return;'
 	 after 'n <= 32').  */
-      widest_int excluded;
+      widest_int excluded = 0;
       tree type = TREE_TYPE (expr);
       if (INTEGRAL_TYPE_P (type) && env.excluded_get (expr, &excluded)
 	  && (!known || !out->base))
@@ -17753,7 +17753,7 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 	{
 	  widest_int byte_k = widest_int::from (wi::to_offset (byte_off),
 						 SIGNED);
-	  widest_int rem;
+	  widest_int rem = 0;
 	  widest_int elt_k = wi::divmod_trunc (byte_k, elt_size, SIGNED, &rem);
 	  if (rem != 0)
 	    /* Not an exact multiple of the pointee's size -- e.g. a
@@ -19048,7 +19048,7 @@ oa_refine_scalar_range_only (tree conjunct, oa_env &env, bool asserted_true)
 
   oa_tighten_range_bound (refined, code, val);
   /* A narrower range for the same value keeps what it excludes.  */
-  widest_int excluded;
+  widest_int excluded = 0;
   bool had_excluded = env.excluded_get (decl, &excluded);
   env.range_set (decl, refined);
   if (had_excluded)
@@ -20045,7 +20045,7 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
   {
     tree param, rhs_receiver, rhs_callee, arithmetic_type;
     tree_code rel_code;
-    widest_int offset;
+    widest_int offset = 0;
     bool param_is_minuend;
     if (oa_match_shifted_comparison_against_call (conjunct, env, &param, &rel_code,
 						     &rhs_receiver, &rhs_callee,
@@ -20527,7 +20527,7 @@ oa_div_overflow_excluded_p (tree num, tree den, tree type, oa_env &env)
 				TYPE_MIN_VALUE (type));
   /* Known not to be -1, or not to be the minimum: 'if (y == -1)'
      taken elsewhere.  */
-  widest_int excluded;
+  widest_int excluded = 0;
   tree sden = oa_strip_to_relational_operand (den);
   if ((VAR_P (sden) || TREE_CODE (sden) == PARM_DECL)
       && env.excluded_get (sden, &excluded) && excluded == -1)
@@ -21467,8 +21467,8 @@ oa_scan_overflow_in_expr (tree *expr, oa_env &env)
 	    {
 	      bool has_lo = false;
 	      bool has_hi = false;
-	      widest_int lo;
-	      widest_int hi;
+	      widest_int lo = 0;
+	      widest_int hi = 0;
 	      if (have_a && have_b
 		  && oa_range_multiply (a, b, &has_lo, &lo, &has_hi, &hi)
 		  && has_lo && has_hi)
@@ -25571,7 +25571,7 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	  {
 	    tree dummy_field, dummy_ptr, dummy_const, dummy_receiver, dummy_callee;
 	    tree_code dummy_code;
-	    widest_int dummy_offset;
+	    widest_int dummy_offset = 0;
 	    if (oa_symbolic_comparison_conjunct_shape (*conjuncts[i], &dummy_field,
 							&dummy_ptr, &dummy_code,
 							&dummy_const)
@@ -25916,7 +25916,7 @@ oa_check_ne_constant (oa_env &env, tree substituted, tree cst,
   /* Excluded by a condition ('if (k != 1)').  */
   {
     tree decl = oa_strip_to_relational_operand (substituted);
-    widest_int excluded;
+    widest_int excluded = 0;
     if ((VAR_P (decl) || TREE_CODE (decl) == PARM_DECL)
 	&& env.excluded_get (decl, &excluded)
 	&& excluded == wi::to_widest (cst))
@@ -26115,7 +26115,7 @@ oa_handle_call_conveyor_proof_obligation (tree call, oa_env &env)
 	  {
 	    tree rel_param2, rhs_receiver, rhs_callee;
 	    tree_code rel_code2;
-	    widest_int offset;
+	    widest_int offset = 0;
 	    oa_unprovable_reason match_reason = OA_UNPROVABLE_NONE;
 	    if (oa_match_shifted_comparison_against_call
 		  (*conjuncts[i], env, &rel_param2, &rel_code2, &rhs_receiver,
@@ -27689,7 +27689,7 @@ oa_symbolic_conjunct_covered_p (tree conjunct, oa_env &env)
 {
   tree t1, t2, t3, t4;
   tree_code code;
-  widest_int offset;
+  widest_int offset = 0;
   bool negated;
   auto_vec<tree> rel_args;
   return (is_object_address_call_p (conjunct, &t1)
@@ -28026,7 +28026,7 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	{
 	  tree rel_param, rhs_receiver, rhs_callee;
 	  tree_code rel_code;
-	  widest_int offset;
+	  widest_int offset = 0;
 	  if (!oa_match_shifted_comparison_against_call
 		(*conjuncts[i], env, &rel_param, &rel_code, &rhs_receiver,
 		 &rhs_callee, &offset, /*allow_symbolic_accessor=*/true)
@@ -32701,7 +32701,7 @@ oa_establish_shared_substrate_self_trust (tree cond, oa_env &env,
     {
       tree param, rhs_receiver, rhs_callee, arithmetic_type;
       tree_code code;
-      widest_int offset;
+      widest_int offset = 0;
       bool param_is_minuend;
       if (oa_match_shifted_comparison_against_call
 	    (*conjuncts[i], env, &param, &code, &rhs_receiver, &rhs_callee,
@@ -34304,7 +34304,7 @@ oa_handle_loop (tree *cond_prep, tree *cond, tree *body, tree *expr,
   if (oa_loop_nesting == 1)
     oa_exact_budget = 8192;
   {
-    widest_int trip;
+    widest_int trip = 0;
     if (cond && *cond && !(cond_prep && *cond_prep)
 	&& oa_for_loop_trip_bound (*cond, body ? *body : NULL_TREE,
 				   expr ? *expr : NULL_TREE, cond_last, env,
@@ -35690,7 +35690,7 @@ oa_for_loop_trip_bound (tree cond, tree body, tree expr, bool do_loop,
     }
   /* The variable and its step.  */
   tree x;
-  widest_int step;
+  widest_int step = 0;
   switch (TREE_CODE (expr))
     {
     case PREINCREMENT_EXPR:
@@ -35844,7 +35844,7 @@ oa_for_loop_trip_bound (tree cond, tree body, tree expr, bool do_loop,
   if (step > 0)
     {
       /* The largest value staying in the loop.  */
-      widest_int vmax;
+      widest_int vmax = 0;
       if (code == LT_EXPR && bound.has_hi)
 	vmax = bound.hi - 1;
       else if (code == LE_EXPR && bound.has_hi)
@@ -35861,7 +35861,7 @@ oa_for_loop_trip_bound (tree cond, tree body, tree expr, bool do_loop,
     }
   else
     {
-      widest_int vmin;
+      widest_int vmin = 0;
       if (code == GT_EXPR && bound.has_lo)
 	vmin = bound.lo + 1;
       else if (code == GE_EXPR && bound.has_lo)
@@ -42461,7 +42461,7 @@ oa_match_shifted_comparison_against_call (tree conjunct, oa_env &env,
   tree rhs = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (diff, 1));
 
   tree param, receiver, callee;
-  widest_int offset;
+  widest_int offset = 0;
   if ((param = oa_underlying_param_operand (rhs))
       && oa_shifted_operand_conversion_ok_p (rhs, param, env, reason_out)
       && oa_underlying_call_range_operand (lhs, &receiver, &callee,
