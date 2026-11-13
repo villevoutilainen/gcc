@@ -14264,6 +14264,26 @@ private:
   }
 public:
   void decl_object_end (tree decl) { m_ended_decl_map.put (decl, true); }
+  /* Another member of the union BASE (of type UNION_TYPE) becomes its
+     active one: the pointers and references designating a member of it
+     (alias_find) no longer designate an object.  Those to the union
+     itself still do.  */
+  void union_member_switch (tree base, tree union_type)
+  {
+    auto_vec<tree, 4> ends;
+    for (auto it : m_alias_target)
+      if (it.second == base)
+	{
+	  tree t = TREE_TYPE (it.first);
+	  if (INDIRECT_TYPE_P (t)
+	      && same_type_ignoring_top_level_qualifiers_p (TREE_TYPE (t),
+							    union_type))
+	    continue;
+	  ends.safe_push (it.first);
+	}
+    for (tree k : ends)
+      invalidate (k);
+  }
   /* DECL's address has been handed out, if DECL is a local.  */
   void decl_escape (tree decl)
   {
@@ -15602,6 +15622,293 @@ oa_std_forward_call_p (tree call, tree *arg)
 
 static bool oa_conveyor_returned_reference_p (tree);
 
+/* D4324 (P4445 2.2.2.5): FIELD is a member of a union.  Only its active
+   member is an object: an access to another has undefined behavior.  */
+
+static bool
+oa_union_member_p (tree field)
+{
+  return (field && TREE_CODE (field) == FIELD_DECL
+	  && DECL_CONTEXT (field)
+	  && TREE_CODE (DECL_CONTEXT (field)) == UNION_TYPE);
+}
+
+/* The key of the fact that FIELD, a member of the union OBJ, is its
+   active member: derived from FIELD's own key (whose fact, for a pointer
+   member, is about the pointer it holds), so whatever ends the facts
+   about FIELD (field_object_address_invalidate_derived) ends it too.  */
+
+/* The identity of OBJ, a union or an object holding one, for keying the
+   facts on the union's members: oa_member_object_identity's, or else,
+   for a member of an object ('h.Common.m', through a base too), the
+   member's key in the object's identity -- whose facts end with the
+   object's (field_object_address_invalidate_derived).  */
+
+static bool
+oa_union_object_identity (tree obj, oa_env &env, tree *out, int depth = 0)
+{
+  if (oa_member_object_identity (oa_field_base_object (obj), env, out))
+    {
+      *out = env.alias_find (*out);
+      return true;
+    }
+  obj = STRIP_ANY_LOCATION_WRAPPER (obj);
+  if (depth > 8 || TREE_CODE (obj) != COMPONENT_REF
+      || TREE_CODE (TREE_OPERAND (obj, 1)) != FIELD_DECL)
+    return false;
+  tree inner;
+  if (!oa_union_object_identity (TREE_OPERAND (obj, 0), env, &inner,
+				 depth + 1))
+    return false;
+  *out = env.field_object_identity_key (inner, TREE_OPERAND (obj, 1));
+  return true;
+}
+
+static tree
+oa_union_active_key (tree obj, tree field, oa_env &env)
+{
+  tree base;
+  if (!oa_union_object_identity (obj, env, &base))
+    return NULL_TREE;
+  return env.field_object_identity_key (env.field_object_identity_key (base,
+								      field),
+					void_node);
+}
+
+/* COMPREF, 'u.m' for a member M of a union U, becomes U's active member
+   (a write to it, or to a member of it, by a built-in or trivial
+   assignment, [class.union]): what was known of U's other members, and
+   of what was reached through them, ends.  */
+
+static void
+oa_union_member_activate (tree compref, oa_env &env)
+{
+  tree obj = TREE_OPERAND (compref, 0), field = TREE_OPERAND (compref, 1);
+  tree base;
+  if (!oa_union_object_identity (obj, env, &base))
+    return;
+  tree key = oa_union_active_key (obj, field, env);
+  /* A switch from another member: what designated that one ends.  */
+  if (!key || !env.provable_p (key))
+    {
+      env.union_member_switch (base, DECL_CONTEXT (field));
+      env.derived_end (base);
+    }
+  for (tree f = TYPE_FIELDS (DECL_CONTEXT (field)); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FIELD_DECL && f != field)
+      env.field_object_address_invalidate (base, f);
+  if (key)
+    env.set (key, true);
+}
+
+/* A union OBJ, all of whose members' facts end: a write to the whole
+   union, or one that starts no known member.  */
+
+static void
+oa_union_members_invalidate (tree obj, oa_env &env)
+{
+  tree base;
+  if (!oa_union_object_identity (obj, env, &base))
+    return;
+  for (tree f = TYPE_FIELDS (TREE_TYPE (obj)); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FIELD_DECL)
+      env.field_object_address_invalidate (base, f);
+}
+
+/* LHS, the target of a built-in or trivial assignment or of an
+   initialization by INIT (or NULL_TREE), written: each union member along
+   its chain of member accesses and array subscripts becomes active; a
+   union written whole becomes the member INIT initializes, if a
+   braced-init-list's, else none known.  */
+
+static void
+oa_union_target_written (tree lhs, tree init, oa_env &env)
+{
+  lhs = STRIP_ANY_LOCATION_WRAPPER (lhs);
+  if (TREE_CODE (TREE_TYPE (lhs)) == UNION_TYPE)
+    {
+      /* The members known active in INIT, a union lvalue, before LHS's
+	 facts end ('v = u').  */
+      auto_vec<tree, 4> copied;
+      if (init)
+	{
+	  /* '*(U &) &TARGET_EXPR <D, {.i = 3}>', 'U{.i = 3}' assigned.  */
+	  for (;;)
+	    {
+	      init = STRIP_ANY_LOCATION_WRAPPER (init);
+	      if (CONVERT_EXPR_P (init) || TREE_CODE (init) == NON_LVALUE_EXPR)
+		init = TREE_OPERAND (init, 0);
+	      else if (TREE_CODE (init) == INDIRECT_REF
+		       && (TREE_CODE (tree_strip_nop_conversions
+				       (TREE_OPERAND (init, 0)))
+			   == ADDR_EXPR))
+		init = TREE_OPERAND (tree_strip_nop_conversions
+				       (TREE_OPERAND (init, 0)), 0);
+	      else if (TREE_CODE (init) == TARGET_EXPR)
+		init = TARGET_EXPR_INITIAL (init);
+	      else
+		break;
+	    }
+	  if (TREE_CODE (init) != CONSTRUCTOR
+	      && same_type_ignoring_top_level_qualifiers_p (TREE_TYPE (init),
+							    TREE_TYPE (lhs)))
+	    for (tree f = TYPE_FIELDS (TREE_TYPE (init)); f; f = DECL_CHAIN (f))
+	      if (TREE_CODE (f) == FIELD_DECL)
+		if (tree key = oa_union_active_key (init, f, env))
+		  if (env.provable_p (key))
+		    copied.safe_push (f);
+	}
+      oa_union_members_invalidate (lhs, env);
+      for (tree f : copied)
+	if (tree key = oa_union_active_key (lhs, f, env))
+	  env.set (key, true);
+      if (init && TREE_CODE (init) == CONSTRUCTOR
+	  && same_type_ignoring_top_level_qualifiers_p (TREE_TYPE (init),
+							TREE_TYPE (lhs)))
+	{
+	  tree field = NULL_TREE;
+	  if (CONSTRUCTOR_NELTS (init) == 1)
+	    field = CONSTRUCTOR_ELT (init, 0)->index;
+	  else if (CONSTRUCTOR_NELTS (init) == 0)
+	    /* Value-initialized: its first member is.  */
+	    for (tree f = TYPE_FIELDS (TREE_TYPE (lhs)); f && !field;
+		 f = DECL_CHAIN (f))
+	      if (TREE_CODE (f) == FIELD_DECL)
+		field = f;
+	  if (field && TREE_CODE (field) == FIELD_DECL)
+	    if (tree key = oa_union_active_key (lhs, field, env))
+	      env.set (key, true);
+	}
+    }
+  for (tree t = lhs; ; )
+    {
+      t = STRIP_ANY_LOCATION_WRAPPER (t);
+      if (TREE_CODE (t) == COMPONENT_REF)
+	{
+	  if (oa_union_member_p (TREE_OPERAND (t, 1)))
+	    oa_union_member_activate (t, env);
+	}
+      else if (!(TREE_CODE (t) == ARRAY_REF
+		 && TREE_CODE (TREE_TYPE (TREE_OPERAND (t, 0))) == ARRAY_TYPE))
+	break;
+      t = TREE_OPERAND (t, 0);
+    }
+}
+
+/* DECL, a pointer or reference variable, now holds VALUE: if that is
+   the address of a member of a union, or of a part of one, DECL is
+   derived from the union (oa_env::derived_set), and ends with a switch
+   of its active member.  */
+
+static void
+oa_union_pointer_assigned (tree decl, tree value, oa_env &env)
+{
+  if (!(VAR_P (decl) || TREE_CODE (decl) == PARM_DECL)
+      || !INDIRECT_TYPE_P (TREE_TYPE (decl)) || !value)
+    return;
+  value = tree_strip_nop_conversions (STRIP_ANY_LOCATION_WRAPPER (value));
+  if (TREE_CODE (value) != ADDR_EXPR)
+    return;
+  tree sources = env.derived_get (decl);
+  for (tree t = TREE_OPERAND (value, 0); ; t = TREE_OPERAND (t, 0))
+    {
+      t = STRIP_ANY_LOCATION_WRAPPER (t);
+      if (TREE_CODE (t) == COMPONENT_REF)
+	{
+	  tree base;
+	  if (oa_union_member_p (TREE_OPERAND (t, 1))
+	      && oa_union_object_identity (TREE_OPERAND (t, 0), env, &base))
+	    sources = tree_cons (NULL_TREE, base, sources);
+	}
+      else if (TREE_CODE (t) != ARRAY_REF)
+	break;
+    }
+  if (sources)
+    env.derived_set (decl, sources);
+}
+
+/* The writes in T, a statement just walked, to union members
+   (oa_union_target_written).  */
+
+static void
+oa_union_writes (tree t, oa_env &env)
+{
+  struct data_t { oa_env *env; };
+  data_t data = { &env };
+  cp_walk_tree_without_duplicates (&t, [] (tree *tp, int *walk_subtrees,
+					   void *d) -> tree
+    {
+      oa_env &env = *((data_t *) d)->env;
+      tree t = *tp;
+      switch (TREE_CODE (t))
+	{
+	case LAMBDA_EXPR:
+	  *walk_subtrees = 0;
+	  break;
+	case MODIFY_EXPR:
+	case INIT_EXPR:
+	  oa_union_target_written (TREE_OPERAND (t, 0), TREE_OPERAND (t, 1),
+				   env);
+	  oa_union_pointer_assigned (STRIP_ANY_LOCATION_WRAPPER
+				       (TREE_OPERAND (t, 0)),
+				     TREE_OPERAND (t, 1), env);
+	  break;
+	case DECL_EXPR:
+	  {
+	    tree decl = DECL_EXPR_DECL (t);
+	    if (VAR_P (decl) && TREE_CODE (TREE_TYPE (decl)) == UNION_TYPE)
+	      oa_union_target_written (decl, DECL_INITIAL (decl), env);
+	    if (VAR_P (decl))
+	      oa_union_pointer_assigned (decl, DECL_INITIAL (decl), env);
+	  }
+	  break;
+	default:
+	  break;
+	}
+      return NULL_TREE;
+    }, &data);
+}
+
+/* Is COMPREF, 'u.b.m' (U.B not known to be active), a read U's common
+   initial sequence allows: B and some member A of U whose being active
+   is known are standard-layout structs, and M is among the members their
+   common initial sequence has, [class.mem.general].  */
+
+static bool
+oa_union_common_initial_read_p (tree compref, oa_env &env)
+{
+  tree inner = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (compref, 0));
+  if (TREE_CODE (inner) != COMPONENT_REF)
+    return false;
+  tree b = TREE_OPERAND (inner, 1), m = TREE_OPERAND (compref, 1);
+  if (!oa_union_member_p (b) || TREE_CODE (m) != FIELD_DECL)
+    return false;
+  tree btype = TREE_TYPE (b);
+  if (!CLASS_TYPE_P (btype) || !std_layout_type_p (btype))
+    return false;
+  tree obj = TREE_OPERAND (inner, 0);
+  for (tree a = TYPE_FIELDS (DECL_CONTEXT (b)); a; a = DECL_CHAIN (a))
+    {
+      if (TREE_CODE (a) != FIELD_DECL || a == b
+	  || !CLASS_TYPE_P (TREE_TYPE (a)) || !std_layout_type_p (TREE_TYPE (a)))
+	continue;
+      tree key = oa_union_active_key (obj, a, env);
+      if (!key || !env.provable_p (key))
+	continue;
+      tree f1 = TYPE_FIELDS (TREE_TYPE (a)), f2 = TYPE_FIELDS (btype);
+      while (next_common_initial_sequence (f1, f2))
+	{
+	  if (!f1 || !f2)
+	    break;
+	  if (f2 == m)
+	    return true;
+	  f1 = DECL_CHAIN (f1);
+	  f2 = DECL_CHAIN (f2);
+	}
+    }
+  return false;
+}
+
 static bool
 oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullptr)
 {
@@ -15987,10 +16294,24 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 		  }
 		tree key = env.field_object_identity_key (base,
 							  TREE_OPERAND (op, 1));
-		if (key && env.provable_p (key))
+		if (key && env.provable_p (key)
+		    && !oa_union_member_p (TREE_OPERAND (op, 1)))
 		  return true;
 	      }
 	  }
+	  /* A union's member is an object only while it is the active
+	     one, besides its union being one.  */
+	  if (oa_union_member_p (TREE_OPERAND (op, 1)))
+	    {
+	      tree key = oa_union_active_key (TREE_OPERAND (op, 0),
+					      TREE_OPERAND (op, 1), env);
+	      if (!key || !env.provable_p (key))
+		{
+		  if (reason_out)
+		    *reason_out = OA_UNPROVABLE_NO_FACT;
+		  return false;
+		}
+	    }
 	  tree obj = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
 	  bool via_pointer = TREE_CODE (obj) == INDIRECT_REF;
 	  tree obj_expr = via_pointer
@@ -16279,13 +16600,26 @@ oa_provable_p (tree expr, oa_env &env, oa_unprovable_reason *reason_out = nullpt
 	field_key = env.field_object_identity_key (identity, field);
       if (!POINTER_TYPE_P (TREE_TYPE (field))
 	  && TREE_CODE (TREE_TYPE (field)) != REFERENCE_TYPE
-	  && !(field_key && env.provable_p (field_key)))
+	  && (oa_union_member_p (field)
+	      || !(field_key && env.provable_p (field_key))))
 	{
 	  if (field_key && env.member_ended_p (identity, field))
 	    {
 	      if (reason_out)
 		*reason_out = OA_UNPROVABLE_NO_FACT;
 	      return false;
+	    }
+	  /* A union's member: only while it is the active one.  */
+	  if (oa_union_member_p (field))
+	    {
+	      tree key = oa_union_active_key (TREE_OPERAND (expr, 0), field,
+					      env);
+	      if (!key || !env.provable_p (key))
+		{
+		  if (reason_out)
+		    *reason_out = OA_UNPROVABLE_NO_FACT;
+		  return false;
+		}
 	    }
 	  /* Same structural recursion the ADDR_EXPR/COMPONENT_REF case
 	     above performs for an explicit '&obj.field' -- computed fresh
@@ -20352,12 +20686,30 @@ oa_check_offset_in_bounds (tree t, tree array_type, const oa_range_fact &total,
    'conveyor' keyword -- checked by the caller, not here.  */
 
 
+/* The union member accesses an expression being scanned by
+   oa_scan_array_bounds_in_expr designates without accessing: the target
+   of an assignment (which starts its object) and the operand of '&'.  */
+static hash_set<tree> *oa_union_access_exempt;
+/* An assignment's target, scanned on its own.  */
+static tree oa_union_write_target;
+
 static void
 oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
 {
   auto strength = make_temp_override (oa_conveyor_strength, true);
   if (!oa_diagnostics_active)
     return;
+  hash_set<tree> exempt;
+  auto own_exempt = make_temp_override (oa_union_access_exempt, &exempt);
+  if (oa_union_write_target)
+    for (tree c = oa_union_write_target; ; c = TREE_OPERAND (c, 0))
+      {
+	c = STRIP_ANY_LOCATION_WRAPPER (c);
+	if (TREE_CODE (c) == COMPONENT_REF)
+	  exempt.add (c);
+	else if (TREE_CODE (c) != ARRAY_REF)
+	  break;
+      }
   cp_walk_tree (expr, [](tree *tp, int *walk_subtrees_p, void *data_) -> tree
     {
       oa_env *e = (oa_env *) data_;
@@ -20397,6 +20749,39 @@ oa_scan_array_bounds_in_expr (tree *expr, oa_env &env)
       /* See oa_deref_scan_only.  */
       if (oa_deref_scan_only && TREE_CODE (t) != INDIRECT_REF)
 	return NULL_TREE;
+
+      /* D4324 (P4445 2.2.2.5): an access to a union's member is to its
+	 active member.  An assignment's target and an address taken are
+	 designated, not accessed: their member accesses are exempt.  */
+      if (TREE_CODE (t) == MODIFY_EXPR || TREE_CODE (t) == INIT_EXPR
+	  || TREE_CODE (t) == ADDR_EXPR)
+	for (tree c = TREE_OPERAND (t, 0); ; c = TREE_OPERAND (c, 0))
+	  {
+	    c = STRIP_ANY_LOCATION_WRAPPER (c);
+	    if (TREE_CODE (c) == COMPONENT_REF)
+	      oa_union_access_exempt->add (c);
+	    else if (TREE_CODE (c) != ARRAY_REF)
+	      break;
+	  }
+      if (TREE_CODE (t) == COMPONENT_REF
+	  && !oa_union_access_exempt->contains (t))
+	{
+	  /* 'u.b.m', reading a member of B's common initial sequence with
+	     U's active member: U.B is not accessed.  */
+	  tree inner = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+	  if (TREE_CODE (inner) == COMPONENT_REF
+	      && oa_union_member_p (TREE_OPERAND (inner, 1))
+	      && oa_union_common_initial_read_p (t, *e))
+	    oa_union_access_exempt->add (inner);
+	  if (oa_union_member_p (TREE_OPERAND (t, 1))
+	      && !oa_provable_p (build1 (ADDR_EXPR,
+					 build_pointer_type (TREE_TYPE (t)),
+					 t), *e))
+	    oa_conveyor_error_at (EXPR_LOC_OR_LOC (t, oa_current_stmt_loc),
+				  "access to %qD, a member of a union, not "
+				  "provably to its active member in a "
+				  "conveyor function", TREE_OPERAND (t, 1));
+	}
 
       if (TREE_CODE (t) == ARRAY_REF)
 	{
@@ -23123,6 +23508,64 @@ oa_check_predicate_writable_indirection_arg (tree call, tree callee,
   oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 }
 
+
+static tree oa_substitute_call_arg (tree, tree, tree);
+
+/* EXPR, an expression in CALLEE's parameters, with CALL's arguments for
+   them: '*r' for a reference parameter R given '&x' is X.  NULL_TREE if
+   an argument can't be found.  */
+
+static tree
+oa_substitute_params_in (tree callee, tree call, tree expr)
+{
+  tree copy = unshare_expr (expr);
+  struct data_t { tree callee, call; bool ok; };
+  data_t d = { callee, call, true };
+  cp_walk_tree (&copy, [] (tree *tp, int *walk_subtrees, void *dv) -> tree
+    {
+      data_t *d = (data_t *) dv;
+      tree t = *tp;
+      tree parm = NULL_TREE;
+      bool deref = false;
+      if (TREE_CODE (t) == INDIRECT_REF)
+	{
+	  tree op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (t, 0));
+	  while (CONVERT_EXPR_P (op) || TREE_CODE (op) == NON_LVALUE_EXPR)
+	    op = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (op, 0));
+	  if (TREE_CODE (op) == PARM_DECL && DECL_CONTEXT (op) == d->callee)
+	    {
+	      parm = op;
+	      deref = true;
+	    }
+	}
+      else if (TREE_CODE (t) == PARM_DECL && DECL_CONTEXT (t) == d->callee)
+	parm = t;
+      if (!parm)
+	return NULL_TREE;
+      *walk_subtrees = 0;
+      tree a = oa_substitute_call_arg (d->callee, d->call, parm);
+      if (!a)
+	{
+	  d->ok = false;
+	  return t;
+	}
+      if (!deref)
+	{
+	  *tp = a;
+	  return NULL_TREE;
+	}
+      tree s = STRIP_ANY_LOCATION_WRAPPER (a);
+      while (CONVERT_EXPR_P (s) || TREE_CODE (s) == NON_LVALUE_EXPR)
+	s = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (s, 0));
+      if (TREE_CODE (s) == ADDR_EXPR)
+	*tp = TREE_OPERAND (s, 0);
+      else
+	*tp = build1 (INDIRECT_REF, TREE_TYPE (t), a);
+      return NULL_TREE;
+    }, &d, NULL);
+  return d.ok ? copy : NULL_TREE;
+}
+
 static void
 oa_handle_call_precondition_obligation (tree call, oa_env &env,
 					 bool in_predicate_context = false)
@@ -23272,8 +23715,25 @@ oa_handle_call_precondition_obligation (tree call, oa_env &env,
 		  substituted = CALL_EXPR_ARG (call, argno);
 		break;
 	      }
+	  /* Any other shape ('&r.m', '&p->m'): the expression with the
+	     call's arguments for CALLEE's parameters, or, failing that,
+	     unprovable -- never passed silently.  */
 	  if (!substituted)
-	    continue;
+	    {
+	      substituted = oa_substitute_params_in (callee, call, arg);
+	      if (!substituted)
+		{
+		  oa_error_at (EXPR_LOCATION (call),
+			       "cannot prove %<is_object_address%> for %qE, "
+			       "required by the precondition of %qD",
+			       arg, callee);
+		  oa_inform (EXPR_LOCATION (call), "%s",
+			     _(oa_unprovable_reason_text
+				 (OA_UNPROVABLE_UNSUPPORTED_CONDITION)));
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  continue;
+		}
+	    }
 
 	  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 	  if (!oa_provable_p (substituted, env, &reason)
@@ -32536,6 +32996,16 @@ oa_handle_precondition_stmt (tree contract, oa_env &env)
 		    if (oa_array_object_identity (arg, env, &identity))
 		      arg = identity;
 		  }
+		/* 'is_object_address (&u.m)' for a member M of a union U:
+		   M is U's active member.  */
+		else if (TREE_CODE (op) == COMPONENT_REF
+			 && oa_union_member_p (TREE_OPERAND (op, 1)))
+		  {
+		    if (tree key = oa_union_active_key (TREE_OPERAND (op, 0),
+							TREE_OPERAND (op, 1),
+							env))
+		      arg = key;
+		  }
 	      }
 	    /* D4324/P2680: 'is_object_address(p)' for a POINTER-TYPED FIELD
 	       p (e.g. 'this->m_ptr', read directly as a value, no '&') --
@@ -33182,6 +33652,12 @@ oa_handle_assertion_stmt (tree stmt, oa_env &env)
 			   may have ended.  */
 			env.set (key, true);
 		      }
+		    /* A union's member: its active one.  */
+		    if (oa_union_member_p (TREE_OPERAND (op, 1)))
+		      if (tree active = oa_union_active_key (TREE_OPERAND (op, 0),
+							     TREE_OPERAND (op, 1),
+							     env))
+			env.set (active, true);
 		  }
 	      }
 	    /* D4324/P2680: 'is_object_address(p)' for a POINTER-TYPED FIELD
@@ -35794,7 +36270,10 @@ oa_walk_stmt (tree *stmt, oa_env &env)
       break;
     default:
       if (!oa_walks_own_parts_p (TREE_CODE (t)))
-	oa_apply_increments (t, env);
+	{
+	  oa_apply_increments (t, env);
+	  oa_union_writes (t, env);
+	}
       break;
     }
 }
@@ -36867,7 +37346,11 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	   arithmetic-computing LHS.  */
 	if (current_function_decl && DECL_DECLARED_CONVEYOR_P (current_function_decl))
 	  {
-	    oa_scan_item8_in_expr (&TREE_OPERAND (t, 0), env);
+	    {
+	      auto target = make_temp_override (oa_union_write_target,
+						TREE_OPERAND (t, 0));
+	      oa_scan_item8_in_expr (&TREE_OPERAND (t, 0), env);
+	    }
 	    oa_scan_item8_in_expr (&TREE_OPERAND (t, 1), env);
 	  }
 	/* A store through a pointer or reference ('*p = 1', 'r = 1' for
@@ -38758,6 +39241,15 @@ oa_seed_entry_env (tree fndecl, tree body, oa_env &env)
 		  tree identity;
 		  if (oa_array_object_identity (arg, env, &identity))
 		    arg = identity;
+		}
+	      /* 'is_object_address (&u.m)' for a member M of a union U: M is
+		 U's active member.  */
+	      else if (TREE_CODE (op) == COMPONENT_REF
+		       && oa_union_member_p (TREE_OPERAND (op, 1)))
+		{
+		  if (tree key = oa_union_active_key (TREE_OPERAND (op, 0),
+						      TREE_OPERAND (op, 1), env))
+		    arg = key;
 		}
 	    }
 	  else if (TREE_CODE (arg) == COMPONENT_REF)

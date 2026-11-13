@@ -2544,6 +2544,498 @@ cg_scope_ended_at_p (tree decl, gimple *at)
   return false;
 }
 
+
+/* D4324 (P4445 2.2.2.5): FIELD is a member of a union.  Only the active
+   member of a union is an object: an access to another has undefined
+   behavior.  */
+
+/* The address a constructor call being checked constructs at: there the
+   object begins, so a union member there need not be active yet.  */
+static tree cg_union_ctor_this;
+
+/* If CALL calls a constructor, the address it constructs at, an
+   ADDR_EXPR (followed through the SSA name computing it), or
+   NULL_TREE.  */
+
+static tree
+cg_constructed_address (gcall *call)
+{
+  tree fn = gimple_call_fndecl (call);
+  if (!fn || !DECL_CONSTRUCTOR_P (fn) || gimple_call_num_args (call) == 0)
+    return NULL_TREE;
+  tree a = gimple_call_arg (call, 0);
+  for (int i = 0; i < 8 && TREE_CODE (a) == SSA_NAME; ++i)
+    {
+      gassign *d = safe_dyn_cast <gassign *> (SSA_NAME_DEF_STMT (a));
+      if (!d || !gimple_assign_single_p (d))
+	return NULL_TREE;
+      a = gimple_assign_rhs1 (d);
+    }
+  return TREE_CODE (a) == ADDR_EXPR ? a : NULL_TREE;
+}
+
+static bool
+cg_union_member_p (tree field)
+{
+  return (field && TREE_CODE (field) == FIELD_DECL && DECL_CONTEXT (field)
+	  && TREE_CODE (DECL_CONTEXT (field)) == UNION_TYPE);
+}
+
+/* The memory state at STMT: its virtual use, or else the latest
+   virtual definition before it.  */
+
+static tree
+cg_memory_state_at (gimple *stmt)
+{
+  if (tree v = gimple_vuse (stmt))
+    return v;
+  basic_block bb = gimple_bb (stmt);
+  if (!bb)
+    return NULL_TREE;
+  gimple_stmt_iterator gsi = gsi_for_stmt (stmt);
+  gsi_prev (&gsi);
+  for (int blocks = 0; blocks < 64; ++blocks)
+    {
+      for (; !gsi_end_p (gsi); gsi_prev (&gsi))
+	{
+	  gimple *s = gsi_stmt (gsi);
+	  if (tree d = gimple_vdef (s))
+	    return d;
+	  if (tree u = gimple_vuse (s))
+	    return u;
+	}
+      if (gphi *vphi = get_virtual_phi (bb))
+	return gimple_phi_result (vphi);
+      /* Without a PHI, every way in has the same memory state.  */
+      if (EDGE_COUNT (bb->preds) == 0)
+	return NULL_TREE;
+      bb = EDGE_PRED (bb, 0)->src;
+      if (bb == ENTRY_BLOCK_PTR_FOR_FN (cfun))
+	return ssa_default_def (cfun, gimple_vop (cfun));
+      gsi = gsi_last_bb (bb);
+    }
+  return NULL_TREE;
+}
+
+static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
+static tree cg_contract_check_object_identity (gcall *, tree, tree, tree);
+static bool cg_member_is_condition_member_p (tree, tree, tree, tree);
+static tree cg_gimple_object_identity (tree);
+static void cg_conveyor_error_at (location_t, const char *, ...)
+  ATTRIBUTE_GCC_DIAG (2,3);
+
+/* REF, a member access in a contract's condition, without the
+   conversions of the pointer it dereferences ('(*(const S *) this).u').  */
+
+static tree
+cg_strip_ref_conversions (tree ref)
+{
+  ref = STRIP_ANY_LOCATION_WRAPPER (ref);
+  if (TREE_CODE (ref) == COMPONENT_REF)
+    {
+      tree in = cg_strip_ref_conversions (TREE_OPERAND (ref, 0));
+      if (in != TREE_OPERAND (ref, 0))
+	ref = build3 (COMPONENT_REF, TREE_TYPE (ref), in,
+		      TREE_OPERAND (ref, 1), NULL_TREE);
+    }
+  else if (TREE_CODE (ref) == INDIRECT_REF)
+    {
+      tree p = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ref, 0));
+      while (CONVERT_EXPR_P (p) || TREE_CODE (p) == NON_LVALUE_EXPR)
+	p = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (p, 0));
+      if (p != TREE_OPERAND (ref, 0))
+	ref = build1 (INDIRECT_REF, TREE_TYPE (ref), p);
+    }
+  return ref;
+}
+
+/* The member of the union OBJ an 'is_object_address (&R)' conjunct among
+   CONJUNCTS states active, R a member access in the condition's terms,
+   IDENTITY mapping its variable to its value (null: the function's own
+   parameters at entry), or NULL_TREE.  */
+
+static tree
+cg_union_member_stated (tree obj, const vec<tree *> &conjuncts,
+			gcall *check, tree struct_var, tree decls)
+{
+  for (tree *c : conjuncts)
+    {
+      tree arg;
+      if (!is_object_address_call_p (*c, &arg))
+	continue;
+      arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+      while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg))
+	arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+      if (TREE_CODE (arg) != ADDR_EXPR)
+	continue;
+      tree ref = cg_strip_ref_conversions (TREE_OPERAND (arg, 0));
+      if (TREE_CODE (ref) != COMPONENT_REF
+	  || !cg_union_member_p (TREE_OPERAND (ref, 1)))
+	continue;
+      tree decl = ref;
+      while (handled_component_p (decl) || TREE_CODE (decl) == INDIRECT_REF)
+	decl = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (decl, 0));
+      if (!DECL_P (decl))
+	continue;
+      tree identity;
+      if (check)
+	identity = cg_contract_check_object_identity (check, struct_var,
+						      decls, decl);
+      else if (TREE_CODE (decl) == PARM_DECL
+	       && (POINTER_TYPE_P (TREE_TYPE (decl))
+		   || DECL_BY_REFERENCE (decl)))
+	{
+	  tree d = ssa_default_def (cfun, decl);
+	  identity = d ? cg_gimple_object_identity (d) : NULL_TREE;
+	}
+      else
+	identity = decl;
+      tree field = TREE_OPERAND (ref, 1);
+      tree e = build3 (COMPONENT_REF, TREE_TYPE (field), obj, field,
+		       NULL_TREE);
+      if (cg_member_is_condition_member_p (e, ref, decl, identity))
+	return field;
+    }
+  return NULL_TREE;
+}
+
+/* The member of the union OBJ that the current function's preconditions
+   state active on entry, or NULL_TREE.  */
+
+static tree cg_union_site_member (tree);
+
+static tree
+cg_union_entry_member (tree obj)
+{
+  if (tree m = cg_union_site_member (obj))
+    return m;
+  for (tree contract : fn_contracts (cfun->decl))
+    {
+      if (!PRECONDITION_P (contract)
+	  || !oa_contract_conveyor_active_cached_p (contract)
+	  || !oa_contract_failure_terminates_cached_p (contract))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (!cond || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      if (tree m = cg_union_member_stated (obj, conjuncts, NULL, NULL_TREE,
+					   NULL_TREE))
+	return m;
+    }
+  return NULL_TREE;
+}
+
+/* The member of the union OBJ that CALL, a conveyor-active contract
+   check (an assertion, or a precondition checked in the function's
+   body), trusts or proves active ('is_object_address (&u.m)'), or
+   NULL_TREE.  *CHECK_OUT says whether CALL is such a check: its
+   predicate, strict, writes nothing of the program's.  */
+
+static tree
+cg_union_checked_member (gcall *call, tree obj, bool *check_out)
+{
+  *check_out = false;
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_p (call, &struct_var, &cond, &decls);
+  if (!contract
+      || (TREE_CODE (contract) != ASSERTION_STMT && !PRECONDITION_P (contract))
+      || !cond || cond == error_mark_node
+      || !oa_contract_conveyor_active_public
+	    (contract, DECL_ORIGIN (current_function_decl)))
+    return NULL_TREE;
+  *check_out = true;
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  return cg_union_member_stated (obj, conjuncts, call, struct_var, decls);
+}
+
+static tree cg_route_object (tree, tree *, bool);
+static tree cg_pointer_root (tree);
+
+/* Whether CALL may change OBJ: it stores to it, OBJ is a global any
+   function can reach, or an argument is a route to OBJ's object
+   (cg_route_object), or one whose object isn't known.  */
+
+static bool
+cg_call_may_reach_p (gcall *call, tree obj)
+{
+  tree base = get_base_address (obj);
+  if (!base)
+    return true;
+  tree root;
+  if (DECL_P (base))
+    {
+      if (is_global_var (base))
+	return true;
+      root = base;
+    }
+  else if (TREE_CODE (base) == MEM_REF)
+    root = cg_pointer_root (TREE_OPERAND (base, 0));
+  else
+    return true;
+  if (!root)
+    return true;
+  if (tree lhs = gimple_call_lhs (call))
+    if (get_base_address (lhs) == base)
+      return true;
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (!POINTER_TYPE_P (TREE_TYPE (arg)))
+	{
+	  /* An aggregate passed by value is a copy.  */
+	  continue;
+	}
+      tree member;
+      tree r = cg_route_object (arg, &member, true);
+      if (!r && member)
+	{
+	  tree mb = get_base_address (member);
+	  r = (mb && TREE_CODE (mb) == MEM_REF
+	       ? cg_pointer_root (TREE_OPERAND (mb, 0)) : mb);
+	}
+      if (!r || r == root)
+	return true;
+    }
+  return false;
+}
+
+/* Whether D, a store or clobber, writes a local variable of the current
+   function that OBJ can't lie in: OBJ is another variable, or is reached
+   through a parameter's incoming pointer, which can't point into this
+   function's own frame.  */
+
+static bool
+cg_store_elsewhere_p (gimple *d, tree obj)
+{
+  if (!gimple_assign_single_p (d))
+    return false;
+  tree dest = get_base_address (gimple_assign_lhs (d));
+  if (!dest || !VAR_P (dest) || !auto_var_in_fn_p (dest, cfun->decl))
+    return false;
+  tree base = get_base_address (obj);
+  if (!base)
+    return false;
+  if (DECL_P (base))
+    return base != dest;
+  if (TREE_CODE (base) == MEM_REF
+      && TREE_CODE (TREE_OPERAND (base, 0)) == SSA_NAME)
+    {
+      tree ptr = TREE_OPERAND (base, 0);
+      return (SSA_NAME_IS_DEFAULT_DEF (ptr)
+	      && SSA_NAME_VAR (ptr)
+	      && TREE_CODE (SSA_NAME_VAR (ptr)) == PARM_DECL);
+    }
+  return false;
+}
+
+/* The member of the union OBJ, a GIMPLE lvalue, that is active in the
+   memory state VUSE: the member a store into OBJ went through last
+   (a built-in or trivial assignment starts its object, [class.union]),
+   the active member of a union copied into OBJ whole, the first one of
+   a value-initialized OBJ, one a contract check or a precondition
+   states; NULL_TREE if not known, ERROR_MARK_NODE on a path that loops
+   back to a PHI being looked at (no constraint).  */
+
+static tree
+cg_union_active_member_1 (tree obj, tree vuse, unsigned depth,
+			  hash_set<tree> &visiting)
+{
+  for (int steps = 0; steps < 1024 && vuse; ++steps)
+    {
+      gimple *d = SSA_NAME_DEF_STMT (vuse);
+      if (!d || gimple_nop_p (d))
+	return cg_union_entry_member (obj);
+      if (gphi *phi = dyn_cast <gphi *> (d))
+	{
+	  if (depth > 16)
+	    return NULL_TREE;
+	  if (visiting.add (vuse))
+	    return error_mark_node;
+	  tree r = error_mark_node;
+	  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	    {
+	      tree a = cg_union_active_member_1 (obj, gimple_phi_arg_def (phi, i),
+						 depth + 1, visiting);
+	      if (a == error_mark_node)
+		continue;
+	      if (!a || (r != error_mark_node && r != a))
+		{
+		  r = NULL_TREE;
+		  break;
+		}
+	      r = a;
+	    }
+	  visiting.remove (vuse);
+	  return r;
+	}
+      if (gcall *call = dyn_cast <gcall *> (d))
+	{
+	  bool check;
+	  if (tree m = cg_union_checked_member (call, obj, &check))
+	    return m;
+	  /* A constructor of one of OBJ's members: it begins.  */
+	  if (tree a = cg_constructed_address (call))
+	    {
+	      tree ref = TREE_OPERAND (a, 0);
+	      if (TREE_CODE (ref) == COMPONENT_REF
+		  && cg_union_member_p (TREE_OPERAND (ref, 1))
+		  && operand_equal_p (TREE_OPERAND (ref, 0), obj, 0))
+		return TREE_OPERAND (ref, 1);
+	    }
+	  /* Another call changes OBJ only given a route to it, the rule
+	     calls ending objects follow (cg_end_route_objects).  */
+	  if (cg_call_may_reach_p (call, obj))
+	    return NULL_TREE;
+	  vuse = gimple_vuse (d);
+	  continue;
+	  if (check)
+	    {
+	      vuse = gimple_vuse (d);
+	      continue;
+	    }
+	}
+      if (gimple_assign_single_p (d) && gimple_vdef (d))
+	{
+	  tree lhs = gimple_assign_lhs (d);
+	  /* Through one of OBJ's members.  */
+	  for (tree t = lhs; handled_component_p (t); t = TREE_OPERAND (t, 0))
+	    if (TREE_CODE (t) == COMPONENT_REF
+		&& cg_union_member_p (TREE_OPERAND (t, 1))
+		&& operand_equal_p (TREE_OPERAND (t, 0), obj, 0))
+	      return TREE_OPERAND (t, 1);
+	  /* OBJ whole.  */
+	  if (operand_equal_p (lhs, obj, 0))
+	    {
+	      if (gimple_clobber_p (d))
+		return NULL_TREE;
+	      tree rhs = gimple_assign_rhs1 (d);
+	      if (TREE_CODE (rhs) == CONSTRUCTOR)
+		{
+		  if (CONSTRUCTOR_NELTS (rhs) == 1
+		      && TREE_CODE (CONSTRUCTOR_ELT (rhs, 0)->index) == FIELD_DECL)
+		    return CONSTRUCTOR_ELT (rhs, 0)->index;
+		  if (CONSTRUCTOR_NELTS (rhs) == 0)
+		    for (tree f = TYPE_FIELDS (TREE_TYPE (obj)); f;
+			 f = DECL_CHAIN (f))
+		      if (TREE_CODE (f) == FIELD_DECL)
+			return f;
+		  return NULL_TREE;
+		}
+	      if (depth <= 16
+		  && types_compatible_p (TREE_TYPE (rhs), TREE_TYPE (obj))
+		  && (handled_component_p (rhs) || DECL_P (rhs)
+		      || TREE_CODE (rhs) == MEM_REF))
+		return cg_union_active_member_1 (rhs, gimple_vuse (d),
+						 depth + 1, visiting);
+	      return NULL_TREE;
+	    }
+	}
+      if (!cg_store_elsewhere_p (d, obj) && stmt_may_clobber_ref_p (d, obj))
+	return NULL_TREE;
+      vuse = gimple_vuse (d);
+    }
+  return NULL_TREE;
+}
+
+/* The active member of the union OBJ at STMT, or NULL_TREE.  */
+
+static tree
+cg_union_active_member (tree obj, gimple *stmt)
+{
+  tree vuse = stmt ? cg_memory_state_at (stmt) : NULL_TREE;
+  if (!vuse)
+    return NULL_TREE;
+  hash_set<tree> visiting;
+  tree m = cg_union_active_member_1 (obj, vuse, 0, visiting);
+  return m == error_mark_node ? NULL_TREE : m;
+}
+
+/* Whether M, a member of the standard-layout struct that union member B
+   is, is in the common initial sequence of B and A, another member of
+   the same union: read through B while A is active, [class.mem.general].  */
+
+static bool
+cg_union_common_initial_member_p (tree a, tree b, tree m)
+{
+  tree at = TREE_TYPE (a), bt = TREE_TYPE (b);
+  if (a == b || !CLASS_TYPE_P (at) || !CLASS_TYPE_P (bt)
+      || !std_layout_type_p (at) || !std_layout_type_p (bt))
+    return false;
+  tree f1 = TYPE_FIELDS (at), f2 = TYPE_FIELDS (bt);
+  while (next_common_initial_sequence (f1, f2))
+    {
+      if (!f1 || !f2)
+	break;
+      if (f2 == m)
+	return true;
+      f1 = DECL_CHAIN (f1);
+      f2 = DECL_CHAIN (f2);
+    }
+  return false;
+}
+
+/* Whether every union member access in REF, an lvalue, is to its union's
+   active member at STMT -- the outermost may instead read a member of
+   the common initial sequence it has with the active one.  On failure,
+   *BAD_OUT is the member not known active.  */
+
+static bool
+cg_union_accesses_active_p (tree ref, gimple *stmt, tree *bad_out)
+{
+  tree outer = NULL_TREE;
+  for (tree t = ref; handled_component_p (t); outer = t, t = TREE_OPERAND (t, 0))
+    {
+      if (TREE_CODE (t) != COMPONENT_REF || !cg_union_member_p (TREE_OPERAND (t, 1)))
+	continue;
+      tree field = TREE_OPERAND (t, 1);
+      tree active = cg_union_active_member (TREE_OPERAND (t, 0), stmt);
+      if (active == field)
+	continue;
+      if (active && outer && TREE_CODE (outer) == COMPONENT_REF
+	  && outer == ref
+	  && cg_union_common_initial_member_p (active, field,
+					       TREE_OPERAND (outer, 1)))
+	continue;
+      if (bad_out)
+	*bad_out = field;
+      return false;
+    }
+  return true;
+}
+
+/* Item 8 for a union: each access STMT makes to a union's member is to
+   its active member.  An assignment's target and an address taken are
+   not accesses: a store to a member starts its object.  */
+
+static void
+cg_check_union_access_ub (gimple *stmt)
+{
+  auto check = [&] (tree ref)
+    {
+      if (!ref || (!handled_component_p (ref)))
+	return;
+      tree bad = NULL_TREE;
+      if (!cg_union_accesses_active_p (ref, stmt, &bad))
+	cg_conveyor_error_at (gimple_location (stmt),
+			      "access to %qD, a member of a union, not "
+			      "provably to its active member in a conveyor "
+			      "function", bad);
+    };
+  if (gimple_assign_single_p (stmt) && gimple_vuse (stmt)
+      && !gimple_clobber_p (stmt))
+    check (gimple_assign_rhs1 (stmt));
+  else if (gcall *call = dyn_cast <gcall *> (stmt))
+    {
+      for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+	check (gimple_call_arg (call, i));
+    }
+  else if (greturn *ret = dyn_cast <greturn *> (stmt))
+    check (gimple_return_retval (ret));
+}
+
 static bool
 cg_addr_provable_p (tree addr, hash_map<tree, cg_fact> &established,
 		    bool require_conveyor, hash_set<tree> &in_progress,
@@ -2584,6 +3076,22 @@ cg_addr_provable_p (tree addr, hash_map<tree, cg_fact> &established,
       }
   if (DECL_P (base) && cg_scope_ended_at_p (base, cg_prover_at))
     return false;
+  /* A member of a union along the way: only its active member is an
+     object, where the address is proven.  */
+  for (tree ref = TREE_OPERAND (addr, 0); handled_component_p (ref);
+       ref = TREE_OPERAND (ref, 0))
+    if (TREE_CODE (ref) == COMPONENT_REF
+	&& cg_union_member_p (TREE_OPERAND (ref, 1))
+	/* The member a constructor constructs.  */
+	&& !(ref == TREE_OPERAND (addr, 0) && cg_union_ctor_this
+	     && operand_equal_p (TREE_OPERAND (cg_union_ctor_this, 0), ref, 0))
+	&& cg_union_active_member (TREE_OPERAND (ref, 0), cg_prover_at)
+	   != TREE_OPERAND (ref, 1))
+      {
+	if (reason_out)
+	  *reason_out = OA_UNPROVABLE_NO_FACT;
+	return false;
+      }
   if (DECL_P (base) || CONSTANT_CLASS_P (base)
       || TREE_CODE (base) == STRING_CST)
     return true;
@@ -8223,6 +8731,7 @@ cg_check_one_dereference_candidate (gimple *stmt, tree candidate,
     }
 
   hash_set<tree> in_progress;
+  auto at = make_temp_override (cg_prover_at, stmt);
   if (!cg_provable_object_address_p (base, established, /*require_conveyor=*/true,
 				       in_progress))
     cg_conveyor_error_at (gimple_location (stmt),
@@ -8649,6 +9158,102 @@ cg_report_uncovered_conjunct (tree conjunct, gcall *call, tree callee,
 		       (OA_UNPROVABLE_UNSUPPORTED_CONDITION)));
 }
 
+
+/* ARG, the operand of a precondition's 'is_object_address' of CALLEE
+   (GENERIC, in CALLEE's parameters), a member's address -- '&u.m',
+   '&p->m', '&this->m', through members only -- with CALL's arguments
+   for the parameter: the address in GIMPLE, or NULL_TREE.  */
+
+static tree
+cg_substitute_member_address (gcall *call, tree callee, tree arg)
+{
+  arg = STRIP_ANY_LOCATION_WRAPPER (arg);
+  if (TREE_CODE (arg) != ADDR_EXPR)
+    return NULL_TREE;
+  auto_vec<tree, 8> fields;
+  tree ref = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+  while (TREE_CODE (ref) == COMPONENT_REF)
+    {
+      fields.safe_push (TREE_OPERAND (ref, 1));
+      ref = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ref, 0));
+    }
+  if (fields.is_empty ())
+    return NULL_TREE;
+  bool deref = TREE_CODE (ref) == INDIRECT_REF;
+  if (deref)
+    ref = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ref, 0));
+  while (CONVERT_EXPR_P (ref) || TREE_CODE (ref) == NON_LVALUE_EXPR)
+    ref = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (ref, 0));
+  unsigned argno;
+  if (TREE_CODE (ref) != PARM_DECL
+      || !cg_find_param_position (callee, ref, &argno)
+      || argno >= gimple_call_num_args (call))
+    return NULL_TREE;
+  tree a = gimple_call_arg (call, argno);
+  tree obj;
+  if (deref)
+    {
+      if (!POINTER_TYPE_P (TREE_TYPE (a)))
+	return NULL_TREE;
+      if (TREE_CODE (a) == ADDR_EXPR)
+	obj = TREE_OPERAND (a, 0);
+      else if (TREE_CODE (a) == SSA_NAME)
+	obj = build_simple_mem_ref (a);
+      else
+	return NULL_TREE;
+    }
+  else if (handled_component_p (a) || DECL_P (a) || TREE_CODE (a) == MEM_REF)
+    obj = a;
+  else
+    return NULL_TREE;
+  for (unsigned i = fields.length (); i-- > 0; )
+    {
+      tree f = fields[i];
+      if (!RECORD_OR_UNION_TYPE_P (TREE_TYPE (obj))
+	  || !types_compatible_p (TYPE_MAIN_VARIANT (TREE_TYPE (obj)),
+				  TYPE_MAIN_VARIANT (DECL_CONTEXT (f))))
+	return NULL_TREE;
+      obj = build3 (COMPONENT_REF, TREE_TYPE (f), obj, f, NULL_TREE);
+    }
+  return build_fold_addr_expr (obj);
+}
+
+/* The same check cg_check_call makes for a parameter, for ARG, a
+   precondition's 'is_object_address' operand of another shape
+   (cg_substitute_member_address): proven at CALL or diagnosed.  */
+
+static void
+cg_check_member_address_obligation (gcall *call, tree callee, tree arg,
+				    hash_map<tree, cg_fact> &established,
+				    bool require_conveyor, bool mandatory,
+				    bool strict)
+{
+  oa_unprovable_reason reason = OA_UNPROVABLE_UNSUPPORTED_CONDITION;
+  if (tree addr = cg_substitute_member_address (call, callee, arg))
+    {
+      reason = OA_UNPROVABLE_NONE;
+      auto at = make_temp_override (cg_prover_at, call);
+      hash_set<tree> in_progress;
+      if (cg_provable_object_address_p (addr, established, require_conveyor,
+					in_progress, &reason))
+	return;
+    }
+  if (mandatory)
+    cg_conveyor_error_at (gimple_location (call),
+			  "cannot prove %<is_object_address%> for %qE, "
+			  "required by the precondition of %qD", arg, callee);
+  else if (strict)
+    cg_obligation_error_at (gimple_location (call),
+			     "cannot prove %<is_object_address%> for %qE, as "
+			     "required by the precondition of %qD", arg, callee);
+  else
+    warning_at (gimple_location (call), 0,
+		"cannot verify %<is_object_address%> for %qE, as "
+		"required by the precondition of %qD", arg, callee);
+  if (const char *why = oa_unprovable_reason_text (reason))
+    inform (gimple_location (call), "%s", _(why));
+}
+
 static void
 cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		hash_map<tree, cg_fact> &established_nz,
@@ -8763,7 +9368,17 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
 	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
 	  if (TREE_CODE (arg) != PARM_DECL)
-	    continue;
+	    {
+	      /* A member's address ('&u.m', '&p->m'): with CALL's
+		 arguments, proven at CALL; any other shape unprovable --
+		 never passed silently.  */
+	      if (is_oa && !reported_oa_parms.add (arg))
+		cg_check_member_address_obligation (call, callee, arg,
+						    established,
+						    require_conveyor,
+						    mandatory_oa, strict);
+	      continue;
+	    }
 	  if ((TYPE_REF_P (TREE_TYPE (arg)) || is_this_parameter (arg))
 	      && DECL_DECLARED_CONVEYOR_P (callee))
 	    continue;
@@ -19493,6 +20108,17 @@ cg_seed_iile_capture_facts (function *fun,
    check of the contract: the core function's parameter I receives the
    value captured in the check's field I.  */
 
+/* A union reached through a captured pointer -- PATH, its members from
+   the pointee -- and its active member there.  FIELD_DECLs only, which
+   their types keep.  */
+
+struct cg_union_site
+{
+  tree path[4];
+  unsigned len;
+  tree member;
+};
+
 struct cg_site_fact
 {
   bool has_range = false;
@@ -19501,9 +20127,108 @@ struct cg_site_fact
   bool object_address = false;
   bool has_float = false;
   frange float_range = frange ();
+  /* The unions the value points to or into, with their active members
+     (cg_union_active_member at the check).  */
+  cg_union_site unions[8];
+  unsigned n_unions = 0;
 };
 
+/* Record in F the active member, at CALL, of each union in OBJ (of TYPE)
+   or in its members, PATH leading to OBJ.  */
+
+static void
+cg_record_union_sites (cg_site_fact &f, tree obj, gcall *call,
+		       tree *path, unsigned len, unsigned &budget)
+{
+  tree type = TREE_TYPE (obj);
+  if (!RECORD_OR_UNION_TYPE_P (type) || !COMPLETE_TYPE_P (type)
+      || budget == 0 || f.n_unions >= 8)
+    return;
+  --budget;
+  if (TREE_CODE (type) == UNION_TYPE)
+    {
+      tree m = cg_union_active_member (obj, call);
+      if (!m)
+	return;
+      cg_union_site &u = f.unions[f.n_unions++];
+      for (unsigned i = 0; i < len; ++i)
+	u.path[i] = path[i];
+      u.len = len;
+      u.member = m;
+      if (len < 4)
+	{
+	  path[len] = m;
+	  cg_record_union_sites (f, build3 (COMPONENT_REF, TREE_TYPE (m), obj,
+					    m, NULL_TREE),
+				 call, path, len + 1, budget);
+	}
+      return;
+    }
+  if (len >= 4)
+    return;
+  for (tree fld = TYPE_FIELDS (type); fld; fld = DECL_CHAIN (fld))
+    if (TREE_CODE (fld) == FIELD_DECL
+	&& RECORD_OR_UNION_TYPE_P (TREE_TYPE (fld)))
+      {
+	path[len] = fld;
+	cg_record_union_sites (f, build3 (COMPONENT_REF, TREE_TYPE (fld), obj,
+					  fld, NULL_TREE),
+			       call, path, len + 1, budget);
+      }
+}
+
 static hash_map<tree, vec<cg_site_fact> *> *cg_predicate_site_facts;
+
+/* The active member, recorded at the checks of the contract whose
+   predicate core function is the current one (cg_record_union_sites), of
+   the union OBJ that a parameter of it points to or into.  */
+
+static tree
+cg_union_site_member (tree obj)
+{
+  if (!cg_predicate_site_facts)
+    return NULL_TREE;
+  vec<cg_site_fact> **facts = cg_predicate_site_facts->get (cfun->decl);
+  if (!facts
+      || (cg_predicate_entry_checked
+	  && cg_predicate_entry_checked->contains (cfun->decl)))
+    return NULL_TREE;
+  tree path[4];
+  unsigned len = 0;
+  tree t = obj;
+  while (TREE_CODE (t) == COMPONENT_REF)
+    {
+      if (len >= 4)
+	return NULL_TREE;
+      path[len++] = TREE_OPERAND (t, 1);
+      t = TREE_OPERAND (t, 0);
+    }
+  if (TREE_CODE (t) != MEM_REF || !integer_zerop (TREE_OPERAND (t, 1)))
+    return NULL_TREE;
+  tree ptr = TREE_OPERAND (t, 0);
+  if (TREE_CODE (ptr) != SSA_NAME || !SSA_NAME_IS_DEFAULT_DEF (ptr)
+      || !SSA_NAME_VAR (ptr) || TREE_CODE (SSA_NAME_VAR (ptr)) != PARM_DECL)
+    return NULL_TREE;
+  unsigned i = 0;
+  tree parm = DECL_ARGUMENTS (cfun->decl);
+  for (; parm && parm != SSA_NAME_VAR (ptr); parm = DECL_CHAIN (parm))
+    ++i;
+  if (!parm || i >= (*facts)->length ())
+    return NULL_TREE;
+  const cg_site_fact &f = (**facts)[i];
+  for (unsigned k = 0; k < f.n_unions; ++k)
+    {
+      const cg_union_site &u = f.unions[k];
+      if (u.len != len)
+	continue;
+      bool same = true;
+      for (unsigned j = 0; j < len && same; ++j)
+	same = u.path[j] == path[len - 1 - j];
+      if (same)
+	return u.member;
+    }
+  return NULL_TREE;
+}
 
 /* Record, at contract check CALL, the facts about each value it
    captures for its predicate core function.  */
@@ -19591,11 +20316,17 @@ cg_record_predicate_site_facts (gcall *call,
 			   || cg_excludes_zero_at_p (val, call, ranger, true));
 	    }
 	  else if (POINTER_TYPE_P (type))
-	    f.object_address
-	      = (f.object_address
-		 || cg_provable_object_address_at_p (val, call, established,
-						    /*require_conveyor=*/true,
-						    NULL));
+	    {
+	      f.object_address
+		= (f.object_address
+		   || cg_provable_object_address_at_p (val, call, established,
+						      /*require_conveyor=*/true,
+						      NULL));
+	      tree path[4];
+	      unsigned budget = 32;
+	      cg_record_union_sites (f, build_simple_mem_ref (val), call, path,
+				     0, budget);
+	    }
 	  else if (SCALAR_FLOAT_TYPE_P (type))
 	    {
 	      frange fr (type);
@@ -19624,6 +20355,21 @@ cg_record_predicate_site_facts (gcall *call,
       const cg_site_fact &b = here[i];
       a.nonzero &= b.nonzero;
       a.object_address &= b.object_address;
+      /* The active members both have.  */
+      unsigned kept = 0;
+      for (unsigned j = 0; j < a.n_unions; ++j)
+	{
+	  bool both = false;
+	  for (unsigned k = 0; k < b.n_unions && !both; ++k)
+	    if (a.unions[j].len == b.unions[k].len
+		&& a.unions[j].member == b.unions[k].member
+		&& !memcmp (a.unions[j].path, b.unions[k].path,
+			    a.unions[j].len * sizeof (tree)))
+	      both = true;
+	  if (both)
+	    a.unions[kept++] = a.unions[j];
+	}
+      a.n_unions = kept;
       if (a.has_range && b.has_range)
 	{
 	  if (!b.range.has_lo || (a.range.has_lo && b.range.lo < a.range.lo))
@@ -20453,6 +21199,7 @@ pass_contracts_gimple::execute_1 (function *fun)
 				      established_range, scalar_range_cache,
 				      ranger);
 	      cg_check_dereference_ub (stmt, established);
+	      cg_check_union_access_ub (stmt);
 	      cg_check_returned_reference (stmt, fun, established);
 	      cg_check_array_bounds_ub (stmt);
 	    }
@@ -20461,6 +21208,13 @@ pass_contracts_gimple::execute_1 (function *fun)
 	      gcall *call = as_a <gcall *> (stmt);
 	      {
 		auto consult = make_temp_override (cg_consult_call, call);
+		auto ctor_this = make_temp_override (cg_union_ctor_this,
+						     cg_constructed_address
+						       (call));
+		/* What the call's obligations are proven at, for what
+		   depends on the memory state there (a union's active
+		   member).  */
+		auto at = make_temp_override (cg_prover_at, call);
 		cg_callee_declared_note note (call);
 		/* A conveyor callee's implicit reference-parameter and
 		   receiver obligations are the callee's, whoever calls it --
