@@ -44426,6 +44426,14 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
   if (contract_control_is_ignored (ctrl, side, fndecl, quiet))
     return void_node;
 
+  /* A symbolic contract that isn't also strict states a fact the analysis
+     tracks; its predicate is never evaluated, only that ghost state, of
+     which constant evaluation has none -- as the generated code without
+     -fcontract-symbolic-runtime-checks (build_contract_check).  */
+  if (contract_control_symbolic_like (ctrl, side, fndecl, /*quiet=*/true)
+      && !contract_control_conveyor_like (ctrl, side, fndecl, /*quiet=*/true))
+    return void_node;
+
   tree op = contract_control_operator (ctrl);
   if (!op)
     {
