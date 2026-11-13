@@ -59,13 +59,11 @@ static_assert (std::meta::is_explicit (tafn (^^Mod)));
 static_assert (std::meta::is_user_provided (tafn (^^Mod)));
 static_assert (!std::meta::is_defaulted (tafn (^^Mod)));
 // Nor used otherwise: it only finds a template parameter object.
-static_assert (!std::is_convertible_v<A, template_object_info>);
 consteval info c1 () { return info (static_cast<template_object_info> (Mod{10})); }  // { dg-error "can only be used to find a template parameter object" }
 consteval info c2 () { template_object_info t (A{1}); return t; }                   // { dg-error "can only be used to find a template parameter object" }
 static_assert (std::is_same_v<T<Mod{3}>, T<Mod{10}>>);
 // A user-declared one must be explicit too.
 struct E1 { int i; consteval explicit operator template_object_info () const = default; };
-static_assert (!std::is_convertible_v<E1, template_object_info>);
 static_assert (std::is_same_v<T<E1{1}>, T<E1{1}>>);
 struct E2 { int i; consteval operator template_object_info () const = default; };   // { dg-error "must be declared .explicit." }
 
@@ -81,22 +79,42 @@ static_assert (std::is_same_v<T<D{{3}}>, T<D{{10}}>>);
 static_assert (std::is_same_v<T<Mod{3}>, T<Mod{10}>>);
 static_assert (std::meta::parent_of (std::meta::members_of (^^D, std::meta::access_context::unchecked ()).back ()) == ^^D);
 
-// Quacks like operator template: nothing can construct a
-// template_object_info from it, extract can't take it, and deleting it opts
-// its class out.
-static_assert (!std::is_constructible_v<template_object_info, A>);
-static_assert (!std::is_constructible_v<template_object_info, Mod>);
-consteval bool extract_throws () {
-  try { (void) std::meta::extract<template_object_info (A::*) () const> (tafn (^^A)); }
-  catch (std::meta::exception &) { return true; }
-  return false;
-}
-static_assert (extract_throws ());
+// Quacks like operator template: extract can't take it -- its type can't
+// even be the template argument -- and deleting it opts its class out.
+consteval void ex () { (void) std::meta::extract<template_object_info (A::*) () const> (tafn (^^A)); }  // { dg-error "cannot be a template argument|no matching function|trying to instantiate" }
 struct Z { int i; consteval explicit operator template_object_info () const = delete; };
 T<Z{1}> tz;                                                        // { dg-error "not a valid type|not structural|structural" }
+// What matters is whether a class is structural, however it opted in.
+static_assert (std::is_structural_v<A> && std::meta::is_structural_type (^^A));    // implicit
+static_assert (std::is_structural_v<C> && std::meta::is_structural_type (^^C));    // defaulted, private member
+static_assert (std::is_structural_v<E1> && std::meta::is_structural_type (^^E1));  // defaulted
+static_assert (std::is_structural_v<Mod> && std::meta::is_structural_type (^^Mod));  // user-provided
+static_assert (!std::is_structural_v<Z> && !std::meta::is_structural_type (^^Z)); // deleted
+static_assert (!__builtin_is_structural (template_object_info) && !std::meta::is_structural_type (^^std::meta::template_object_info));
 
 // What a template-argument function gives isn't a template argument.
 template <template_object_info> struct U { };                      // { dg-error "not a valid type for a template non-type parameter|structural" }
+// Nor a type template argument: a wrapper<T> with an 'operator T ()' never
+// declares a conversion to it.
+template <class W> struct wrapper { W w; constexpr operator W () const { return w; } };
+wrapper<template_object_info> *wp;                                 // { dg-error "cannot be a template argument|trying to instantiate" }
+template <class W> using alias = W;
+alias<const template_object_info> *ap;                            // { dg-error "cannot be a template argument|trying to instantiate" }
+template <class W> consteval int deduce (W) { return 0; }
+consteval template_object_info mk () { return template_object_info (^^A); }
+consteval int d () { return deduce (mk ()); }                     // { dg-error "no matching function|cannot be a template argument|trying to instantiate" }
+template <auto> struct AV { };
+AV<mk ()> av;                                                      // { dg-error "not a valid type|structural" }
+wrapper<int> wi;
+// Nor any type built from it.
+template <class W> struct Y { };
+Y<template_object_info *> y1;                                      // { dg-error "cannot be a template argument|trying to instantiate" }
+Y<const template_object_info &> y2;                                // { dg-error "cannot be a template argument|trying to instantiate" }
+Y<template_object_info[2]> y3;                                     // { dg-error "cannot be a template argument|trying to instantiate" }
+Y<int template_object_info::*> y4;                                 // { dg-error "cannot be a template argument|trying to instantiate" }
+Y<void (template_object_info)> y5;                                 // { dg-error "cannot be a template argument|trying to instantiate" }
+Y<template_object_info **> y6;                                     // { dg-error "cannot be a template argument|trying to instantiate" }
+Y<info *> y7;
 
 // A reflection doesn't convert implicitly.
 consteval void g () { template_object_info t = ^^A; }               // { dg-error "conversion from" }

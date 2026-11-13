@@ -24512,6 +24512,50 @@ tsubst_expr (tree t, tree args, tsubst_flags_t complain, tree in_decl)
   return retval;
 }
 
+/* Whether type T is std::meta::template_object_info
+   (-freflection-structural-newmetainfo-conversion), or a type built from
+   it: a pointer, reference or array, a pointer to member, or a function
+   type taking or returning one.  */
+
+static bool
+uses_template_object_info_p (tree t)
+{
+  if (!template_object_info_type_node || !t)
+    return false;
+  for (int depth = 0; depth < 64 && t; ++depth)
+    {
+      if (TYPE_PTRMEMFUNC_P (t))
+	t = TREE_TYPE (TYPE_PTRMEMFUNC_FN_TYPE (t));
+      switch (TREE_CODE (t))
+	{
+	case RECORD_TYPE:
+	case UNION_TYPE:
+	  return TYPE_MAIN_VARIANT (t) == template_object_info_type_node;
+	case POINTER_TYPE:
+	case REFERENCE_TYPE:
+	case ARRAY_TYPE:
+	  t = TREE_TYPE (t);
+	  break;
+	case OFFSET_TYPE:
+	  if (uses_template_object_info_p (TYPE_OFFSET_BASETYPE (t)))
+	    return true;
+	  t = TREE_TYPE (t);
+	  break;
+	case FUNCTION_TYPE:
+	case METHOD_TYPE:
+	  for (tree a = TYPE_ARG_TYPES (t); a && a != void_list_node;
+	       a = TREE_CHAIN (a))
+	    if (uses_template_object_info_p (TREE_VALUE (a)))
+	      return true;
+	  t = TREE_TYPE (t);
+	  break;
+	default:
+	  return false;
+	}
+    }
+  return false;
+}
+
 /* Verify that the instantiated ARGS are valid. For type arguments,
    make sure that the type's linkage is ok. For non-type arguments,
    make sure they are constants if they are integral or enumerations.
@@ -24566,6 +24610,15 @@ check_instantiated_arg (tree tmpl, tree t, tsubst_flags_t complain)
 	{
 	  if (complain & tf_error)
 	    error ("%qT is a variably modified type", t);
+	  return true;
+	}
+      /* What a template-argument function gives
+	 (-freflection-structural-newmetainfo-conversion) is no template
+	 argument, a type one included.  */
+      else if (uses_template_object_info_p (t))
+	{
+	  if (complain & tf_error)
+	    error ("%qT cannot be a template argument", t);
 	  return true;
 	}
     }
