@@ -10474,6 +10474,20 @@ static tree
 build_over_call (struct z_candidate *cand, int flags, tsubst_flags_t complain)
 {
   tree fn = cand->fn;
+  /* A template-argument function spelled as a conversion function
+     (-freflection-structural-newmetainfo-conversion) is used only to find a
+     template parameter object (invoke_template_arg_fn), as operator
+     template is: not by a cast or an initialization either.  */
+  if (flag_reflection_structural_newmetainfo_conversion
+      && !invoking_template_arg_fn
+      && TREE_CODE (fn) == FUNCTION_DECL
+      && template_arg_fn_named_p (fn))
+    {
+      if (complain & tf_error)
+	error ("%qD can only be used to find a template parameter object",
+	       fn);
+      return error_mark_node;
+    }
   const vec<tree, va_gc> *args = cand->args;
   tree first_arg = cand->first_arg;
   conversion **convs = cand->convs;

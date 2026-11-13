@@ -76,6 +76,14 @@ init_reflection ()
   push_namespace (get_identifier ("std"));
   push_namespace (get_identifier ("meta"), /*inline*/false);
   std_meta_node = current_namespace;
+  /* -freflection-structural-newmetainfo-conversion: declare
+     std::meta::template_object_info, the type every class's
+     template-argument function converts to, even before <meta> defines
+     it.  */
+  if (flag_reflection_structural_newmetainfo_conversion)
+    template_object_info_type_node
+      = xref_tag (record_type, get_identifier ("template_object_info"),
+		  TAG_how::CURRENT_ONLY);
   pop_namespace ();
   pop_namespace ();
 }
@@ -142,6 +150,25 @@ get_reflection (location_t loc, tree t, reflect_kind kind/*=REFLECT_UNDEF*/)
 {
   STRIP_ANY_LOCATION_WRAPPER (t);
   t = STRIP_REFERENCE_REF (t);
+
+  /* A template-argument function spelled as a conversion function
+     (-freflection-structural-newmetainfo-conversion) can't be reflected by
+     name, as operator template can't ([class.template.arg]); members_of
+     gives it.  */
+  if (flag_reflection_structural_newmetainfo_conversion)
+    {
+      tree f = MAYBE_BASELINK_FUNCTIONS (t);
+      if (TREE_CODE (f) == OVERLOAD && !OVL_CHAIN (f))
+	f = OVL_FUNCTION (f);
+      f = STRIP_TEMPLATE (f);
+      if (TREE_CODE (f) == FUNCTION_DECL && template_arg_fn_named_p (f))
+	{
+	  error_at (loc, "%<operator std::meta::template_object_info%> "
+		    "cannot be named outside the declarator of its "
+		    "declaration");
+	  return error_mark_node;
+	}
+    }
 
   /* Constant template parameters and pack-index-expressions cannot
      appear as operands of the reflection operator.  */
@@ -2334,9 +2361,11 @@ eval_is_special_member_function (tree r)
   if (TREE_CODE (r) == FUNCTION_DECL && special_memfn_p (r) != sfk_none)
     return boolean_true_node;
   /* A template-argument function is a special member function
-     ([special], -freflection-operator-template).  */
+     ([special], -freflection-operator-template, or its conversion-function
+     spelling).  */
   else if (TREE_CODE (r) == FUNCTION_DECL
-	   && DECL_NAME (r) == op_template_identifier)
+	   && TEMPLATE_ARG_FN_MODE_P ()
+	   && template_arg_fn_named_p (r))
     return boolean_true_node;
   else
     return boolean_false_node;
@@ -7297,9 +7326,10 @@ class_members_of (location_t loc, const constexpr_ctx *ctx, tree r,
 	    break;
 	  }
       /* An implicitly-declared template-argument function
-	 (-freflection-operator-template).  */
+	 (-freflection-operator-template, or its conversion-function
+	 spelling).  */
       for (tree m : implicitly_declared)
-	if (DECL_NAME (m) == op_template_identifier)
+	if (template_arg_fn_named_p (m))
 	  {
 	    CONSTRUCTOR_APPEND_ELT (elts, NULL_TREE,
 				    get_reflection_raw (loc, m));
@@ -7902,9 +7932,11 @@ extract_member_or_function (location_t loc, const constexpr_ctx *ctx,
   r = MAYBE_BASELINK_FUNCTIONS (r);
   if (!can_extract_member_or_function_p (T, r, kind)
       /* A template-argument function can't be named
-	 ([meta.reflection.extract]/7).  */
+	 ([meta.reflection.extract]/7), in either spelling.  */
       || (TREE_CODE (r) == FUNCTION_DECL
-	  && DECL_NAME (r) == op_template_identifier))
+	  && (DECL_NAME (r) == op_template_identifier
+	      || (flag_reflection_structural_newmetainfo_conversion
+		  && template_arg_fn_named_p (r)))))
     return throw_exception (loc, ctx, "value cannot be extracted", fun,
 			    non_constant_p, jump_target);
 

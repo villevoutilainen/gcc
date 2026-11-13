@@ -256,6 +256,7 @@ in the following sections.
 -fno-pretty-templates  -frange-for-ext-temps  -freflection
 -freflection-operator-template
 -freflection-structural-metainfo-conversion
+-freflection-structural-newmetainfo-conversion
 -freflection-transparent-using-decls
 -fno-rtti  -fsized-deallocation
 -fstrict-enums  -fstrong-eval-order@r{[}=@var{kind}@r{]}
@@ -3950,6 +3951,28 @@ subobject too, compared there in the same way.  With this option, a member funct
 special meaning.  The macro @code{__GXX_REFLECTION_METAINFO_CONVERSION} is
 defined, and libstdc++ defaults the conversion function instead of
 @code{reflect_constant}.
+
+@opindex freflection-structural-newmetainfo-conversion
+@item -freflection-structural-newmetainfo-conversion
+Implement the template-argument function of
+@option{-freflection-operator-template}, with all its rules, spelled as a
+conversion function to @code{std::meta::template_object_info} instead of
+as @code{operator template}: @code{consteval explicit operator
+std::meta::template_object_info() const}.  The compiler declares
+@code{std::meta::template_object_info}, and @code{<meta>} defines it: a
+consteval-only type that holds a reflection, constructible from a
+@code{std::meta::info} only explicitly, and convertible back to it; it is
+not a structural type.  The conversion function must be declared
+@code{explicit}.  A user-provided one gives a @code{template_object_info}
+holding the reflection of the template parameter object.  It can only be
+used to find the template parameter object: it cannot be called, named by
+a using-declarator, or reflected by name, or used by a cast or an
+initialization.  No conversion to any other type is taken for it.  This
+option takes precedence over
+@option{-freflection-structural-metainfo-conversion}, and
+@option{-freflection-operator-template} over it; it defines the macro
+@code{__GXX_REFLECTION_TEMPLATE_OBJECT_INFO}, and libstdc++ defaults the
+conversion function instead of @code{reflect_constant}.
 
 @opindex freflection-transparent-using-decls
 @item -freflection-transparent-using-decls

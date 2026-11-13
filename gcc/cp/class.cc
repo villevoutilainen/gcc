@@ -8267,7 +8267,7 @@ finish_struct_1 (tree t)
 	 template-argument function is in any class (P4340R1,
 	 [class.template.arg]/9).  */
       if (CLASSTYPE_TEMPLATE_INSTANTIATION (t)
-	  || flag_reflection_operator_template)
+	  || TEMPLATE_ARG_FN_MODE_P ())
 	if (tree fn = defaulted_reflect_constant (t))
 	  {
 	    DECL_DELETED_FN (fn) = 1;

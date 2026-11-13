@@ -1370,6 +1370,11 @@ c_common_post_options (const char **pfilename)
   /* Only one way of making a class structural is active:
      -freflection-operator-template takes precedence.  */
   if (flag_reflection_operator_template)
+    {
+      flag_reflection_structural_newmetainfo_conversion = 0;
+      flag_reflection_structural_metainfo_conversion = 0;
+    }
+  else if (flag_reflection_structural_newmetainfo_conversion)
     flag_reflection_structural_metainfo_conversion = 0;
 
   if (num_in_fnames > 1)

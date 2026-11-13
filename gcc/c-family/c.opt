@@ -2568,6 +2568,10 @@ freflection-structural-metainfo-conversion
 C++ ObjC++ Var(flag_reflection_structural_metainfo_conversion) Init(0)
 Make a class structural through a conversion operator to std::meta::info, instead of a reflect_constant member function.
 
+freflection-structural-newmetainfo-conversion
+C++ ObjC++ Var(flag_reflection_structural_newmetainfo_conversion) Init(0)
+Make a class structural through a conversion function to std::meta::template_object_info, with the semantics of operator template (P4340R1).
+
 freflection-transparent-using-decls
 C++ ObjC++ Var(flag_reflection_transparent_using_decls) Init(0)
 Let a reflect-expression look through every namespace-scope using-declarator.

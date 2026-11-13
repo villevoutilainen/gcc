@@ -5415,6 +5415,17 @@ static bool ordinary_structural_type_p (tree, bool);
 bool
 structural_type_p (tree t, bool explain)
 {
+  /* -freflection-structural-newmetainfo-conversion: what template-argument
+     functions give isn't itself a template argument; std::meta::info is
+     the type for a reflection.  */
+  if (template_object_info_type_node
+      && CLASS_TYPE_P (t)
+      && TYPE_MAIN_VARIANT (t) == template_object_info_type_node)
+    {
+      if (explain)
+	inform (location_of (t), "%qT is not a structural type", t);
+      return false;
+    }
   if (metainfo_conversion_structural_p (t))
     {
       if (literal_type_p (t))
@@ -5440,7 +5451,7 @@ metainfo_conversion_structural_p (tree t)
   /* A user-provided template-argument function decides for any class
      (P4340R1, [class.template.arg]/7), but a class with a mutable
      subobject isn't structural.  */
-  if (flag_reflection_operator_template)
+  if (TEMPLATE_ARG_FN_MODE_P ())
     {
       for (tree m = next_aggregate_field (TYPE_FIELDS (t)); m;
 	   m = next_aggregate_field (DECL_CHAIN (m)))

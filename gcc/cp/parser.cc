@@ -25036,11 +25036,29 @@ cp_parser_using_declaration (cp_parser* parser,
       return true;
     }
 
+  location_t id_loc = cp_lexer_peek_token (parser->lexer)->location;
   identifier = cp_parser_unqualified_id (parser,
 					 /*template_keyword_p=*/false,
 					 /*check_dependency_p=*/true,
 					 /*declarator_p=*/true,
 					 /*optional_p=*/false);
+  /* Nor can its conversion-function spelling
+     (-freflection-structural-newmetainfo-conversion).  */
+  if (flag_reflection_structural_newmetainfo_conversion
+      && !access_declaration_p
+      && template_object_info_type_node
+      && identifier && identifier_p (identifier)
+      && IDENTIFIER_CONV_OP_P (identifier)
+      && TREE_TYPE (identifier)
+      && same_type_ignoring_top_level_qualifiers_p
+	   (TREE_TYPE (identifier), template_object_info_type_node))
+    {
+      error_at (id_loc, "%<operator std::meta::template_object_info%> "
+		"cannot be named by a using-declarator");
+      cp_parser_skip_to_end_of_statement (parser);
+      cp_parser_consume_semicolon_at_end_of_statement (parser);
+      return true;
+    }
 
   if (access_declaration_p)
     {

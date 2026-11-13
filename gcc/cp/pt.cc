@@ -7897,9 +7897,14 @@ user_template_arg_fn (tree type)
    object argument, without regard to access control
    ([class.template.arg]/7), and return the reflection it gives.  */
 
+/* Whether invoke_template_arg_fn is calling a template-argument function,
+   the only use of one spelled as a conversion function.  */
+bool invoking_template_arg_fn;
+
 static tree
 invoke_template_arg_fn (tree type, tree fn, tree obj, tsubst_flags_t complain)
 {
+  auto invoking = make_temp_override (invoking_template_arg_fn, true);
   tree binfo = TYPE_BINFO (TYPE_MAIN_VARIANT (type));
   tree fns = build_baselink (binfo, binfo, fn, NULL_TREE);
   push_deferring_access_checks (dk_no_check);
@@ -7909,7 +7914,17 @@ invoke_template_arg_fn (tree type, tree fn, tree obj, tsubst_flags_t complain)
   pop_deferring_access_checks ();
   if (call == error_mark_node)
     return error_mark_node;
-  return cxx_constant_value (call, complain);
+  tree r = cxx_constant_value (call, complain);
+  /* A std::meta::template_object_info
+     (-freflection-structural-newmetainfo-conversion): the reflection it
+     holds.  */
+  if (TREE_CODE (r) == TARGET_EXPR)
+    r = TARGET_EXPR_INITIAL (r);
+  if (TREE_CODE (r) == CONSTRUCTOR
+      && CLASS_TYPE_P (TREE_TYPE (r))
+      && CONSTRUCTOR_NELTS (r) == 1)
+    r = CONSTRUCTOR_ELT (r, 0)->value;
+  return r;
 }
 
 /* The template parameter object for VALUE, of class TYPE whose
@@ -8002,7 +8017,7 @@ metainfo_conversion_key (tree type, tree value, tsubst_flags_t complain,
   /* -freflection-operator-template: a subobject's normalized value is a
      copy of its template parameter object ([temp.arg.nontype]); no key is
      needed, the value is canonical.  */
-  if (flag_reflection_operator_template)
+  if (TEMPLATE_ARG_FN_MODE_P ())
     {
       tree o = template_arg_fn_object (type, value, complain);
       if (o == error_mark_node)
@@ -8288,7 +8303,7 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
      linkage issues in the diagnostic as this is not the point.  */
   if (TREE_CODE (expr) == STRING_CST && !CLASS_TYPE_P (type)
       /* P4340R1 makes them valid.  */
-      && !flag_reflection_operator_template)
+      && !TEMPLATE_ARG_FN_MODE_P ())
     {
       if (complain & tf_error)
 	error ("%qE is not a valid template argument for type %qT "
@@ -8495,7 +8510,7 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
       /* A pointer into a string literal object (P4340R1).  The
 	 replacement is folded again, so that pointer arithmetic on the
 	 object's address becomes the address of an element.  */
-      if (flag_reflection_operator_template && !val_dep_p)
+      if (TEMPLATE_ARG_FN_MODE_P () && !val_dep_p)
 	{
 	  tree n = normalize_string_literal_value (expr);
 	  if (n != expr)
@@ -8610,7 +8625,7 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
 	{
 	  expr = build_address (expr);
 	  /* A reference to a string literal object (P4340R1).  */
-	  if (flag_reflection_operator_template)
+	  if (TEMPLATE_ARG_FN_MODE_P ())
 	    expr = normalize_string_literal_value (expr);
 
 	  if (invalid_tparm_referent_p (type, expr, complain))
@@ -8737,14 +8752,14 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
     {
       /* Replace the argument with a reference to the corresponding template
 	 parameter object.  */
-      if (!val_dep_p && flag_reflection_operator_template
+      if (!val_dep_p && TEMPLATE_ARG_FN_MODE_P ()
 	  && !metainfo_conversion_structural_p (type))
 	/* Pointers and references into string literal objects
 	   (P4340R1).  */
 	expr = normalize_string_literal_value (expr);
       if (!val_dep_p)
 	{
-	  if (flag_reflection_operator_template
+	  if (TEMPLATE_ARG_FN_MODE_P ()
 	      && metainfo_conversion_structural_p (type))
 	    {
 	      /* The template parameter object is the object the
@@ -8762,7 +8777,7 @@ convert_nontype_argument (tree type, tree expr, tsubst_flags_t complain)
 	      else
 		expr = template_arg_fn_object (type, v, complain);
 	    }
-	  else if (flag_reflection_operator_template
+	  else if (TEMPLATE_ARG_FN_MODE_P ()
 		   && has_metainfo_conversion_subobject_p (type))
 	    {
 	      /* Normalize: each such subobject becomes a copy of its
@@ -14097,7 +14112,7 @@ instantiate_class_template (tree type)
      only in this specialization (-freflection-structural-metainfo-
      conversion): mark it from its own members too.  */
   if (flag_reflection_structural_metainfo_conversion
-      || flag_reflection_operator_template)
+      || TEMPLATE_ARG_FN_MODE_P ())
     {
       maybe_declare_template_arg_fn (type);
       note_reflect_constant (type);

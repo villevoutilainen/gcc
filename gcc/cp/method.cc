@@ -4035,7 +4035,7 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
     }
   if (kind == sfk_reflect_constant
       && (flag_reflection_structural_metainfo_conversion
-	  || flag_reflection_operator_template)
+	  || TEMPLATE_ARG_FN_MODE_P ())
       && DECL_TEMPLATE_INSTANTIATION (fn)
       && !reflect_constant_signature_p (fn))
     {
@@ -4151,16 +4151,43 @@ defaulted_late_check (tree fn, tristate imp_const/*=tristate::unknown()*/)
    std::meta::info, possibly explicit, takes its place, and a member named
    reflect_constant is an ordinary function.  */
 
+/* Whether FN is named as a template-argument function (P4340R1):
+   'operator template', or with -freflection-structural-newmetainfo-
+   conversion, a conversion function to std::meta::template_object_info.  */
+
+bool
+template_arg_fn_named_p (const_tree fn)
+{
+  if (TREE_CODE (fn) != FUNCTION_DECL)
+    return false;
+  if (flag_reflection_operator_template)
+    return DECL_NAME (fn) == op_template_identifier;
+  if (flag_reflection_structural_newmetainfo_conversion)
+    return (DECL_CONV_FN_P (fn) && template_object_info_type_node
+	    && same_type_ignoring_top_level_qualifiers_p
+		 (DECL_CONV_FN_TYPE (fn), template_object_info_type_node));
+  return false;
+}
+
+/* How the template-argument function is spelled, for diagnostics.  */
+
+const char *
+template_arg_fn_spelling ()
+{
+  return (flag_reflection_operator_template ? "operator template"
+	  : "operator std::meta::template_object_info");
+}
+
 bool
 reflect_constant_fn_p (const_tree fn)
 {
   if (TREE_CODE (fn) != FUNCTION_DECL)
     return false;
   /* -freflection-operator-template: the template-argument function
-     (P4340R1), whose object parameter may also be explicit.  */
-  if (flag_reflection_operator_template)
-    return (DECL_NAME (fn) == op_template_identifier
-	    && DECL_OBJECT_MEMBER_FUNCTION_P (fn));
+     (P4340R1), whose object parameter may also be explicit; likewise its
+     conversion-function spelling.  */
+  if (TEMPLATE_ARG_FN_MODE_P ())
+    return template_arg_fn_named_p (fn) && DECL_OBJECT_MEMBER_FUNCTION_P (fn);
   if (!DECL_IOBJ_MEMBER_FUNCTION_P (fn))
     return false;
   if (flag_reflection_structural_metainfo_conversion)
@@ -4196,7 +4223,7 @@ reflect_constant_shape_p (tree fn)
 {
   /* A template-argument function's object parameter has type const C& or
      C ([class.template.arg]), and it has no other parameters.  */
-  if (flag_reflection_operator_template)
+  if (TEMPLATE_ARG_FN_MODE_P ())
     {
       tree ctx = DECL_CONTEXT (fn);
       if (DECL_XOBJ_MEMBER_FUNCTION_P (fn))
@@ -4247,30 +4274,36 @@ note_reflect_constant (tree t)
       tree fn = STRIP_TEMPLATE (f);
       /* A template-argument function's declaration rules
 	 ([class.template.arg]).  */
-      if (flag_reflection_operator_template
-	  && TREE_CODE (fn) == FUNCTION_DECL
-	  && DECL_NAME (fn) == op_template_identifier
+      if (TEMPLATE_ARG_FN_MODE_P ()
+	  && template_arg_fn_named_p (fn)
 	  && !DECL_ARTIFICIAL (fn))
 	{
+	  const char *name = template_arg_fn_spelling ();
 	  if (TREE_CODE (f) == TEMPLATE_DECL)
 	    {
-	      error_at (DECL_SOURCE_LOCATION (fn), "%<operator template%> "
-			"cannot be a function template");
+	      error_at (DECL_SOURCE_LOCATION (fn), "%qs cannot be a function "
+			"template", name);
 	      continue;
 	    }
 	  if (!DECL_OBJECT_MEMBER_FUNCTION_P (fn))
 	    {
-	      error_at (DECL_SOURCE_LOCATION (fn), "%<operator template%> "
-			"must be a non-static member function");
+	      error_at (DECL_SOURCE_LOCATION (fn), "%qs must be a non-static "
+			"member function", name);
 	      continue;
 	    }
 	  if (!DECL_IMMEDIATE_FUNCTION_P (fn))
-	    error_at (DECL_SOURCE_LOCATION (fn), "%<operator template%> "
-		      "must be declared %<consteval%>");
+	    error_at (DECL_SOURCE_LOCATION (fn), "%qs must be declared "
+		      "%<consteval%>", name);
+	  /* Spelled as a conversion function, it is explicit, so no
+	     implicit conversion is one.  */
+	  if (!flag_reflection_operator_template
+	      && !DECL_NONCONVERTING_P (fn))
+	    error_at (DECL_SOURCE_LOCATION (fn), "%qs must be declared "
+		      "%<explicit%>", name);
 	  if (!reflect_constant_shape_p (fn))
 	    error_at (DECL_SOURCE_LOCATION (fn), "the object parameter of "
-		      "%<operator template%> must have type %<const %T&%> or "
-		      "%qT, and it can have no other parameters", t, t);
+		      "%qs must have type %<const %T&%> or %qT, and it can "
+		      "have no other parameters", name, t, t);
 	}
       if (!reflect_constant_fn_p (fn))
 	continue;
@@ -4290,7 +4323,7 @@ note_reflect_constant (tree t)
 	 template-argument-equivalence by its result
 	 (-freflection-structural-metainfo-conversion).  */
       else if ((flag_reflection_structural_metainfo_conversion
-		|| flag_reflection_operator_template)
+		|| TEMPLATE_ARG_FN_MODE_P ())
 	       && !DECL_DELETED_FN (fn)
 	       && reflect_constant_signature_p (fn))
 	CLASSTYPE_METAINFO_CONVERSION (t) = 1;
@@ -4300,7 +4333,10 @@ note_reflect_constant (tree t)
 /* Implicitly declare the template-argument function of class T, if it
    doesn't declare one and isn't an anonymous union
    (-freflection-operator-template, [class.template.arg]/4): a public
-   'consteval T::operator template () const', defaulted, and defined as
+   'consteval T::operator template () const' -- with
+   -freflection-structural-newmetainfo-conversion, 'consteval explicit
+   T::operator std::meta::template_object_info () const' -- defaulted, and
+   defined as
    deleted if a direct base class or non-static data member isn't public,
    or doesn't have a structural type ([class.template.arg]/9).  Unlike an
    explicitly defaulted one, it doesn't make T structural regardless of
@@ -4309,11 +4345,19 @@ note_reflect_constant (tree t)
 void
 maybe_declare_template_arg_fn (tree t)
 {
-  if (!flag_reflection_operator_template || ANON_AGGR_TYPE_P (t))
+  if (!TEMPLATE_ARG_FN_MODE_P () || ANON_AGGR_TYPE_P (t))
+    return;
+  /* -freflection-structural-newmetainfo-conversion: a conversion function
+     to std::meta::template_object_info, which that class itself, the type
+     they convert to, doesn't have.  */
+  bool conv = !flag_reflection_operator_template;
+  if (conv
+      && (!template_object_info_type_node
+	  || TYPE_MAIN_VARIANT (t) == template_object_info_type_node))
     return;
   for (tree f = TYPE_FIELDS (t); f; f = DECL_CHAIN (f))
     if (DECL_DECLARES_FUNCTION_P (f)
-	&& DECL_NAME (STRIP_TEMPLATE (f)) == op_template_identifier)
+	&& template_arg_fn_named_p (STRIP_TEMPLATE (f)))
       return;
 
   bool deleted_p = false;
@@ -4329,11 +4373,21 @@ maybe_declare_template_arg_fn (tree t)
 	|| !structural_type_p (strip_array_types (TREE_TYPE (m))))
       deleted_p = true;
 
+  tree rettype = conv ? template_object_info_type_node : meta_info_type_node;
   tree fn_type
     = build_method_type_directly (cp_build_qualified_type (t,
 							   TYPE_QUAL_CONST),
-				  meta_info_type_node, void_list_node);
-  tree fn = build_lang_decl (FUNCTION_DECL, op_template_identifier, fn_type);
+				  rettype, void_list_node);
+  tree fn = build_lang_decl (FUNCTION_DECL,
+			     conv ? make_conv_op_name (rettype)
+			     : op_template_identifier, fn_type);
+  if (conv)
+    {
+      /* Explicit: never an implicit conversion, so only something that
+	 asks for it -- a cast, direct-initialization -- sees it.  */
+      DECL_NONCONVERTING_P (fn) = 1;
+      TYPE_HAS_CONVERSION (t) = 1;
+    }
   DECL_SOURCE_LOCATION (fn) = DECL_SOURCE_LOCATION (TYPE_NAME (t));
   SET_DECL_ALIGN (fn, MINIMUM_METHOD_BOUNDARY);
   DECL_ARGUMENTS (fn) = build_this_parm (fn, fn_type, TYPE_QUAL_CONST);
@@ -4376,7 +4430,7 @@ defaultable_reflect_constant_check (tree fn)
     }
   if (!reflect_constant_signature_p (fn))
     {
-      if (flag_reflection_operator_template)
+      if (TEMPLATE_ARG_FN_MODE_P ())
 	/* note_reflect_constant says what is wrong.  */;
       else
 	error ("defaulted %qD must be a %<consteval%> %<const%> member "

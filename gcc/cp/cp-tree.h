@@ -239,6 +239,7 @@ enum cp_tree_index
     CPTI_DSO_HANDLE,
     CPTI_DCAST,
     CPTI_META_INFO_TYPE,
+    CPTI_TEMPLATE_OBJECT_INFO_TYPE,
     CPTI_CONTRACT_VIOLATION_TYPE,
 
     CPTI_MAX
@@ -271,6 +272,17 @@ extern GTY(()) tree cp_global_trees[CPTI_MAX];
 /* std::align_val_t */
 #define align_type_node			cp_global_trees[CPTI_ALIGN_TYPE]
 #define meta_info_type_node		cp_global_trees[CPTI_META_INFO_TYPE]
+/* std::meta::template_object_info, the type a class's template-argument
+   function converts to with -freflection-structural-newmetainfo-
+   conversion; declared by the compiler, defined by <meta>.  */
+#define template_object_info_type_node   cp_global_trees[CPTI_TEMPLATE_OBJECT_INFO_TYPE]
+/* Whether a class's template-argument function (P4340R1) decides how it
+   is usable as the type of a constant template parameter: as
+   'operator template', or as a conversion function to
+   std::meta::template_object_info.  */
+#define TEMPLATE_ARG_FN_MODE_P() \
+  (flag_reflection_operator_template \
+   || flag_reflection_structural_newmetainfo_conversion)
 #define builtin_contract_violation_type	cp_global_trees[CPTI_CONTRACT_VIOLATION_TYPE]
 
 /* We cache these tree nodes so as to call get_identifier less frequently.
@@ -7795,6 +7807,9 @@ extern void note_reflect_constant		(tree);
 extern bool tu_local_entity_p			(tree);
 extern bool tu_local_value_p			(tree, tree);
 extern void maybe_declare_template_arg_fn	(tree);
+extern bool template_arg_fn_named_p		(const_tree);
+extern bool invoking_template_arg_fn;
+extern const char *template_arg_fn_spelling	(void);
 extern bool metainfo_conversion_structural_p	(tree);
 extern void check_abi_tags			(tree);
 extern tree missing_abi_tags			(tree);
