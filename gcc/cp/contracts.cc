@@ -29639,6 +29639,10 @@ oa_function_statics ()
 static void
 oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 {
+  /* The objects this call is given a route to escape (P4445 BUG-17) only
+     after it: what the escape means is that a later call may write them
+     through an address this one kept.  */
+  auto_vec<tree, 4> handed_out;
   if (oa_call_is_conversion_operator_call (call))
     return;
   /* Placement new only returns the address it is given, at which an
@@ -29781,19 +29785,35 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 		 besides the object it aliases.  */
 	      tree copy = identity;
 	      identity = env.alias_find (identity);
-	      env.predicate_fact_invalidate (identity);
-	      env.contract_field_range_invalidate_all (identity);
-	      env.contract_float_field_range_invalidate_all (identity);
-	      env.contract_call_range_invalidate_all (identity);
-	      /* D4324/P2680 item 8: see oa_invalidate_parameter_alias_group's
-		 own identical addition just above.  */
-	      env.contract_field_nz_invalidate_all (identity);
-	      env.field_alias_invalidate_all (identity);
-	      env.array_alias_invalidate_all (identity);
-	      env.field_object_predicate_invalidate_all (identity);
 	      bool arg_is_const_ref = callee_parm != NULL_TREE
 		&& TREE_CODE (TREE_TYPE (callee_parm)) == REFERENCE_TYPE
 		&& TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm)));
+	      /* The route is only to a const object: a pointer or reference
+		 to const, or a const member function's 'this'.  */
+	      bool route_is_const
+		= (r == 0 && callee_parm != NULL_TREE
+		   && INDIRECT_TYPE_P (TREE_TYPE (callee_parm))
+		   && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm))));
+	      /* What is known of the object's state ends at a call that may
+		 change it: one that isn't conveyor, given any route -- a
+		 const one too, since it may write a mutable member, or any
+		 member after a const_cast when the object isn't const --
+		 or a conveyor one given a route to write through.  A
+		 conveyor callee given only a const route can't change it.  */
+	      bool state_may_change = !(callee_is_conveyor && route_is_const);
+	      if (state_may_change)
+		{
+		  env.predicate_fact_invalidate (identity);
+		  env.contract_field_range_invalidate_all (identity);
+		  env.contract_float_field_range_invalidate_all (identity);
+		  env.contract_call_range_invalidate_all (identity);
+		  /* D4324/P2680 item 8: see oa_invalidate_parameter_alias_
+		     group's own identical addition just above.  */
+		  env.contract_field_nz_invalidate_all (identity);
+		  env.field_alias_invalidate_all (identity);
+		  env.array_alias_invalidate_all (identity);
+		  env.field_object_predicate_invalidate_all (identity);
+		}
 	      /* D4324: see oa_invalidate_parameter_alias_group's own identical
 		 addition just above -- m_map/m_range_map need the same
 		 per-argument invalidation discipline every other fact map here
@@ -29801,26 +29821,20 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 		 reference parameter -- see this function's own comments
 		 above.  */
 	      /* An accessor's result on an object the callee can't change
-		 (a const reference, or the 'this' of a const member function)
 		 stays put.  */
-	      bool arg_is_const_this
-		= (callee_parm != NULL_TREE && is_this_parameter (callee_parm)
-		   && POINTER_TYPE_P (TREE_TYPE (callee_parm))
-		   && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm))));
-	      if (!arg_is_const_ref && !arg_is_const_this)
+	      if (state_may_change)
 		env.call_relational_invalidate_receiver (identity);
-	      /* A callee that may write through the route may also keep it,
-		 and a later call write through that (P4445 BUG-17).  Not
-		 counted for a member call's 'this', for now (Ville,
-		 2026-11-06).  */
-	      if (!callee_is_conveyor && !arg_is_const_ref
-		  && !(callee_parm != NULL_TREE
-		       && is_this_parameter (callee_parm)))
-		env.decl_escape (oa_handed_out_object
-				   (call_arg,
-				    callee_parm != NULL_TREE
-				    && TYPE_REF_P (TREE_TYPE (callee_parm)),
-				    env));
+	      /* A callee given any route to the object may keep it, and a
+		 later call write through that (P4445 BUG-17): a member
+		 call's 'this' too, and a const reference, through which a
+		 kept pointer can still write a mutable member, or any member
+		 after a const_cast when the object isn't const.  */
+	      if (!callee_is_conveyor)
+		handed_out.safe_push (oa_handed_out_object
+					(call_arg,
+					 callee_parm != NULL_TREE
+					 && TYPE_REF_P (TREE_TYPE (callee_parm)),
+					 env));
 	      /* A call given a route to an object -- a pointer or reference
 		 to it, const or not, its address, or the object a member
 		 call is made on -- may end its lifetime ('delete p', 'delete
@@ -29952,6 +29966,8 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	/* Its captures by reference don't escape, but it may write them.  */
 	env.addressable_locals_written_through_memory ();
     }
+  for (tree d : handed_out)
+    env.decl_escape (d);
 
   /* An object of static storage duration any function may reach by
      name: a call that isn't conveyor may end it though given no route
@@ -30031,6 +30047,17 @@ oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
 		      ? DECL_ARGUMENTS (callee) : NULL_TREE);
   if (oa_call_first_real_arg (call) && callee_parm)
     callee_parm = DECL_CHAIN (callee_parm);
+  /* Only a conveyor callee given a const route can't change what it is
+     given: any other may write a mutable member, or after a const_cast
+     any member of an object that isn't const.  */
+  tree named = callee ? callee : oa_virtual_call_named_fn (call);
+  if (named && TREE_CODE (named) == FUNCTION_DECL)
+    if (tree orig = get_orig_func_for_wrapper (named))
+      named = orig;
+  bool callee_is_conveyor
+    = (named && TREE_CODE (named) == FUNCTION_DECL
+       && (DECL_DECLARED_CONVEYOR_P (named)
+	   || DECL_DECLARED_SYMBOLIC_P (named)));
   for (int i = oa_call_first_real_arg (call); i < nargs;
        ++i, callee_parm = callee_parm ? DECL_CHAIN (callee_parm) : NULL_TREE)
     {
@@ -30052,10 +30079,10 @@ oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
 	      identity = op;
 	      /* The callee can change the scalar through its address, so
 		 the item 8 facts about its value (nonzero, range) end too
-		 -- unless it is bound to a const reference or a pointer to
-		 const.  */
+		 -- unless it is conveyor and bound to a const reference or
+		 a pointer to const.  */
 	      tree parm_type = callee_parm ? TREE_TYPE (callee_parm) : NULL_TREE;
-	      bool const_ref = (parm_type
+	      bool const_ref = (callee_is_conveyor && parm_type
 				&& (TYPE_REF_P (parm_type)
 				    || POINTER_TYPE_P (parm_type))
 				&& TYPE_READONLY (TREE_TYPE (parm_type)));
@@ -30084,10 +30111,12 @@ oa_invalidate_symbolic_scalar_range_for_call_args (tree call, oa_env &env)
 	 through it (oa_walk_stmt).  */
       else if ((VAR_P (arg) || TREE_CODE (arg) == PARM_DECL)
 	       && (POINTER_TYPE_P (TREE_TYPE (arg)))
-	       && !TYPE_READONLY (TREE_TYPE (TREE_TYPE (arg)))
-	       && !(callee_parm
-		    && POINTER_TYPE_P (TREE_TYPE (callee_parm))
-		    && TYPE_READONLY (TREE_TYPE (TREE_TYPE (callee_parm)))))
+	       && !(callee_is_conveyor
+		    && (TYPE_READONLY (TREE_TYPE (TREE_TYPE (arg)))
+			|| (callee_parm
+			    && POINTER_TYPE_P (TREE_TYPE (callee_parm))
+			    && TYPE_READONLY (TREE_TYPE
+					      (TREE_TYPE (callee_parm)))))))
 	{
 	  tree target = env.alias_find (arg);
 	  if (target != arg && DECL_P (target))

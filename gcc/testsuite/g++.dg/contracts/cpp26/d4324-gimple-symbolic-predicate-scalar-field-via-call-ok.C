@@ -30,7 +30,7 @@ inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
 struct holder { int x; };
 bool is_opened (const holder *h) symbolic;
-int make_int () { return 0; }
+int make_int () conveyor { return 0; }  // given no route, keeps nothing
 
 void open_it (holder * const h) post<symbolic_ctrl_v> (is_opened (h)) { }
 void use_it (holder * const h) pre<symbolic_ctrl_v> (is_opened (h)) { }

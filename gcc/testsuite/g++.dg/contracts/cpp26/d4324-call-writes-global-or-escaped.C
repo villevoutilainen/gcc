@@ -1,11 +1,12 @@
 // D4324: a call that isn't conveyor may write an object of static storage
 // duration, or a local whose address has been handed out earlier, though it
 // isn't given a route to it: what was known of its value ends (P4445
-// BUG-17).  A local's address is handed out by a call given a pointer to
-// it or a non-const reference to it, or by storing its address anywhere
-// but in a local variable; not, for now, by a member call on it.  A local
-// whose address is never handed out keeps its facts, and so does anything
-// across a conveyor call.  An immediately invoked lambda writing a
+// BUG-17).  A local's address is handed out by a call that isn't conveyor
+// given any route to it -- a pointer or reference, const or not, or a
+// member call's 'this' (d4324-escape-this-const-ref.C) -- or by storing its
+// address anywhere but in a local variable.  A local whose address is
+// never handed out keeps its facts, and so does anything across a conveyor
+// call.  An immediately invoked lambda writing a
 // capture by reference changes the capture.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=ast" }

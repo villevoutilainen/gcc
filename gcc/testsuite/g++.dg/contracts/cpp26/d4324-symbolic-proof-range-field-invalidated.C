@@ -25,7 +25,7 @@ struct symbolic_ctrl {
 };
 inline constexpr symbolic_ctrl symbolic_ctrl_v{};
 
-int opaque ();
+int opaque () conveyor;  // may not write T through an address kept earlier
 
 struct thing {
   int count;

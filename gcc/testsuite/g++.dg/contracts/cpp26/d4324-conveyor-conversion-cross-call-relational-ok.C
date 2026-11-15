@@ -28,7 +28,7 @@ inline constexpr conveyor_ctrl ctrl_v{};
 struct wrap {
   int v;
   wrap (int v_) : v (v_) {}
-  wrap (const wrap &other) : v (other.v) {}
+  wrap (const wrap &other) conveyor : v (other.v) {}  // a copy that keeps no address of OTHER
   ~wrap () {}
   operator int () const conveyor { return v; }
 };

@@ -328,6 +328,8 @@ static bool cg_same_member_lvalue_p (tree, tree);
 static tree cg_ref_member_key (tree);
 static bool cg_member_route_ended_p (tree);
 static bool cg_call_ends_lifetimes_p (gcall *);
+static bool cg_stmt_may_clobber_p (gimple *, ao_ref *);
+static bool cg_local_escape_reaches_p (tree, gimple *);
 static gimple *cg_consult_call;
 
 /* The objects of static storage duration the function being checked
@@ -898,12 +900,162 @@ cg_memory_value_at (tree decl, gimple *at)
 	  return (TREE_CODE (rhs) == SSA_NAME || CONSTANT_CLASS_P (rhs)
 		  ? rhs : NULL_TREE);
 	}
-      if (stmt_may_clobber_ref_p_1 (d, &ref, false))
+      if (cg_stmt_may_clobber_p (d, &ref))
 	return NULL_TREE;
       vuse = gimple_vuse (d);
     }
   return NULL_TREE;
 }
+
+/* Whether DECL, a local, has its address handed out -- given to a call
+   that may end lifetimes (cg_call_ends_lifetimes_p) by any route, or
+   used otherwise than as a call's argument (stored, copied into a
+   pointer) -- at a statement from which call D can be reached: only
+   then may D, given no route to DECL itself, write it through an
+   address kept earlier (P4445 BUG-17).  A route given only to conveyor
+   callees isn't handed out, as in the AST engine (oa_env::decl_escape),
+   though GCC's alias oracle counts every address taken.  */
+
+static bool cg_call_ends_lifetimes_p (gcall *);
+
+static bool
+cg_local_escape_reaches_p (tree decl, gimple *d)
+{
+  if (!cfun)
+    return true;
+  auto mentions = [decl] (tree op) -> bool
+    {
+      return (op && TREE_CODE (op) == ADDR_EXPR
+	      && get_base_address (TREE_OPERAND (op, 0)) == decl);
+    };
+  basic_block dbb = gimple_bb (d);
+  if (!dbb)
+    return true;
+  auto_vec<basic_block, 8> from;
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, cfun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *g = gsi_stmt (gsi);
+	if (is_gimple_debug (g) || g == d)
+	  continue;
+	bool escapes = false;
+	if (gcall *c = dyn_cast <gcall *> (g))
+	  {
+	    if (cg_call_ends_lifetimes_p (c))
+	      for (unsigned i = 0; !escapes && i < gimple_call_num_args (c); ++i)
+		escapes = mentions (gimple_call_arg (c, i));
+	  }
+	else
+	  for (unsigned i = 0; !escapes && i < gimple_num_ops (g); ++i)
+	    {
+	      tree op = gimple_op (g, i);
+	      if (mentions (op))
+		escapes = true;
+	      else if (op && TREE_CODE (op) == CONSTRUCTOR)
+		{
+		  unsigned j;
+		  tree v;
+		  FOR_EACH_CONSTRUCTOR_VALUE (CONSTRUCTOR_ELTS (op), j, v)
+		    if (mentions (v))
+		      escapes = true;
+		}
+	    }
+	if (!escapes)
+	  continue;
+	if (bb == dbb)
+	  {
+	    /* Before D in its block.  */
+	    for (gimple_stmt_iterator k = gsi; !gsi_end_p (k); gsi_next (&k))
+	      if (gsi_stmt (k) == d)
+		return true;
+	  }
+	from.safe_push (bb);
+      }
+  if (from.is_empty ())
+    return false;
+  /* D reached from the end of a block an escape is in.  */
+  auto_vec<basic_block, 16> work;
+  auto_sbitmap seen (last_basic_block_for_fn (cfun));
+  bitmap_clear (seen);
+  for (basic_block b : from)
+    {
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, b->succs)
+	if (!bitmap_bit_p (seen, e->dest->index))
+	  {
+	    bitmap_set_bit (seen, e->dest->index);
+	    work.safe_push (e->dest);
+	  }
+    }
+  while (!work.is_empty ())
+    {
+      basic_block b = work.pop ();
+      if (b == dbb)
+	return true;
+      edge e;
+      edge_iterator ei;
+      FOR_EACH_EDGE (e, ei, b->succs)
+	if (!bitmap_bit_p (seen, e->dest->index))
+	  {
+	    bitmap_set_bit (seen, e->dest->index);
+	    work.safe_push (e->dest);
+	  }
+    }
+  return false;
+}
+
+/* Whether statement D may change the memory REF refers to: GCC's alias
+   oracle, except that a call given no route to a local REF lies in
+   leaves it alone unless an escape of the local reaches the call
+   (cg_local_escape_reaches_p).  */
+
+static bool
+cg_stmt_may_clobber_p (gimple *d, ao_ref *ref)
+{
+  if (!stmt_may_clobber_ref_p_1 (d, ref, false))
+    return false;
+  gcall *call = dyn_cast <gcall *> (d);
+  if (!call)
+    return true;
+  tree base = ao_ref_base (ref);
+  if (!base || !(VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+      || is_global_var (base) || !cfun || DECL_CONTEXT (base) != cfun->decl)
+    return true;
+  tree parm_types = (gimple_call_fntype (call)
+		     ? TYPE_ARG_TYPES (gimple_call_fntype (call)) : NULL_TREE);
+  for (unsigned i = 0; i < gimple_call_num_args (call);
+       ++i, parm_types = parm_types ? TREE_CHAIN (parm_types) : NULL_TREE)
+    {
+      tree a = gimple_call_arg (call, i);
+      /* Given the local's address: the call may write it, unless it is
+	 conveyor and given only a pointer or reference to const.  Any
+	 other callee may write a mutable member, or any member after a
+	 const_cast of an object that isn't const.  As in the AST
+	 engine.  */
+      if (TREE_CODE (a) == ADDR_EXPR
+	  && get_base_address (TREE_OPERAND (a, 0)) == base)
+	{
+	  tree pt = parm_types ? TREE_VALUE (parm_types) : NULL_TREE;
+	  if (cg_call_ends_lifetimes_p (call)
+	      || !(pt && (POINTER_TYPE_P (pt) || TYPE_REF_P (pt))
+		   && TYPE_READONLY (TREE_TYPE (pt))))
+	    return true;
+	  continue;
+	}
+      /* A pointer value the call is given may hold the address.  */
+      if (TREE_CODE (a) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (a)))
+	return true;
+    }
+  if (gimple_call_lhs (call)
+      && get_base_address (gimple_call_lhs (call)) == base)
+    return true;
+  return cg_local_escape_reaches_p (base, d);
+}
+
+static tree cg_ref_value_at (tree, gimple *);
 
 /* If VAL is an SSA name loaded from a scalar variable in memory, the
    value that variable held at the load (cg_memory_value_at); else
@@ -918,6 +1070,19 @@ cg_forwarded_load_value (tree val)
   if (!def || !gimple_assign_single_p (def) || !gimple_vuse (def))
     return NULL_TREE;
   tree rhs = gimple_assign_rhs1 (def);
+  /* A field of a local aggregate ('s.v'): what a dominating store to it
+     wrote, nothing in between having changed it (cg_ref_value_at).  */
+  if (TREE_CODE (rhs) == COMPONENT_REF)
+    {
+      tree base = get_base_address (rhs);
+      if (base && (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+	  && !is_global_var (base))
+	{
+	  tree v = cg_ref_value_at (rhs, def);
+	  return v != val ? v : NULL_TREE;
+	}
+      return NULL_TREE;
+    }
   if (!VAR_P (rhs) && TREE_CODE (rhs) != PARM_DECL)
     return NULL_TREE;
   tree v = cg_memory_value_at (rhs, def);
@@ -6749,7 +6914,7 @@ cg_ref_value_at (tree ref, gimple *at)
 	  return (TREE_CODE (rhs) == SSA_NAME || TREE_CODE (rhs) == INTEGER_CST
 		  ? rhs : NULL_TREE);
 	}
-      if (stmt_may_clobber_ref_p_1 (d, &r, false))
+      if (cg_stmt_may_clobber_p (d, &r))
 	return NULL_TREE;
       vuse = gimple_vuse (d);
     }
@@ -10249,6 +10414,13 @@ struct cg_dom_fact_state
      call: any later call that may end lifetimes may have written them.
      On any path, so a union at joins.  */
   hash_set<tree> val_escaped;
+  /* The locals whose address a call that may end lifetimes was given, by
+     any route -- a pointer or reference, const or not, or a member
+     call's 'this': the callee may have kept it, and any later such call
+     write through it, so what is known of them ends at every later one
+     (P4445 BUG-17), as the AST engine's m_escaped_decl_map.  On any
+     path, so a union at joins.  */
+  hash_set<tree> escaped;
   hash_map<cg_field_key_hash, cg_field_fact> field;
   /* Stage 4d: the GIMPLE analogue of contracts.cc's own m_field_alias_
      target -- "the tracked pointer identity this pointer/reference-
@@ -13208,6 +13380,61 @@ cg_invalidate_parameter_alias_group (tree identity, function *fun,
 static void cg_invalidate_persistent_facts_for_call_arg
   (tree, function *, cg_field_object_cache &, cg_dom_fact_state &);
 
+/* CALL may end lifetimes: what is known of the locals whose address an
+   earlier such call was given ends, since that call may have kept the
+   address and this one write through it, though given no route here
+   (P4445 BUG-17); and CALL's own routes to locals escape in turn, by any
+   route -- a pointer or reference, const or not (a kept pointer to const
+   can still write a mutable member, or any member after a const_cast of
+   an object that isn't const), or a member call's 'this'.  As the AST
+   engine's oa_env::decl_escape and escaped_locals_written_through_
+   memory.  */
+
+static void
+cg_end_escaped_facts (gcall *call, cg_dom_fact_state &state)
+{
+  if (state.escaped.elements ())
+    {
+      for (tree id : state.escaped)
+	cg_pred_remove (state, id);
+      auto_vec<std::pair<tree, tree>> drop;
+      for (auto it : state.field)
+	if (state.escaped.contains (it.first.first))
+	  drop.safe_push (it.first);
+      for (auto k : drop)
+	state.field.remove (k);
+      drop.truncate (0);
+      for (auto it : state.field_alias)
+	if (state.escaped.contains (it.first.first))
+	  drop.safe_push (it.first);
+      for (auto k : drop)
+	state.field_alias.remove (k);
+      drop.truncate (0);
+      for (auto it : state.call)
+	if (state.escaped.contains (it.first.first))
+	  drop.safe_push (it.first);
+      for (auto k : drop)
+	state.call.remove (k);
+      drop.truncate (0);
+      for (auto it : state.call_call)
+	if (state.escaped.contains (it.first.first))
+	  drop.safe_push (it.first);
+      for (auto k : drop)
+	state.call_call.remove (k);
+    }
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (!POINTER_TYPE_P (TREE_TYPE (arg)))
+	continue;
+      tree id = cg_gimple_object_identity (arg);
+      if (id && (VAR_P (id) || TREE_CODE (id) == PARM_DECL)
+	  && !is_global_var (id) && cfun
+	  && DECL_CONTEXT (id) == cfun->decl)
+	state.escaped.add (id);
+    }
+}
+
 static void
 cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 					       cg_field_object_cache &field_object_cache,
@@ -13235,10 +13462,10 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
   /* Placement new only returns the pointer it is given.  */
   if (call_callee && std_placement_new_fn_p (call_callee))
     return;
-  /* A local scalar in memory whose address has been taken may have been
-     handed out earlier ('keep (&p)'): a call that isn't conveyor may
-     write it, given no route to it here, so the facts on its value end
-     (cg_scalar_memory_fact_key).  */
+  /* A local scalar in memory whose address has been handed out earlier
+     ('keep (&p)', cg_local_escape_reaches_p): a call that isn't conveyor
+     may write it, given no route to it here, so the facts on its value
+     end (cg_scalar_memory_fact_key).  */
   if (cg_call_ends_lifetimes_p (call))
     {
       auto_vec<std::pair<tree, tree>> escaped;
@@ -13247,11 +13474,13 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
 	  tree d = it.first.first;
 	  if (it.first.second == NULL_TREE && d && DECL_P (d)
 	      && (VAR_P (d) || TREE_CODE (d) == PARM_DECL)
-	      && !is_global_var (d) && TREE_ADDRESSABLE (d))
+	      && !is_global_var (d) && TREE_ADDRESSABLE (d)
+	      && cg_local_escape_reaches_p (d, call))
 	    escaped.safe_push (it.first);
 	}
       for (auto k : escaped)
 	state.field.remove (k);
+      cg_end_escaped_facts (call, state);
     }
   unsigned n = gimple_call_num_args (call);
   tree parm_types = (gimple_call_fntype (call)
@@ -13260,13 +13489,23 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
        ++i, parm_types = parm_types ? TREE_CHAIN (parm_types) : NULL_TREE)
     {
       tree arg = gimple_call_arg (call, i);
+      /* The route is only to a const object, a pointer or reference to
+	 const (a const member function's 'this' too), and the callee is
+	 conveyor: it can't change what it is given, so what is known of
+	 it stays, as in the AST engine.  Any other callee may write a
+	 mutable member, or any member after a const_cast.  */
+      bool const_route_to_conveyor
+	= (!cg_call_ends_lifetimes_p (call)
+	   && parm_types && INDIRECT_TYPE_P (TREE_VALUE (parm_types))
+	   && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types))));
+      if (const_route_to_conveyor)
+	continue;
       /* A scalar in memory bound to a const reference keeps its value
-	 facts, as in the AST engine.  */
+	 facts for a conveyor callee, as above.  */
       cg_field_fact kept;
       bool keep = false;
       if (TREE_CODE (arg) == ADDR_EXPR && DECL_P (TREE_OPERAND (arg, 0))
-	  && parm_types && TYPE_REF_P (TREE_VALUE (parm_types))
-	  && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types))))
+	  && const_route_to_conveyor)
 	if (cg_field_fact *f = state.field.get
 	      (cg_scalar_memory_fact_key (TREE_OPERAND (arg, 0))))
 	  {
@@ -14824,6 +15063,9 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
   dst->val_escaped.empty ();
   for (tree t : src.val_escaped)
     dst->val_escaped.add (t);
+  dst->escaped.empty ();
+  for (tree t : src.escaped)
+    dst->escaped.add (t);
   dst->field.empty ();
   for (auto it : src.field)
     dst->field.put (it.first, it.second);
@@ -14912,6 +15154,8 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
     dst->val_src.put (p.first, p.second);
   for (tree t : src.val_escaped)
     dst->val_escaped.add (t);
+  for (tree t : src.escaped)
+    dst->escaped.add (t);
 
   auto_vec<std::pair<tree, tree>> field_remove;
   /* At a join no loop runs back into (UNITE_FIELDS), a field's facts are
@@ -15060,6 +15304,7 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
       || a.relt.elements () != b.relt.elements ()
       || a.val_src.elements () != b.val_src.elements ()
       || a.val_escaped.elements () != b.val_escaped.elements ()
+      || a.escaped.elements () != b.escaped.elements ()
       || a.field.elements () != b.field.elements ()
       || a.field_alias.elements () != b.field_alias.elements ()
       || a.call.elements () != b.call.elements ()
@@ -15084,6 +15329,9 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
     }
   for (tree t : a.val_escaped)
     if (!b.val_escaped.contains (t))
+      return false;
+  for (tree t : a.escaped)
+    if (!b.escaped.contains (t))
       return false;
   for (auto it : a.val_src)
     {
