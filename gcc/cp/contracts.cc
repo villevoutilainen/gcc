@@ -17332,6 +17332,8 @@ oa_convert_range_across_signedness (tree from_type, tree to_type,
 static void oa_linear_tighten (tree_code, tree, tree, oa_env &,
 			       oa_range_fact *);
 
+static bool oa_builtin_call_range (tree, oa_range_fact *);
+
 static bool
 oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 {
@@ -17864,6 +17866,8 @@ oa_get_range (tree expr, oa_env &env, oa_range_fact *out)
 
   /* Item 6: an ordinary call whose callee's own non-ignored, conveyor
      postcondition(s) imply a value range for its result identifier.  */
+  if (TREE_CODE (expr) == CALL_EXPR && oa_builtin_call_range (expr, out))
+    return true;
   if (TREE_CODE (expr) == CALL_EXPR && oa_call_postcondition_range_p (expr, env, out))
     return true;
 
@@ -19917,11 +19921,25 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
   {
     tree field, ptr_expr, field_const;
     tree_code field_code;
-    if (oa_symbolic_comparison_conjunct_shape (conjunct, &field, &ptr_expr,
-						&field_code, &field_const)
+    /* 'a != b' is 'a == b' with the other outcome.  */
+    tree field_conjunct = conjunct;
+    bool field_asserted = asserted_true;
+    {
+      tree c = STRIP_ANY_LOCATION_WRAPPER (conjunct);
+      if (TREE_CODE (c) == NE_EXPR)
+	{
+	  field_conjunct = build2 (EQ_EXPR, TREE_TYPE (c),
+				   TREE_OPERAND (c, 0), TREE_OPERAND (c, 1));
+	  field_asserted = !asserted_true;
+	}
+    }
+    if (oa_symbolic_comparison_conjunct_shape (field_conjunct, &field,
+						&ptr_expr, &field_code,
+						&field_const)
 	&& (TREE_CODE (field_const) == INTEGER_CST
 	    || TREE_CODE (field_const) == REAL_CST))
       {
+	bool asserted_true = field_asserted;
 	ptr_expr = oa_strip_symbolic_ptr_expr (ptr_expr);
 	tree identity;
 	if (oa_object_identity_decl (ptr_expr, &identity)
@@ -19930,6 +19948,34 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 	    || oa_field_object_identity (ptr_expr, env, &identity))
 	  {
 	    identity = env.alias_find (identity);
+	    /* 'x.f != C', or 'x.f == C' false: C is excluded, which a
+	       range, one interval, can state only at an end of the field's
+	       known range ('if (x.f == 10) return;' after 'x.f <= 10'),
+	       which it narrows by one, as for a variable
+	       (oa_refine_single_comparison).  */
+	    if (field_code == EQ_EXPR && !asserted_true
+		&& TREE_CODE (field_const) == INTEGER_CST)
+	      {
+		oa_contract_field_range_fact established;
+		if (!env.contract_field_range_get (identity, field,
+						   &established)
+		    || established.range.base != NULL_TREE)
+		  return;
+		oa_range_fact refined = established.range;
+		widest_int c = wi::to_widest (field_const);
+		bool bounded = refined.has_lo && refined.has_hi;
+		if (refined.has_lo && refined.lo == c
+		    && (!bounded || refined.lo < refined.hi))
+		  refined.lo = c + 1;
+		else if (refined.has_hi && refined.hi == c
+			 && (!bounded || refined.lo < refined.hi))
+		  refined.hi = c - 1;
+		else
+		  return;
+		env.contract_field_range_set (identity, field, refined,
+					       established.conveyor_established);
+		return;
+	      }
 	    if (!asserted_true)
 	      switch (field_code)
 		{
@@ -19937,7 +19983,7 @@ oa_refine_single_comparison (tree conjunct, oa_env &env, bool asserted_true)
 		case LE_EXPR: field_code = GT_EXPR; break;
 		case GT_EXPR: field_code = LE_EXPR; break;
 		case GE_EXPR: field_code = LT_EXPR; break;
-		default: return; /* NOT(field == val) -- skip.  */
+		default: return; /* NOT(field == val) for a float -- skip.  */
 		}
 	    /* D4324: the floating-point analogue of the block below --
 	       same shape, dispatched to the float field-range map when
@@ -20602,6 +20648,129 @@ oa_div_overflow_excluded_p (tree num, tree den, tree type, oa_env &env)
   return false;
 }
 
+/* Whether ARG, of signed integer type TYPE, provably isn't TYPE's minimum
+   (the one value whose absolute value TYPE can't hold), as
+   oa_div_overflow_excluded_p asks of a dividend.  */
+
+static bool
+oa_not_type_min_p (tree arg, tree type, oa_env &env)
+{
+  if (!INTEGRAL_TYPE_P (type) || TYPE_UNSIGNED (type))
+    return true;
+  widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
+  tree c = maybe_constant_value (arg);
+  if (TREE_CODE (c) == INTEGER_CST)
+    return wi::to_widest (c) != tmin;
+  widest_int excluded = 0;
+  tree s = oa_strip_to_relational_operand (arg);
+  if ((VAR_P (s) || TREE_CODE (s) == PARM_DECL)
+      && env.excluded_get (s, &excluded) && excluded == tmin)
+    return true;
+  oa_range_fact f;
+  return (oa_get_range (arg, env, &f) && !f.base
+	  && ((f.has_lo && f.lo > tmin) || (f.has_hi && f.hi < tmin)));
+}
+
+/* CALL, in a conveyor function: a built-in undefined for some arguments
+   that conveyor_builtin_allowed_p allows with its obligation -- clz and
+   ctz of zero (the two-argument generic forms define it), the absolute
+   value of a type's minimum -- has it checked.  */
+
+static void
+oa_check_builtin_call_ub (tree call, oa_env &env)
+{
+  tree fn = cp_get_callee_fndecl_nofold (call);
+  if (!fn || !fndecl_built_in_p (fn, BUILT_IN_NORMAL)
+      || call_expr_nargs (call) < 1)
+    return;
+  tree arg = CALL_EXPR_ARG (call, 0);
+  switch (DECL_FUNCTION_CODE (fn))
+    {
+    CASE_INT_FN (BUILT_IN_CLZ):
+    CASE_INT_FN (BUILT_IN_CTZ):
+    case BUILT_IN_CLZG:
+    case BUILT_IN_CTZG:
+      if (call_expr_nargs (call) == 1 && !oa_provably_nonzero_p (arg, env))
+	oa_conveyor_error_at (EXPR_LOCATION (call),
+			      "argument %qE of %qD not provably nonzero in a "
+			      "conveyor function", arg, fn);
+      break;
+    case BUILT_IN_ABS:
+    case BUILT_IN_LABS:
+    case BUILT_IN_LLABS:
+    case BUILT_IN_IMAXABS:
+      if (!oa_not_type_min_p (arg, TREE_TYPE (arg), env))
+	oa_conveyor_error_at (EXPR_LOCATION (call),
+			      "absolute value of %qE not provably "
+			      "representable in a conveyor function", arg);
+      break;
+    default:
+      break;
+    }
+}
+
+/* The range of the result of CALL to a built-in whose result is bounded
+   whatever its argument: a count of bits, or an absolute value; or its
+   value, folded.  */
+
+static bool
+oa_builtin_call_range (tree call, oa_range_fact *out)
+{
+  tree fn = cp_get_callee_fndecl_nofold (call);
+  if (!fn || !fndecl_built_in_p (fn, BUILT_IN_NORMAL)
+      || call_expr_nargs (call) < 1
+      || !INTEGRAL_TYPE_P (TREE_TYPE (call)))
+    return false;
+  tree folded = maybe_constant_value (call);
+  if (TREE_CODE (folded) == INTEGER_CST)
+    {
+      out->base = NULL_TREE;
+      out->has_lo = out->has_hi = true;
+      out->lo = out->hi = wi::to_widest (folded);
+      return true;
+    }
+  tree arg = CALL_EXPR_ARG (call, 0);
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (arg)))
+    return false;
+  unsigned prec = TYPE_PRECISION (TREE_TYPE (arg));
+  out->base = NULL_TREE;
+  out->has_lo = out->has_hi = true;
+  switch (DECL_FUNCTION_CODE (fn))
+    {
+    /* Of a nonzero argument; zero, undefined but for the generic forms'
+       fallback, oa_check_builtin_call_ub rules out.  */
+    CASE_INT_FN (BUILT_IN_CLZ):
+    CASE_INT_FN (BUILT_IN_CTZ):
+    CASE_INT_FN (BUILT_IN_CLRSB):
+    case BUILT_IN_CLRSBG:
+      out->lo = 0;
+      out->hi = prec - 1;
+      return true;
+    CASE_INT_FN (BUILT_IN_POPCOUNT):
+    CASE_INT_FN (BUILT_IN_FFS):
+    case BUILT_IN_POPCOUNTG:
+    case BUILT_IN_FFSG:
+      out->lo = 0;
+      out->hi = prec;
+      return true;
+    CASE_INT_FN (BUILT_IN_PARITY):
+    case BUILT_IN_PARITYG:
+      out->lo = 0;
+      out->hi = 1;
+      return true;
+    case BUILT_IN_ABS:
+    case BUILT_IN_LABS:
+    case BUILT_IN_LLABS:
+    case BUILT_IN_IMAXABS:
+      out->lo = 0;
+      out->hi = wi::to_widest (TYPE_MAX_VALUE (TREE_TYPE (call)));
+      return true;
+    default:
+      return false;
+    }
+}
+
+
 static void
 oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
 {
@@ -20669,6 +20838,21 @@ oa_scan_div_mod_in_expr (tree *expr, oa_env &env)
 				  count, prec);
 	  return NULL_TREE;
 	}
+      /* clz and ctz of zero, and the absolute value of a type's minimum,
+	 are undefined (the built-ins conveyor_builtin_allowed_p allows
+	 with these obligations).  */
+      if (TREE_CODE (t) == ABS_EXPR && INTEGRAL_TYPE_P (TREE_TYPE (t))
+	  && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (t)))
+	{
+	  tree arg = TREE_OPERAND (t, 0);
+	  if (!oa_not_type_min_p (arg, TREE_TYPE (arg), *e))
+	    oa_conveyor_error_at (EXPR_LOCATION (t),
+				  "absolute value of %qE not provably "
+				  "representable in a conveyor function", arg);
+	  return NULL_TREE;
+	}
+      if (TREE_CODE (t) == CALL_EXPR)
+	oa_check_builtin_call_ub (t, *e);
       if (TREE_CODE (t) != TRUNC_DIV_EXPR && TREE_CODE (t) != TRUNC_MOD_EXPR)
 	return NULL_TREE;
       tree divisor = TREE_OPERAND (t, 1);
@@ -34868,6 +35052,11 @@ oa_scan_item8_conjunct (tree *conjunct, oa_env &env)
       if (oa_predicate_text_scan && oa_call_to_conveyor_callee_p (c)
 	  && oa_diagnostics_active)
 	oa_check_mandatory_callee_preconditions (c, env);
+      if (oa_diagnostics_active)
+	{
+	  auto strength = make_temp_override (oa_conveyor_strength, true);
+	  oa_check_builtin_call_ub (c, env);
+	}
       /* Each argument's own evaluation is fully sequenced within itself,
 	 but the relative order *between* arguments is unspecified -- so
 	 every argument gets its own independent scan starting from ENV

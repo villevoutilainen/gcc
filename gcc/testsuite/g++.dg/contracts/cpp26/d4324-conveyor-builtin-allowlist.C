@@ -12,7 +12,9 @@
 void bad_printf () conveyor { __builtin_printf ("x"); } // { dg-error "not declared 'conveyor'" }
 void* bad_malloc () conveyor { return __builtin_malloc (4); } // { dg-error "not declared 'conveyor'" }
 void bad_exit () conveyor { __builtin_exit (0); } // { dg-error "not declared 'conveyor'" }
-int bad_clz (unsigned x) conveyor { return __builtin_clz (x); } // { dg-error "not declared 'conveyor'" }
+// clz, ctz and abs are allowed, with their argument obligations
+// (d4324-conveyor-builtin-obligations.C).
+int bad_clz (unsigned x) conveyor { return __builtin_clz (x); } // { dg-error "not provably nonzero" }
 bool bad_pred (int x) pre<std::contracts::conveyor_assert_v> (__builtin_printf ("x") > 0); // { dg-error "not declared 'conveyor'" }
 
 int ok_pop (unsigned x) conveyor { return __builtin_popcount (x); }

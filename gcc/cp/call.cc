@@ -10458,6 +10458,18 @@ conveyor_builtin_allowed_p (tree fn)
     case BUILT_IN_BSWAP32:
     case BUILT_IN_BSWAP64:
     case BUILT_IN_BSWAP128:
+    /* Undefined for some arguments: allowed with the obligation the
+       analysis checks at each call (oa_scan_array_bounds_in_expr,
+       cg_check_div_mod_ub): clz and ctz of zero (the two-argument
+       generic forms define it), abs of the minimum of its type.  */
+    CASE_INT_FN (BUILT_IN_CLZ):
+    CASE_INT_FN (BUILT_IN_CTZ):
+    case BUILT_IN_CLZG:
+    case BUILT_IN_CTZG:
+    case BUILT_IN_ABS:
+    case BUILT_IN_LABS:
+    case BUILT_IN_LLABS:
+    case BUILT_IN_IMAXABS:
     /* Overflow-checked arithmetic: never overflows itself.  */
     case BUILT_IN_ADD_OVERFLOW:
     case BUILT_IN_SUB_OVERFLOW:

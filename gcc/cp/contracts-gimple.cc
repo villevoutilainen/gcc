@@ -330,6 +330,7 @@ static bool cg_member_route_ended_p (tree);
 static bool cg_call_ends_lifetimes_p (gcall *);
 static bool cg_stmt_may_clobber_p (gimple *, ao_ref *);
 static bool cg_local_escape_reaches_p (tree, gimple *);
+static void cg_exclude_range_ends (cg_range_lite *, tree, gimple *, gimple_ranger *);
 static gimple *cg_consult_call;
 
 /* The objects of static storage duration the function being checked
@@ -2524,6 +2525,8 @@ cg_established_range_of (tree val, hash_map<tree, cg_range_lite> &established_ra
 					  scalar_range_cache, ranger,
 					  require_conveyor, require_symbolic,
 					  out, at_stmt);
+  if (have && at_stmt)
+    cg_exclude_range_ends (out, val, at_stmt, ranger);
   /* What the conditions guarding AT_STMT say of VAL by comparing it
      with a value whose range is known.  */
   if (at_stmt && require_conveyor && ranger && val
@@ -6680,9 +6683,88 @@ cg_check_div_mod_ub (gimple *stmt, hash_map<tree, cg_fact> &established_nz,
 		       gimple_ranger *ranger,
 		       hash_map<tree, frange> *established_frange)
 {
+  /* The minimum of its signed type, whose absolute value it can't hold:
+     as cg_check_div_mod_ub asks of a dividend below.  */
+  auto not_type_min = [&] (tree v) -> bool
+    {
+      tree type = TREE_TYPE (v);
+      if (!INTEGRAL_TYPE_P (type) || TYPE_UNSIGNED (type))
+	return true;
+      widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
+      if (TREE_CODE (v) == INTEGER_CST)
+	return wi::to_widest (v) != tmin;
+      if (TREE_CODE (v) != SSA_NAME)
+	return false;
+      if (cg_excludes_value_at_p (v, stmt, ranger, TYPE_MIN_VALUE (type)))
+	return true;
+      cg_range_lite r;
+      return (cg_value_range_at (v, stmt, established_range,
+				 scalar_range_cache, ranger,
+				 /*require_conveyor=*/true, &r)
+	      && ((r.has_lo && r.lo > tmin) || (r.has_hi && r.hi < tmin)));
+    };
+  /* clz and ctz of zero, and the absolute value of a type's minimum, are
+     undefined (the built-ins conveyor_builtin_allowed_p allows with these
+     obligations).  */
+  if (gcall *call = dyn_cast <gcall *> (stmt))
+    {
+      if (gimple_call_num_args (call) < 1)
+	return;
+      tree arg = gimple_call_arg (call, 0);
+      bool zero_undefined = false, min_undefined = false;
+      if (gimple_call_builtin_p (call, BUILT_IN_NORMAL))
+	switch (DECL_FUNCTION_CODE (gimple_call_fndecl (call)))
+	  {
+	  CASE_INT_FN (BUILT_IN_CLZ):
+	  CASE_INT_FN (BUILT_IN_CTZ):
+	  case BUILT_IN_CLZG:
+	  case BUILT_IN_CTZG:
+	    zero_undefined = gimple_call_num_args (call) == 1;
+	    break;
+	  case BUILT_IN_ABS:
+	  case BUILT_IN_LABS:
+	  case BUILT_IN_LLABS:
+	  case BUILT_IN_IMAXABS:
+	    min_undefined = true;
+	    break;
+	  default:
+	    break;
+	  }
+      else if (gimple_call_internal_p (call)
+	       && (gimple_call_internal_fn (call) == IFN_CLZ
+		   || gimple_call_internal_fn (call) == IFN_CTZ))
+	zero_undefined = gimple_call_num_args (call) == 1;
+      if (zero_undefined
+	  && !cg_provably_nonzero_for_ub_p (arg, stmt, established_nz,
+					    established_range,
+					    scalar_range_cache, ranger))
+	cg_conveyor_error_at (gimple_location (stmt),
+			      "argument %qE of %qD not provably nonzero in a "
+			      "conveyor function", cg_display_value (arg),
+			      gimple_call_fndecl (call));
+      if (min_undefined && !not_type_min (arg))
+	cg_conveyor_error_at (gimple_location (stmt),
+			      "absolute value of %qE not provably "
+			      "representable in a conveyor function",
+			      cg_display_value (arg));
+      return;
+    }
   if (!is_gimple_assign (stmt))
     return;
   enum tree_code code = gimple_assign_rhs_code (stmt);
+
+  if (code == ABS_EXPR
+      && INTEGRAL_TYPE_P (TREE_TYPE (gimple_assign_lhs (stmt)))
+      && TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (gimple_assign_lhs (stmt))))
+    {
+      tree arg = gimple_assign_rhs1 (stmt);
+      if (!not_type_min (arg))
+	cg_conveyor_error_at (gimple_location (stmt),
+			      "absolute value of %qE not provably "
+			      "representable in a conveyor function",
+			      cg_display_value (arg));
+      return;
+    }
 
   /* A floating value converted to an integer type must, truncated, be
      representable in it (P4445 BUG-13).  */
@@ -9779,7 +9861,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 				       cg_display_arg_value (call, argno, arg), callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
-		      "it %s", cg_display_arg_value (call, argno, arg),
+		      "it to be %s", cg_display_arg_value (call, argno, arg),
 		      cg_frange_text (have, have_text, sizeof have_text),
 		      cg_frange_text (need, need_text, sizeof need_text));
 	      continue;
@@ -10158,6 +10240,8 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 					check_as_conveyor,
 					check_as_symbolic, &established_r,
 					call);
+	  if (have_range)
+	    cg_exclude_range_ends (&established_r, substituted, call, ranger);
 	  if (have_range
 	      && (!required.has_lo
 		  || (established_r.has_lo && established_r.lo >= required.lo))
@@ -10172,7 +10256,7 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
 				       cg_display_arg_value (call, argno, substituted), callee);
 	      inform (gimple_location (call),
 		      "%qE is established %s, but the precondition requires "
-		      "it %s", cg_display_arg_value (call, argno, substituted),
+		      "it to be %s", cg_display_arg_value (call, argno, substituted),
 		      cg_range_lite_text (established_r, have_text,
 					  sizeof have_text),
 		      cg_range_lite_text (required, need_text,
@@ -12241,7 +12325,14 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
       cg_collect_field_range_groups (cond, &field_groups);
       for (unsigned g = 0; g < field_groups.length (); ++g)
 	{
-	  tree ssa = ssa_default_def (fun, field_groups[g].ptr_expr);
+	  tree base = field_groups[g].ptr_expr;
+	  tree ssa = ssa_default_def (fun, base);
+	  /* A class parameter passed by value is in memory, an object
+	     whose identity is the parameter itself
+	     (cg_gimple_object_identity).  */
+	  if (!ssa && TREE_CODE (base) == PARM_DECL
+	      && AGGREGATE_TYPE_P (TREE_TYPE (base)))
+	    ssa = base;
 	  if (ssa)
 	    seed.field.put ({ssa, field_groups[g].field},
 			     { field_groups[g].range, conveyor_enabled });
@@ -12417,6 +12508,7 @@ cg_requirement_int_range (tree e, gcall *call, tree callee,
 	    if (!(lin.has_lo && lin.has_hi && lin.lo > lin.hi))
 	      cg_range_meet (out, lin);
 	  }
+	cg_exclude_range_ends (out, arg, call, cg_array_bounds->ranger);
 	return out->has_lo || out->has_hi;
       }
     case INDIRECT_REF:
@@ -12828,7 +12920,7 @@ cg_check_compound_requirement (tree conjunct, gcall *call, tree callee,
       cg_obligation_error_at (loc, "argument %qE provably violates the precondition of %qD",
 			       shown (side), callee);
       inform (loc, "%qE is established %s, but the precondition requires "
-	      "it %s", shown (side), have, need);
+	      "it to be %s", shown (side), have, need);
       return;
     }
   auto_diagnostic_group d;
@@ -13156,7 +13248,7 @@ cg_consult_persistent_facts (gcall *call,
 				       substituted, callee);
 	      inform (gimple_location (call),
 		      "field %qD of %qE is established %s, but the "
-		      "precondition requires it %s",
+		      "precondition requires it to be %s",
 		      field_groups[g].field, substituted,
 		      cg_range_lite_text (established->range, have_text,
 					  sizeof have_text),
@@ -13217,7 +13309,7 @@ cg_consult_persistent_facts (gcall *call,
 				       substituted, callee);
 	      inform (gimple_location (call),
 		      "field %qD of %qE is established %s, but the precondition "
-		      "requires it %s", float_groups[g].field, substituted,
+		      "requires it to be %s", float_groups[g].field, substituted,
 		      cg_frange_text (established->float_range, have,
 				      sizeof have),
 		      cg_frange_text (float_groups[g].range, need, sizeof need));
@@ -19698,6 +19790,83 @@ cg_range_lite_text_for (cg_range_lite r, tree type, char *buf, size_t n)
   return cg_range_lite_text (r, buf, n);
 }
 
+/* A value the ranger excludes at STMT at an end of range OUT, of SSA
+   value V or the same value loaded earlier (cg_dominating_load_twins):
+   'if (n == 10) return;' after 'n <= 10', of a variable or a field
+   loaded again, which the ranger's own interval, with a hole, can't
+   pass on through its bounds.  The end moves in past it.  */
+
+static void
+cg_exclude_range_ends (cg_range_lite *out, tree v, gimple *stmt,
+		       gimple_ranger *ranger)
+{
+  if (!v || TREE_CODE (v) != SSA_NAME || !INTEGRAL_TYPE_P (TREE_TYPE (v))
+      || !stmt)
+    return;
+  auto_vec<tree> vals;
+  vals.safe_push (v);
+  cg_dominating_load_twins (v, stmt, &vals);
+  /* The constants the conditions guarding STMT exclude ('x != C' taken,
+     'x == C' not), as cg_dominating_comparison_bound walks them.  */
+  auto_vec<widest_int, 4> excl;
+  if (dom_info_available_p (CDI_DOMINATORS) && gimple_bb (stmt))
+    for (basic_block bb = gimple_bb (stmt);
+	 bb && bb != ENTRY_BLOCK_PTR_FOR_FN (cfun);
+	 bb = get_immediate_dominator (CDI_DOMINATORS, bb))
+      {
+	if (!single_pred_p (bb))
+	  continue;
+	edge e = single_pred_edge (bb);
+	if (!(e->flags & (EDGE_TRUE_VALUE | EDGE_FALSE_VALUE)))
+	  continue;
+	gcond *cond = safe_dyn_cast <gcond *> (*gsi_last_bb (e->src));
+	tree_code code;
+	tree lhs, rhs;
+	if (!cond
+	    || !cg_tested_comparison (cond, (e->flags & EDGE_TRUE_VALUE) != 0,
+				      &code, &lhs, &rhs)
+	    || code != NE_EXPR)
+	  continue;
+	tree cst = (TREE_CODE (rhs) == INTEGER_CST ? rhs
+		    : TREE_CODE (lhs) == INTEGER_CST ? lhs : NULL_TREE);
+	tree other = cst == rhs ? lhs : rhs;
+	if (!cst)
+	  continue;
+	for (tree x : vals)
+	  if (other == x)
+	    {
+	      excl.safe_push (wi::to_widest (cst));
+	      break;
+	    }
+      }
+  auto excluded = [&] (const widest_int &w)
+    {
+      for (const widest_int &c : excl)
+	if (c == w)
+	  return true;
+      if (!ranger)
+	return false;
+      for (tree x : vals)
+	{
+	  int_range_max vr;
+	  tree type = TREE_TYPE (x);
+	  if (wi::fits_to_tree_p (w, type)
+	      && ranger->range_of_expr (vr, x, stmt) && !vr.undefined_p ()
+	      && !vr.varying_p ()
+	      && !vr.contains_p (wide_int::from (w, TYPE_PRECISION (type),
+						 TYPE_SIGN (type))))
+	    return true;
+	}
+      return false;
+    };
+  if (!out->has_lo || !out->has_hi)
+    return;
+  for (int k = 0; k < 8 && out->lo < out->hi && excluded (out->hi); ++k)
+    out->hi -= 1;
+  for (int k = 0; k < 8 && out->lo < out->hi && excluded (out->lo); ++k)
+    out->lo += 1;
+}
+
 /* The range of SSA value VAL at STMT: the facts established for it,
    narrowed by what the ranger knows there.  */
 
@@ -19739,6 +19908,8 @@ cg_value_range_at (tree val, gimple *stmt,
     if (cg_trusted_ranger_range (twin, stmt, ranger, false,
 				 TYPE_SIGN (TREE_TYPE (twin)), &r))
       narrow (r);
+  if (any)
+    cg_exclude_range_ends (out, val, stmt, ranger);
   return any;
 }
 
