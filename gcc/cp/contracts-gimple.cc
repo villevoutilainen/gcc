@@ -2520,10 +2520,14 @@ static gcall *cg_display_at;
    oa_provable_p, which requires the base of '&p->field' to be provable
    too.  */
 
-/* Whether automatic variable DECL's scope has ended before AT: the
-   latest definition of DECL along AT's memory state is a clobber, as the
-   end of its block leaves (P4445 BUG-23).  Unknown at a merge, so false
-   there.  */
+/* Whether automatic variable DECL's scope may have ended before AT, so
+   that its address there can't be proven to designate it: along some
+   path to AT, the latest definition of DECL in the memory state is the
+   clobber the end of its block leaves, or a destructor's end (P4445
+   BUG-23).  At a merge, every incoming path counts.  AT inside DECL's
+   own block can't be after its end: every path there passes its
+   declaration again, so a loop's clobber from an earlier iteration
+   doesn't count.  */
 
 static bool
 cg_scope_ended_at_p (tree decl, gimple *at)
@@ -2531,17 +2535,63 @@ cg_scope_ended_at_p (tree decl, gimple *at)
   if (!at || !VAR_P (decl) || is_global_var (decl) || !cfun
       || !auto_var_in_fn_p (decl, cfun->decl))
     return false;
-  tree vuse = gimple_vuse (at);
-  for (int steps = 0; steps < 256 && vuse; ++steps)
-    {
-      gimple *d = SSA_NAME_DEF_STMT (vuse);
-      if (!d || gimple_nop_p (d) || is_a <gphi *> (d))
+  for (tree b = gimple_block (at); b && TREE_CODE (b) == BLOCK;
+       b = BLOCK_SUPERCONTEXT (b))
+    for (tree v = BLOCK_VARS (b); v; v = DECL_CHAIN (v))
+      if (v == decl)
 	return false;
+  tree vuse = gimple_vuse (at);
+  if (!vuse)
+    return false;
+  auto_vec<tree, 16> work;
+  hash_set<tree> seen;
+  work.safe_push (vuse);
+  seen.add (vuse);
+  for (int steps = 0; steps < 1024 && !work.is_empty (); ++steps)
+    {
+      tree v = work.pop ();
+      gimple *d = SSA_NAME_DEF_STMT (v);
+      if (!d || gimple_nop_p (d))
+	continue;
+      if (gphi *phi = dyn_cast <gphi *> (d))
+	{
+	  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	    {
+	      tree a = gimple_phi_arg_def (phi, i);
+	      if (TREE_CODE (a) == SSA_NAME && !seen.add (a))
+		work.safe_push (a);
+	    }
+	  continue;
+	}
       if (gimple_assign_single_p (d) && gimple_assign_lhs (d) == decl)
-	return gimple_clobber_p (d);
-      vuse = gimple_vuse (d);
+	{
+	  if (gimple_clobber_p (d, CLOBBER_STORAGE_END)
+	      || gimple_clobber_p (d, CLOBBER_OBJECT_END))
+	    return true;
+	  continue;
+	}
+      /* A call initializing DECL, a temporary in a loop's condition
+	 among them: by its result, or as the object it is given the
+	 address of (a constructor's).  The path is past DECL's latest
+	 beginning.  */
+      if (gcall *call = dyn_cast <gcall *> (d))
+	{
+	  bool init = gimple_call_lhs (call) == decl;
+	  for (unsigned i = 0; !init && i < gimple_call_num_args (call); ++i)
+	    {
+	      tree a = gimple_call_arg (call, i);
+	      init = (TREE_CODE (a) == ADDR_EXPR
+		      && TREE_OPERAND (a, 0) == decl);
+	    }
+	  if (init)
+	    continue;
+	}
+      if (tree n = gimple_vuse (d))
+	if (!seen.add (n))
+	  work.safe_push (n);
     }
-  return false;
+  /* Paths left unwalked: not proven alive.  */
+  return !work.is_empty ();
 }
 
 

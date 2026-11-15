@@ -32218,15 +32218,38 @@ oa_merge_branch_envs (oa_env &then_env, oa_env &else_env, tree cond)
   then_env.borrowed_merge_with (else_env);
 }
 
+/* The automatic variables of the blocks the walk is in, innermost
+   last: each entry is a BIND_EXPR's BIND_EXPR_VARS.  */
+
+static vec<tree> oa_open_scopes;
+
 /* Where a break or continue statement leaves: the environments reaching
    each one, merged.  oa_handle_loop collects both for its body; a switch
-   collects its own breaks.  */
+   collects its own breaks.  A jump leaves the blocks opened since the
+   collector was made, ending their variables (P4445 BUG-23), as leaving
+   a block normally does.  */
 
 struct oa_jump_collector
 {
   oa_env env;
   bool any = false;
+  unsigned depth = oa_open_scopes.length ();
   void add (oa_env &e)
+  {
+    if (oa_open_scopes.length () > depth)
+      {
+	oa_env left;
+	left.assign (e);
+	for (unsigned i = oa_open_scopes.length (); i-- > depth;)
+	  for (tree v = oa_open_scopes[i]; v; v = DECL_CHAIN (v))
+	    if (VAR_P (v) && !is_global_var (v))
+	      left.scope_end (v);
+	add_1 (left);
+      }
+    else
+      add_1 (e);
+  }
+  void add_1 (oa_env &e)
   {
     if (!any)
       env.assign (e);
@@ -36795,7 +36818,9 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
       return;
 
     case BIND_EXPR:
+      oa_open_scopes.safe_push (BIND_EXPR_VARS (t));
       oa_walk_stmt (&BIND_EXPR_BODY (t), env);
+      oa_open_scopes.pop ();
       /* Leaving the block ends its automatic variables.  */
       for (tree v = BIND_EXPR_VARS (t); v; v = DECL_CHAIN (v))
 	if (VAR_P (v) && !is_global_var (v))
