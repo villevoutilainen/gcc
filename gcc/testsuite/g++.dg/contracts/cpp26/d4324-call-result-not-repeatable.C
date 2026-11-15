@@ -3,9 +3,7 @@
 // mutable member, which even a const member function may write (P4445
 // BUG-21).  A conveyor function now writes one through const access only
 // to an object that began its lifetime in it, so toggle () is itself
-// ill-formed; the call still isn't taken as a fact.  (The AST engine doesn't take facts from a branch on a call's
-// result at all, so it also rejects the repeatable cases the GIMPLE
-// variant of this test accepts.)
+// ill-formed; the call still isn't taken as a fact.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=ast" }
 

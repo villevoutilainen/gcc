@@ -10354,6 +10354,59 @@ cg_check_call (gcall *call, hash_map<tree, cg_fact> &established,
    which -fcontract-*-proofs-gimple flags happen to be on).  */
 
 struct cg_pred_fact { tree pred_fn; bool polarity; bool conveyor_established; };
+
+/* The predicate facts about one object, one per predicate function: 'ok
+   (p)' and 'p.get ()' both hold after 'if (ok (p) && p.get ())'.  A
+   fact beyond the capacity drops the oldest, which only loses precision.
+   As the AST engine's oa_predicate_facts.  */
+
+#define CG_PRED_FACTS_MAX 8
+
+struct cg_pred_facts
+{
+  cg_pred_fact f[CG_PRED_FACTS_MAX];
+  unsigned char n = 0;
+  cg_pred_fact *find (tree pred_fn)
+  {
+    for (unsigned i = 0; i < n; ++i)
+      if (f[i].pred_fn == pred_fn)
+	return &f[i];
+    return NULL;
+  }
+  void put (const cg_pred_fact &fact)
+  {
+    if (cg_pred_fact *p = find (fact.pred_fn))
+      {
+	*p = fact;
+	return;
+      }
+    if (n == CG_PRED_FACTS_MAX)
+      {
+	for (unsigned i = 1; i < n; ++i)
+	  f[i - 1] = f[i];
+	--n;
+      }
+    f[n++] = fact;
+  }
+};
+
+/* Record FACT about ID in MAP.  */
+
+static void
+cg_pred_put (hash_map<tree, cg_pred_facts> &map, tree id, cg_pred_fact fact)
+{
+  cg_pred_facts &facts = map.get_or_insert (id);
+  facts.put (fact);
+}
+
+/* What MAP knows of PRED_FN (ID), or null.  */
+
+static cg_pred_fact *
+cg_pred_get (hash_map<tree, cg_pred_facts> &map, tree id, tree pred_fn)
+{
+  cg_pred_facts *facts = map.get (id);
+  return facts ? facts->find (pred_fn) : NULL;
+}
 struct cg_field_fact
 {
   cg_range_lite range;
@@ -10398,7 +10451,7 @@ struct cg_relt_fact
 
 struct cg_dom_fact_state
 {
-  hash_map<tree, cg_pred_fact> pred;
+  hash_map<tree, cg_pred_facts> pred;
   /* The relations, keyed by cg_relt_key.  */
   hash_map<tree, cg_relt_fact> relt;
   /* For a variable holding an aggregate value a relation may be about,
@@ -12181,7 +12234,7 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	    continue;
 	  tree ssa = ssa_default_def (fun, arg_decl);
 	  if (ssa)
-	    seed.pred.put (ssa, { pred_fn, !negated, conveyor_enabled });
+	    cg_pred_put (seed.pred, ssa, { pred_fn, !negated, conveyor_enabled });
 	}
 
       auto_vec<cg_field_group_lite> field_groups;
@@ -12976,7 +13029,7 @@ cg_consult_persistent_facts (gcall *call,
 	    identity = cg_scalar_value_origin (substituted);
 
 	  bool required = !negated;
-	  cg_pred_fact *fact = identity ? state.pred.get (identity) : NULL;
+	  cg_pred_fact *fact = identity ? cg_pred_get (state.pred, identity, pred_fn) : NULL;
 	  /* No fact about the argument: PRED_FN's postcondition may define
 	     its result as a comparison of its parameter with a constant
 	     ('post (r: r == (v > 0))'), decided by the argument's range,
@@ -13056,7 +13109,8 @@ cg_consult_persistent_facts (gcall *call,
 			"the precondition of %qD", pred_fn,
 			cg_display_arg_value (call, argno, substituted), callee);
 	  oa_unprovable_reason reason
-	    = !fact ? OA_UNPROVABLE_NO_FACT
+	    = !fact ? (identity && state.pred.get (identity)
+		       ? OA_UNPROVABLE_WRONG_IDENTITY : OA_UNPROVABLE_NO_FACT)
 	      : fact->pred_fn != pred_fn ? OA_UNPROVABLE_WRONG_IDENTITY
 	      : OA_UNPROVABLE_WEAKER_PROVENANCE;
 	  if (const char *why = oa_unprovable_reason_text (reason))
@@ -13778,12 +13832,12 @@ cg_establish_persistent_facts_for_call_1 (gcall *call,
 	    {
 	      tree lhs = gimple_call_lhs (call);
 	      if (lhs && TREE_CODE (lhs) == SSA_NAME)
-		state.pred.put (lhs, { pred_fn, !negated, conveyor_enabled });
+		cg_pred_put (state.pred, lhs, { pred_fn, !negated, conveyor_enabled });
 	      else if (lhs && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL))
-		state.pred.put (lhs, { pred_fn, !negated, conveyor_enabled });
+		cg_pred_put (state.pred, lhs, { pred_fn, !negated, conveyor_enabled });
 	      else if (lhs && TREE_CODE (lhs) == MEM_REF)
 		if (tree id = cg_gimple_object_identity (TREE_OPERAND (lhs, 0)))
-		  state.pred.put (id, { pred_fn, !negated, conveyor_enabled });
+		  cg_pred_put (state.pred, id, { pred_fn, !negated, conveyor_enabled });
 	      continue;
 	    }
 	  unsigned argno;
@@ -13797,7 +13851,7 @@ cg_establish_persistent_facts_for_call_1 (gcall *call,
 	  if (!identity)
 	    identity = cg_gimple_object_identity (substituted);
 	  if (identity)
-	    state.pred.put (identity, { pred_fn, !negated, conveyor_enabled });
+	    cg_pred_put (state.pred, identity, { pred_fn, !negated, conveyor_enabled });
 	}
 
       /* What the call leaves in the scalar object a pointer or reference
@@ -14251,7 +14305,7 @@ cg_establish_assert_facts (gcall *call, cg_dom_fact_state &state)
       if (oa_match_predicate_conjunct (c, &pred_fn, &arg_decl, &negated))
 	{
 	  if (tree identity = identity_of (arg_decl))
-	    state.pred.put (identity, { pred_fn, !negated, conveyor_enabled });
+	    cg_pred_put (state.pred, identity, { pred_fn, !negated, conveyor_enabled });
 	  continue;
 	}
 
@@ -14585,7 +14639,7 @@ cg_compute_assert_memory_verdicts (gcall *call, cg_dom_fact_state &state,
 	    continue;
 	  for (int flavor = 0; flavor < 2; ++flavor)
 	    {
-	      cg_pred_fact *p = state.pred.get (identity);
+	      cg_pred_fact *p = cg_pred_get (state.pred, identity, pred_fn);
 	      if (!p || p->pred_fn != pred_fn
 		  || (flavor == 0 && !p->conveyor_established))
 		v->verdict[i][flavor] = CG_VERDICT_UNKNOWN;
@@ -15106,17 +15160,30 @@ static void
 cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
 			  bool unite_fields = false)
 {
+  /* Per object, the facts both paths agree on.  */
   auto_vec<tree> pred_remove;
+  auto_vec<std::pair<tree, cg_pred_facts>> pred_put;
   for (auto it : dst->pred)
     {
-      const cg_pred_fact *ov = src.pred.get (it.first);
-      if (!ov || ov->pred_fn != it.second.pred_fn
-	  || ov->polarity != it.second.polarity
-	  || ov->conveyor_established != it.second.conveyor_established)
+      cg_pred_facts *ov = src.pred.get (it.first);
+      cg_pred_facts merged;
+      for (unsigned k = 0; ov && k < it.second.n; ++k)
+	{
+	  const cg_pred_fact &mine = it.second.f[k];
+	  const cg_pred_fact *theirs = ov->find (mine.pred_fn);
+	  if (theirs && theirs->polarity == mine.polarity
+	      && theirs->conveyor_established == mine.conveyor_established)
+	    merged.put (mine);
+	}
+      if (!merged.n)
 	pred_remove.safe_push (it.first);
+      else if (merged.n != it.second.n)
+	pred_put.safe_push ({it.first, merged});
     }
   for (tree t : pred_remove)
     dst->pred.remove (t);
+  for (auto &p : pred_put)
+    dst->pred.put (p.first, p.second);
 
   /* Relations: by agreement.  */
   auto_vec<tree> relt_remove;
@@ -15353,11 +15420,17 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
       return false;
   for (auto it : a.pred)
     {
-      const cg_pred_fact *ov = b.pred.get (it.first);
-      if (!ov || ov->pred_fn != it.second.pred_fn
-	  || ov->polarity != it.second.polarity
-	  || ov->conveyor_established != it.second.conveyor_established)
+      cg_pred_facts *ov = b.pred.get (it.first);
+      if (!ov || ov->n != it.second.n)
 	return false;
+      for (unsigned k = 0; k < it.second.n; ++k)
+	{
+	  const cg_pred_fact &mine = it.second.f[k];
+	  const cg_pred_fact *theirs = ov->find (mine.pred_fn);
+	  if (!theirs || theirs->polarity != mine.polarity
+	      || theirs->conveyor_established != mine.conveyor_established)
+	    return false;
+	}
     }
   for (auto it : a.field)
     {
@@ -16091,7 +16164,7 @@ cg_refine_edge_into (edge e, cg_dom_fact_state &state,
 	      if (!identity && TREE_CODE (arg) == SSA_NAME)
 		identity = arg;
 	      if (identity)
-		state.pred.put (identity, { callee, call_truth, true });
+		cg_pred_put (state.pred, identity, { callee, call_truth, true });
 	    }
 	  return;
 	}

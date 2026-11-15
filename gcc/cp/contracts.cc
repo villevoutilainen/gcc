@@ -11536,6 +11536,42 @@ struct oa_predicate_fact
   bool conveyor_established;
 };
 
+/* The predicate facts about one object, one per predicate function: 'ok
+   (p)' and 'p.get ()' both hold after 'if (ok (p) && p.get ())'.  A
+   fact beyond the capacity drops the oldest, which only loses
+   precision.  */
+
+#define OA_PREDICATE_FACTS_MAX 8
+
+struct oa_predicate_facts
+{
+  oa_predicate_fact f[OA_PREDICATE_FACTS_MAX];
+  unsigned char n = 0;
+  const oa_predicate_fact *find (tree pred_fn) const
+  {
+    for (unsigned i = 0; i < n; ++i)
+      if (f[i].pred_fn == pred_fn)
+	return &f[i];
+    return NULL;
+  }
+  void put (const oa_predicate_fact &fact)
+  {
+    for (unsigned i = 0; i < n; ++i)
+      if (f[i].pred_fn == fact.pred_fn)
+	{
+	  f[i] = fact;
+	  return;
+	}
+    if (n == OA_PREDICATE_FACTS_MAX)
+      {
+	for (unsigned i = 1; i < n; ++i)
+	  f[i - 1] = f[i];
+	--n;
+      }
+    f[n++] = fact;
+  }
+};
+
 /* A *relational* fact between two decls -- "LHS CODE RHS holds", e.g.
    for 'pre<ctrl>(x < q)', LHS is x, CODE is LT_EXPR, RHS is q. Unlike
    oa_range_fact (a numeric interval against a literal bound), this
@@ -12083,13 +12119,21 @@ public:
      file: a fact conveyor-established on only one of two joining
      branches must not be treated as conveyor-established after the
      join.  */
-  bool predicate_fact_get (tree decl, oa_predicate_fact *out)
+  /* What is known of PRED_FN (DECL).  */
+  bool predicate_fact_get (tree decl, tree pred_fn, oa_predicate_fact *out)
   {
-    const oa_predicate_fact *v = m_predicate_fact_map.get (decl);
-    if (!v)
+    const oa_predicate_facts *v = m_predicate_fact_map.get (decl);
+    const oa_predicate_fact *f = v ? v->find (pred_fn) : NULL;
+    if (!f)
       return false;
-    *out = *v;
+    *out = *f;
     return true;
+  }
+  /* Whether anything is known of a predicate of DECL.  */
+  bool predicate_fact_any (tree decl)
+  {
+    const oa_predicate_facts *v = m_predicate_fact_map.get (decl);
+    return v && v->n;
   }
   void predicate_fact_set (tree decl, tree pred_fn, bool polarity,
 			    bool conveyor_established)
@@ -12098,7 +12142,10 @@ public:
     fact.pred_fn = pred_fn;
     fact.polarity = polarity;
     fact.conveyor_established = conveyor_established;
-    m_predicate_fact_map.put (decl, fact);
+    const oa_predicate_facts *v = m_predicate_fact_map.get (decl);
+    oa_predicate_facts facts = v ? *v : oa_predicate_facts ();
+    facts.put (fact);
+    m_predicate_fact_map.put (decl, facts);
   }
   /* A relation's key: the same for the same predicate and argument
      identities, in order, so that equal facts share an entry and a join
@@ -12225,19 +12272,27 @@ public:
       return;
     auto_vec<tree> to_remove;
     auto_vec<tree> to_keep;
-    auto_vec<oa_predicate_fact> kept_facts;
+    auto_vec<oa_predicate_facts> kept_facts;
     for (auto it : m_predicate_fact_map)
       {
-	const oa_predicate_fact *ov = other.m_predicate_fact_map.get (it.first);
-	if (!ov || ov->pred_fn != it.second.pred_fn
-	    || ov->polarity != it.second.polarity)
+	const oa_predicate_facts *ov = other.m_predicate_fact_map.get (it.first);
+	oa_predicate_facts merged;
+	for (unsigned k = 0; ov && k < it.second.n; ++k)
+	  {
+	    const oa_predicate_fact &mine = it.second.f[k];
+	    const oa_predicate_fact *theirs = ov->find (mine.pred_fn);
+	    if (!theirs || theirs->polarity != mine.polarity)
+	      continue;
+	    oa_predicate_fact m = mine;
+	    m.conveyor_established
+	      = mine.conveyor_established && theirs->conveyor_established;
+	    merged.put (m);
+	  }
+	if (!merged.n)
 	  {
 	    to_remove.safe_push (it.first);
 	    continue;
 	  }
-	oa_predicate_fact merged = it.second;
-	merged.conveyor_established
-	  = it.second.conveyor_established && ov->conveyor_established;
 	to_keep.safe_push (it.first);
 	kept_facts.safe_push (merged);
       }
@@ -14255,7 +14310,7 @@ private:
   oa_cow_map<tree, oa_range_fact> m_range_map;
   oa_cow_map<tree, oa_float_range_fact> m_float_range_map;
   oa_cow_map<tree, oa_derivation *> m_deriv_map;
-  oa_cow_map<tree, oa_predicate_fact> m_predicate_fact_map;
+  oa_cow_map<tree, oa_predicate_facts> m_predicate_fact_map;
   /* Relations (oa_relation_fact), keyed by relation_key.  */
   oa_cow_map<tree, oa_relation_fact> m_relation_map;
   oa_cow_map<tree, oa_relational_fact> m_relational_map;
@@ -24851,14 +24906,13 @@ oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
     }
   identity = env.alias_find (identity);
   oa_predicate_fact fact;
-  bool found = env.predicate_fact_get (identity, &fact);
-  if (!found || fact.pred_fn != pred_fn
-      || (require_conveyor && !fact.conveyor_established))
+  bool found = env.predicate_fact_get (identity, pred_fn, &fact);
+  if (!found || (require_conveyor && !fact.conveyor_established))
     {
       if (reason_out)
-	*reason_out = !found ? OA_UNPROVABLE_NO_FACT
-		      : fact.pred_fn != pred_fn ? OA_UNPROVABLE_WRONG_IDENTITY
-		      : OA_UNPROVABLE_WEAKER_PROVENANCE;
+	*reason_out = (found ? OA_UNPROVABLE_WEAKER_PROVENANCE
+		       : env.predicate_fact_any (identity)
+		       ? OA_UNPROVABLE_WRONG_IDENTITY : OA_UNPROVABLE_NO_FACT);
       return OA_UNKNOWN;
     }
   return (fact.polarity == required_polarity) ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
@@ -27880,8 +27934,11 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 
 	  bool required = !negated;
 	  oa_predicate_fact fact;
-	  bool found = identity && env.predicate_fact_get (identity, &fact);
-	  if (!found || fact.pred_fn != pred_fn)
+	  bool found = (identity
+			&& env.predicate_fact_get (identity, pred_fn, &fact));
+	  bool other_fact = (!found && identity
+			     && env.predicate_fact_any (identity));
+	  if (!found)
 	    {
 	      if (strict)
 		oa_error_at (EXPR_LOCATION (call),
@@ -27892,7 +27949,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 			    "cannot verify that %qD (%qE) holds, as required by "
 			    "the precondition of %qD", pred_fn, substituted, callee);
 	      if (const char *why = oa_unprovable_reason_text
-		    (!found ? OA_UNPROVABLE_NO_FACT : OA_UNPROVABLE_WRONG_IDENTITY))
+		    (other_fact ? OA_UNPROVABLE_WRONG_IDENTITY
+		     : OA_UNPROVABLE_NO_FACT))
 		oa_inform (EXPR_LOCATION (call), "%s", _(why));
 	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      continue;
