@@ -3556,9 +3556,14 @@ Every translation unit that establishes or checks the same symbolic
 contracts must be compiled with this option.  An inline function
 compiled both with and without it has two definitions, and which one the
 linker keeps decides whether its postconditions are recorded.  The
-records are kept in @file{libstdc++exp}, a static library: a shared
-library that links it and does not export its symbols keeps records of
-its own.
+records are kept in @file{libstdc++exp}, a static library that each
+executable and shared library using them links; every copy uses one
+store per process, whichever way a module binds its own calls
+(@option{-Wl,-Bsymbolic-functions}, @option{-fno-semantic-interposition}).
+A module that binds its data references locally too
+(@option{-Wl,-Bsymbolic}), hides the library's symbols
+(@option{-Wl,--exclude-libs}, a version script), or is loaded by a
+statically linked executable keeps records of its own.
 
 @opindex fdump-contract-proofs
 @item -fdump-contract-proofs=@var{file}

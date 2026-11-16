@@ -132,6 +132,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 
 namespace contracts
 {
+// The symbolic run-time records' state (symbolic_state below), one per
+// process: an inline variable, of vague linkage and default visibility,
+// so that every module linking this library's archive -- an executable
+// and its shared libraries -- binds to one definition, whichever of
+// them makes its own calls to it locally (P4445 BUG-34).  A module that
+// hides the archive's symbols (--exclude-libs, a version script), or a
+// static executable's dlopen'ed library, still has its own.
+inline void* __symbolic_state = nullptr;
+
 
 void invoke_default_contract_violation_handler(const std::contracts::contract_violation& violation) noexcept
 {
@@ -179,17 +188,15 @@ namespace
     bool has_hi;
     long long lo;
     long long hi;
-    // When it was established (symbolic_epoch), so that a call's
+    // When it was established (symbolic_state::epoch), so that a call's
     // invalidation spares what the call itself established
     // (__contracts_symbolic_invalidate_range_before).
     unsigned long long epoch;
   };
 
-  std::mutex symbolic_mutex;
-  unsigned long long symbolic_epoch;
 
   // Whether this thread is inside a record operation.  Recording a fact
-  // can allocate while symbolic_mutex is held, and an allocation in a
+  // can allocate while the records' mutex is held, and an allocation in a
   // translation unit built with -fcontract-symbolic-runtime-checks clears
   // the records of the storage it gives -- a replacement operator new, or
   // one with a local whose type declares a symbolic predicate, would
@@ -204,21 +211,6 @@ namespace
     symbolic_entry() noexcept : ok(!symbolic_busy) { symbolic_busy = true; }
     ~symbolic_entry() { if (ok) symbolic_busy = false; }
   };
-  using symbolic_record_map
-    = std::unordered_map<symbolic_record_key, symbolic_record_value,
-			 symbolic_record_key_hash>;
-
-  // The records, constructed on first use and never destroyed: a fact can
-  // be established or cleared by a constructor or destructor of a global
-  // object, before this library's own static initialization or after its
-  // static destruction (P4445 2.3.2.3).  symbolic_mutex needs neither: it
-  // is constant-initialized.
-  symbolic_record_map&
-  symbolic_records()
-  {
-    static symbolic_record_map* records = new symbolic_record_map;
-    return *records;
-  }
 
   // A relation's record (symbolic facts about several objects and
   // values): keyed by the predicate's tag and, for each argument, an
@@ -237,12 +229,52 @@ namespace
   using symbolic_relation_map
     = std::unordered_map<std::string, symbolic_relation_value>;
 
+  // What the records share: the records and relations, the mutex guarding
+  // them, and the epoch they're stamped with.  Constructed on first use and never
+  // destroyed: a fact can be established or cleared by a constructor or
+  // destructor of a global object, before this library's own static
+  // initialization or after its static destruction (P4445 2.3.2.3).
+  using symbolic_record_map
+    = std::unordered_map<symbolic_record_key, symbolic_record_value,
+			 symbolic_record_key_hash>;
+  struct symbolic_state
+  {
+    std::mutex mutex;
+    unsigned long long epoch = 0;
+    symbolic_record_map records;
+    symbolic_relation_map relations;
+  };
+
+  // The process's one state (__symbolic_state): the first to need it
+  // makes it, and one made concurrently by another module is discarded.
+  symbolic_state&
+  symbolic_shared()
+  {
+    void* p = __atomic_load_n(&__symbolic_state, __ATOMIC_ACQUIRE);
+    if (!p)
+      {
+	auto* fresh = new symbolic_state;
+	void* expected = nullptr;
+	if (__atomic_compare_exchange_n(&__symbolic_state, &expected, fresh,
+					false, __ATOMIC_ACQ_REL,
+					__ATOMIC_ACQUIRE))
+	  p = fresh;
+	else
+	  {
+	    delete fresh;
+	    p = expected;
+	  }
+      }
+    return *static_cast<symbolic_state*>(p);
+  }
+
+  symbolic_record_map&
+  symbolic_records()
+  { return symbolic_shared().records; }
+
   symbolic_relation_map&
   symbolic_relations()
-  {
-    static symbolic_relation_map* relations = new symbolic_relation_map;
-    return *relations;
-  }
+  { return symbolic_shared().relations; }
 
   std::string
   relation_key(const void* key, unsigned n, const void* const* args,
@@ -279,8 +311,8 @@ __contracts_symbolic_establish_bool(const void* key, const void* obj,
   symbolic_record_value v{};
   v.is_range = false;
   v.bool_val = polarity;
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
-  v.epoch = ++symbolic_epoch;
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
+  v.epoch = ++symbolic_shared().epoch;
   symbolic_records()[symbolic_record_key{key, obj}] = v;
 }
 
@@ -291,7 +323,7 @@ __contracts_symbolic_check_bool(const void* key, const void* obj,
   symbolic_entry entry;
   if (!entry.ok)
     return false;
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
   auto it = symbolic_records().find(symbolic_record_key{key, obj});
   if (it == symbolic_records().end() || it->second.is_range)
     return false;
@@ -312,8 +344,8 @@ __contracts_symbolic_establish_range(const void* key, const void* obj,
   v.lo = lo;
   v.has_hi = has_hi;
   v.hi = hi;
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
-  v.epoch = ++symbolic_epoch;
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
+  v.epoch = ++symbolic_shared().epoch;
   symbolic_records()[symbolic_record_key{key, obj}] = v;
 }
 
@@ -325,7 +357,7 @@ __contracts_symbolic_check_range(const void* key, const void* obj,
   symbolic_entry entry;
   if (!entry.ok)
     return false;
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
   auto it = symbolic_records().find(symbolic_record_key{key, obj});
   if (it == symbolic_records().end() || !it->second.is_range)
     return false;
@@ -356,8 +388,8 @@ __contracts_symbolic_establish_relation(const void* key, unsigned n,
   const std::size_t sizes[4] = { s0, s1, s2, s3 };
   symbolic_relation_value v{polarity, scope, {}, 0};
   std::string k = relation_key(key, n, args, sizes, &v.objs);
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
-  v.epoch = ++symbolic_epoch;
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
+  v.epoch = ++symbolic_shared().epoch;
   symbolic_relations()[std::move(k)] = std::move(v);
 }
 
@@ -375,7 +407,7 @@ __contracts_symbolic_check_relation(const void* key, unsigned n,
   const void* args[4] = { a0, a1, a2, a3 };
   const std::size_t sizes[4] = { s0, s1, s2, s3 };
   std::string k = relation_key(key, n, args, sizes, nullptr);
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
   auto it = symbolic_relations().find(k);
   return it != symbolic_relations().end() && it->second.polarity == polarity;
 }
@@ -386,7 +418,7 @@ __contracts_symbolic_end_scope(const void* scope) noexcept
   symbolic_entry entry;
   if (!entry.ok)
     return;
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
   std::erase_if(symbolic_relations(),
 		[scope](const auto& entry)
 		{ return entry.second.scope == scope; });
@@ -398,7 +430,7 @@ __contracts_symbolic_invalidate_object(const void* obj) noexcept
   symbolic_entry entry;
   if (!entry.ok)
     return;
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
   std::erase_if(symbolic_records(),
 		[obj](const auto& entry) { return entry.first.obj == obj; });
   std::erase_if(symbolic_relations(),
@@ -417,8 +449,8 @@ __contracts_symbolic_epoch() noexcept
   symbolic_entry entry;
   if (!entry.ok)
     return 0;
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
-  return symbolic_epoch;
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
+  return symbolic_shared().epoch;
 }
 
 void
@@ -430,7 +462,7 @@ __contracts_symbolic_invalidate_range_before(const void* obj,
   if (!entry.ok)
     return;
   auto first = reinterpret_cast<std::uintptr_t>(obj);
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
   std::erase_if(symbolic_records(),
 		[first, size, epoch](const auto& entry) {
 		  auto addr = reinterpret_cast<std::uintptr_t>(entry.first.obj);
@@ -456,7 +488,7 @@ __contracts_symbolic_invalidate_range(const void* obj,
   if (!entry.ok)
     return;
   auto first = reinterpret_cast<std::uintptr_t>(obj);
-  std::lock_guard<std::mutex> lock(symbolic_mutex);
+  std::lock_guard<std::mutex> lock(symbolic_shared().mutex);
   std::erase_if(symbolic_records(),
 		[first, size](const auto& entry) {
 		  auto addr = reinterpret_cast<std::uintptr_t>(entry.first.obj);
