@@ -331,6 +331,7 @@ static bool cg_call_ends_lifetimes_p (gcall *);
 static bool cg_stmt_may_clobber_p (gimple *, ao_ref *);
 static bool cg_local_escape_reaches_p (tree, gimple *);
 static void cg_exclude_range_ends (cg_range_lite *, tree, gimple *, gimple_ranger *);
+static void cg_note_escaped_route (tree, struct cg_dom_fact_state &, bool);
 static gimple *cg_consult_call;
 
 /* The objects of static storage duration the function being checked
@@ -10558,6 +10559,12 @@ struct cg_dom_fact_state
      (P4445 BUG-17), as the AST engine's m_escaped_decl_map.  On any
      path, so a union at joins.  */
   hash_set<tree> escaped;
+  /* The routes to objects -- a pointer's value, an address -- that were
+     stored to memory other than a local variable, or given to a call
+     that may end lifetimes: a later such call may end what they reach
+     through an address kept earlier, given no route itself (P4445
+     caller6).  On any path, so a union at joins.  */
+  hash_set<tree> escaped_routes;
   hash_map<cg_field_key_hash, cg_field_fact> field;
   /* Stage 4d: the GIMPLE analogue of contracts.cc's own m_field_alias_
      target -- "the tracked pointer identity this pointer/reference-
@@ -11032,6 +11039,17 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
 			 cg_dom_fact_state &state)
 {
   cg_process_field_write_1 (lhs, rhs, fun, field_object_cache, state);
+  /* A route stored anywhere but in a local variable ('g = p', 'h->p =
+     &x') is handed out (P4445 caller6), as in the AST engine.  */
+  if (rhs && POINTER_TYPE_P (TREE_TYPE (rhs)) && TREE_CODE (lhs) != SSA_NAME)
+    {
+      /* Into any part of a local variable (a contract check's argument
+	 block among them) isn't out: that variable would have to escape
+	 itself.  */
+      tree base = get_base_address (lhs);
+      if (!(base && VAR_P (base) && !is_global_var (base)))
+	cg_note_escaped_route (rhs, state, true);
+    }
   if (rhs)
     cg_relt_process_assign (lhs, rhs, state);
   else
@@ -13536,9 +13554,63 @@ static void cg_invalidate_persistent_facts_for_call_arg
    engine's oa_env::decl_escape and escaped_locals_written_through_
    memory.  */
 
+static void cg_end_route_objects (tree, cg_dom_fact_state &, int, bool);
+
+/* ROUTE, a pointer's value or an address, is handed out: stored to
+   memory other than a local variable, or given to a call that may end
+   lifetimes.  What it reaches escapes: its facts end at every later such
+   call (cg_end_escaped_facts), its being an object too.  */
+
+static void
+cg_note_escaped_route (tree route, cg_dom_fact_state &state, bool stored)
+{
+  if (!route || !POINTER_TYPE_P (TREE_TYPE (route))
+      || (TREE_CODE (route) != SSA_NAME && TREE_CODE (route) != ADDR_EXPR))
+    return;
+  tree id = cg_gimple_object_identity (route);
+  if (!id || (DECL_P (id) && is_global_var (id)))
+    return;
+  /* Given to a call, only a local's own address escapes (the value
+     facts' rule, ac798ade2fb): the object a pointer designates, given
+     to the call, has its facts ended there.  */
+  if (!stored && TREE_CODE (id) == SSA_NAME)
+    return;
+  /* Not 'this': a member function's own object is kept for its body, as
+     a call through 'this' doesn't end it.  As the AST engine's
+     decl_pointee_escape.  */
+  tree root = (TREE_CODE (route) == SSA_NAME ? cg_pointer_root (route)
+	       : NULL_TREE);
+  state.escaped.add (id);
+  /* Only a route STORED to memory makes what it reaches end at later
+     calls: one given to a call that may end lifetimes ends it there
+     itself, and only a trust after the call could renew it (P4445
+     caller6, Ville 2026-11-16).  As the AST engine's
+     decl_pointee_escape.  */
+  if (!stored
+      || (root && TREE_CODE (root) == SSA_NAME
+	  && SSA_NAME_IS_DEFAULT_DEF (root) && SSA_NAME_VAR (root)
+	  && is_this_parameter (SSA_NAME_VAR (root))))
+    return;
+  state.escaped_routes.add (route);
+}
+
 static void
 cg_end_escaped_facts (gcall *call, cg_dom_fact_state &state)
 {
+  /* The objects the pointer values handed out earlier designate may have
+     ended.  Not a local whose own address ('&x') was: an automatic
+     object isn't deleted, and what is known of its value ends below
+     already.  As the AST engine's escaped_objects_may_have_ended.  */
+  if (state.escaped_routes.elements ())
+    {
+      auto_vec<tree, 8> routes;
+      for (tree r : state.escaped_routes)
+	if (TREE_CODE (r) == SSA_NAME)
+	  routes.safe_push (r);
+      /* The object each designates: not one it may lie in.  */
+      for (tree r : routes)
+	cg_end_route_objects (r, state, 0, false);
+    }
   if (state.escaped.elements ())
     {
       for (tree id : state.escaped)
@@ -13569,16 +13641,7 @@ cg_end_escaped_facts (gcall *call, cg_dom_fact_state &state)
 	state.call_call.remove (k);
     }
   for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
-    {
-      tree arg = gimple_call_arg (call, i);
-      if (!POINTER_TYPE_P (TREE_TYPE (arg)))
-	continue;
-      tree id = cg_gimple_object_identity (arg);
-      if (id && (VAR_P (id) || TREE_CODE (id) == PARM_DECL)
-	  && !is_global_var (id) && cfun
-	  && DECL_CONTEXT (id) == cfun->decl)
-	state.escaped.add (id);
-    }
+    cg_note_escaped_route (gimple_call_arg (call, i), state, false);
 }
 
 static void
@@ -15212,6 +15275,9 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
   dst->escaped.empty ();
   for (tree t : src.escaped)
     dst->escaped.add (t);
+  dst->escaped_routes.empty ();
+  for (tree t : src.escaped_routes)
+    dst->escaped_routes.add (t);
   dst->field.empty ();
   for (auto it : src.field)
     dst->field.put (it.first, it.second);
@@ -15315,6 +15381,8 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
     dst->val_escaped.add (t);
   for (tree t : src.escaped)
     dst->escaped.add (t);
+  for (tree t : src.escaped_routes)
+    dst->escaped_routes.add (t);
 
   auto_vec<std::pair<tree, tree>> field_remove;
   /* At a join no loop runs back into (UNITE_FIELDS), a field's facts are
@@ -15464,6 +15532,7 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
       || a.val_src.elements () != b.val_src.elements ()
       || a.val_escaped.elements () != b.val_escaped.elements ()
       || a.escaped.elements () != b.escaped.elements ()
+      || a.escaped_routes.elements () != b.escaped_routes.elements ()
       || a.field.elements () != b.field.elements ()
       || a.field_alias.elements () != b.field_alias.elements ()
       || a.call.elements () != b.call.elements ()
@@ -15491,6 +15560,9 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
       return false;
   for (tree t : a.escaped)
     if (!b.escaped.contains (t))
+      return false;
+  for (tree t : a.escaped_routes)
+    if (!b.escaped_routes.contains (t))
       return false;
   for (auto it : a.val_src)
     {

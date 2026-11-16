@@ -12614,6 +12614,7 @@ public:
     n -= m_ended_member_map.elements ();
     n -= m_ended_decl_map.elements ();
     n -= m_escaped_decl_map.elements ();
+    n -= m_escaped_pointee_map.elements ();
     for (auto it : m_derived_from)
       n -= list_length (it.second);
     return n;
@@ -14095,6 +14096,7 @@ public:
     r.m_ended_member_map = m_ended_member_map;
     r.m_ended_decl_map = m_ended_decl_map;
     r.m_escaped_decl_map = m_escaped_decl_map;
+    r.m_escaped_pointee_map = m_escaped_pointee_map;
     r.m_derived_from = m_derived_from;
     return r;
   }
@@ -14137,6 +14139,7 @@ public:
     m_ended_member_map = other.m_ended_member_map;
     m_ended_decl_map = other.m_ended_decl_map;
     m_escaped_decl_map = other.m_escaped_decl_map;
+    m_escaped_pointee_map = other.m_escaped_pointee_map;
     m_derived_from = other.m_derived_from;
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
@@ -14366,6 +14369,10 @@ private:
      may write through it, or stored where this function doesn't track
      it.  Any later call that isn't conveyor may write them.  */
   oa_cow_map<tree, bool> m_escaped_decl_map;
+  /* The pointer variables (and parameters) whose value -- the address of
+     the object they designate, not their own -- has been handed out
+     (decl_pointee_escape).  */
+  oa_cow_map<tree, bool> m_escaped_pointee_map;
   /* A pointer or reference variable whose value was obtained from other
      objects -- returned by a call given a route to them, or loaded from
      their memory ('int &r = v[0]', 'int *p = v.data') -- maps to them, a
@@ -14417,6 +14424,54 @@ public:
 	    || (TREE_CODE (decl) == PARM_DECL
 		&& !TYPE_REF_P (TREE_TYPE (decl)))))
       m_escaped_decl_map.put (decl, true);
+  }
+  /* The address held by pointer variable or parameter DECL, of an
+     object no local is known to be (oa_handed_out_object), has been
+     stored to memory other than a local variable ('g = p').  A pointer
+     given to a call that isn't conveyor isn't counted: that call ends
+     the object's facts itself, and only a trust after it could renew
+     them (P4445 caller6, Ville 2026-11-16).  */
+  void decl_pointee_escape (tree decl)
+  {
+    /* Not 'this': a member function's own object is kept for its body,
+       as a call through 'this' doesn't end it.  */
+    if (decl && DECL_P (decl) && !is_this_parameter (decl)
+	&& (VAR_P (decl) || TREE_CODE (decl) == PARM_DECL)
+	&& !is_global_var (decl)
+	&& POINTER_TYPE_P (TREE_TYPE (decl))
+	&& DECL_CONTEXT (decl) == current_function_decl)
+      m_escaped_pointee_map.put (decl, true);
+  }
+  /* A call that isn't conveyor may have ended the objects designated by
+     a pointer whose value has been handed out (decl_pointee_escape),
+     through the address an earlier call kept or a store left, though
+     given no route to them itself: what is known of them ends, their
+     being objects too (P4445 caller6).  Not a local whose own address
+     escaped (decl_escape): an automatic object isn't deleted, and what
+     is known of its value ends already
+     (escaped_locals_written_through_memory).  */
+  void escaped_objects_may_have_ended ()
+  {
+    auto_vec<tree, 4> pointees;
+    for (auto it : m_escaped_pointee_map)
+      pointees.safe_push (it.first);
+    for (tree p : pointees)
+      {
+	tree id = alias_find (p);
+	invalidate (id);
+	range_invalidate (id);
+	predicate_fact_invalidate (id);
+	contract_field_range_invalidate_all (id);
+	contract_float_field_range_invalidate_all (id);
+	contract_call_range_invalidate_all (id);
+	contract_field_nz_invalidate_all (id);
+	field_alias_invalidate_all (id);
+	array_alias_invalidate_all (id);
+	field_object_predicate_invalidate_all (id);
+	field_object_address_invalidate_all (id);
+	call_relational_invalidate_receiver (id);
+	derived_end (id);
+      }
   }
   /* DECL's value was obtained from the objects in SOURCES, a TREE_LIST,
      or from none of them when SOURCES is null.  */
@@ -14566,6 +14621,9 @@ public:
     if (!m_escaped_decl_map.same_p (other.m_escaped_decl_map))
       for (auto it : other.m_escaped_decl_map)
 	m_escaped_decl_map.put (it.first, true);
+    if (!m_escaped_pointee_map.same_p (other.m_escaped_pointee_map))
+      for (auto it : other.m_escaped_pointee_map)
+	m_escaped_pointee_map.put (it.first, true);
     /* And what a value may have been obtained from, on either.  */
     if (!m_derived_from.same_p (other.m_derived_from))
       for (auto it : other.m_derived_from)
@@ -30072,11 +30130,14 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 		 kept pointer can still write a mutable member, or any member
 		 after a const_cast when the object isn't const.  */
 	      if (!callee_is_conveyor)
-		handed_out.safe_push (oa_handed_out_object
-					(call_arg,
-					 callee_parm != NULL_TREE
-					 && TYPE_REF_P (TREE_TYPE (callee_parm)),
-					 env));
+		{
+		  tree obj = oa_handed_out_object
+			       (call_arg,
+				callee_parm != NULL_TREE
+				&& TYPE_REF_P (TREE_TYPE (callee_parm)),
+				env);
+		  handed_out.safe_push (obj);
+		}
 	      /* A call given a route to an object -- a pointer or reference
 		 to it, const or not, its address, or the object a member
 		 call is made on -- may end its lifetime ('delete p', 'delete
@@ -30202,7 +30263,10 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 	 that may write a capture changes them.  */
       tree closure_obj;
       if (!oa_iile_call_p (call, &closure_obj))
-	env.escaped_locals_written_through_memory ();
+	{
+	  env.escaped_locals_written_through_memory ();
+	  env.escaped_objects_may_have_ended ();
+	}
       else if (oa_iile_body_writes_capture_p
 		 (DECL_SAVED_TREE (cp_get_callee_fndecl_nofold (call))))
 	/* Its captures by reference don't escape, but it may write them.  */
@@ -38142,7 +38206,21 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	if (POINTER_TYPE_P (TREE_TYPE (lhs))
 	    && !((VAR_P (lhs) && !TREE_STATIC (lhs) && !DECL_EXTERNAL (lhs))
 		 || TREE_CODE (lhs) == PARM_DECL))
-	  env.decl_escape (oa_handed_out_object (rhs, false, env));
+	  {
+	    tree obj = oa_handed_out_object (rhs, false, env);
+	    env.decl_escape (obj);
+	    /* A pointer's value ('g = p'), of an object no local is known
+	       to be: the object it designates (P4445 caller6) -- unless
+	       stored into a part of a local variable, which would have to
+	       escape itself, as in the GIMPLE engine.  */
+	    tree pv = oa_strip_to_relational_operand (rhs);
+	    tree base = get_base_address (lhs);
+	    if (!obj && (VAR_P (pv) || TREE_CODE (pv) == PARM_DECL)
+		&& POINTER_TYPE_P (TREE_TYPE (pv))
+		&& !(base && VAR_P (base) && !TREE_STATIC (base)
+		     && !DECL_EXTERNAL (base)))
+	      env.decl_pointee_escape (pv);
+	  }
 	if ((VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
 	    && POINTER_TYPE_P (TREE_TYPE (lhs)))
 	  {
