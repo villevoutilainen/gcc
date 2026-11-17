@@ -37,6 +37,10 @@ struct M { template <class T> consteval explicit operator template_object_info()
 struct K : A { using A::operator template_object_info; };          // { dg-error "cannot be named by a using-declarator" }
 constexpr info r0 = ^^A::operator template_object_info;           // { dg-error "cannot be named outside the declarator" }
 consteval info f (A a) { return info (a.operator template_object_info ()); }   // { dg-error "can only be used to find a template parameter object" }
+// Nor its address taken, even where an immediate function's may be: that
+// would let it be called after all.
+consteval info addr1 (Mod m) { auto p = &Mod::operator template_object_info; return info ((m.*p) ()); } // { dg-error "cannot be named outside the declarator" }
+consteval info addr2 (A a) { auto p = &A::operator template_object_info; return info ((a.*p) ()); }       // { dg-error "cannot be named outside the declarator" }
 // members_of lists it: a special member function, explicit.
 consteval info tafn (info c) {
   for (info m : std::meta::members_of (c, std::meta::access_context::unchecked ()))

@@ -7762,6 +7762,28 @@ cp_build_addr_expr_1 (tree arg, bool strict_lvalue, tsubst_flags_t complain)
 	  return error_mark_node;
 	}
     }
+  /* A template-argument function spelled as a conversion function
+     (-freflection-structural-newmetainfo-conversion) can't be named
+     outside its declarator, as operator template can't: nor its address
+     taken, which would let it be called after all.  */
+  if (flag_reflection_structural_newmetainfo_conversion)
+    {
+      tree a = tree_strip_any_location_wrapper (arg);
+      if (TREE_CODE (a) == OFFSET_REF)
+	a = TREE_OPERAND (a, 1);
+      tree f = MAYBE_BASELINK_FUNCTIONS (a);
+      if (TREE_CODE (f) == OVERLOAD && !OVL_CHAIN (f))
+	f = OVL_FUNCTION (f);
+      f = STRIP_TEMPLATE (f);
+      if (TREE_CODE (f) == FUNCTION_DECL && template_arg_fn_named_p (f))
+	{
+	  if (complain & tf_error)
+	    error_at (loc, "%<operator std::meta::template_object_info%> "
+		      "cannot be named outside the declarator of its "
+		      "declaration");
+	  return error_mark_node;
+	}
+    }
 
   if (TREE_CODE (arg) == COMPONENT_REF && type_unknown_p (arg)
       && !really_overloaded_fn (arg))
