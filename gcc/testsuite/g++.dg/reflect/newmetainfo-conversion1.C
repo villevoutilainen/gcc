@@ -64,7 +64,7 @@ static_assert (std::meta::is_user_provided (tafn (^^Mod)));
 static_assert (!std::meta::is_defaulted (tafn (^^Mod)));
 // Nor used otherwise: it only finds a template parameter object.
 consteval info c1 () { return info (static_cast<template_object_info> (Mod{10})); }  // { dg-error "can only be used to find a template parameter object" }
-consteval info c2 () { template_object_info t (A{1}); return t; }                   // { dg-error "can only be used to find a template parameter object" }
+consteval void c2 () { template_object_info t (A{1}); (void) t; }                  // { dg-error "can only be used to find a template parameter object" }
 static_assert (std::is_same_v<T<Mod{3}>, T<Mod{10}>>);
 // A user-declared one must be explicit too.
 struct E1 { int i; consteval explicit operator template_object_info () const = default; };
@@ -122,4 +122,10 @@ Y<info *> y7;
 
 // A reflection doesn't convert implicitly.
 consteval void g () { template_object_info t = ^^A; }               // { dg-error "conversion from" }
-consteval void h () { template_object_info t (^^A); (void) info (t); } // OK
+consteval void h () { template_object_info t (^^A); (void) t; }      // OK
+// Only the compiler takes the reflection back out: user code can only
+// compare two of them.
+consteval info h2 () { template_object_info t (^^A); return t; }      // { dg-error "cannot convert|could not convert" }
+consteval info h3 () { template_object_info t (^^A); return info (t); } // { dg-error "no matching|invalid cast|cannot convert" }
+static_assert (template_object_info (^^A) == template_object_info (^^A));
+static_assert (template_object_info (^^A) != template_object_info (^^int));
