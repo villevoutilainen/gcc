@@ -3969,10 +3969,11 @@ consteval-only type that holds a reflection, constructible from a
 @code{std::meta::info} only explicitly, and convertible back to it; it is
 not a structural type.  The conversion function must be declared
 @code{explicit}.  A user-provided one gives a @code{template_object_info}
-holding the reflection of the template parameter object.  It can only be
-used to find the template parameter object: it cannot be called, named by
-a using-declarator, or reflected by name, or used by a cast or an
-initialization.  No conversion to any other type is taken for it.  This
+holding the reflection of the template parameter object.  Unlike
+@code{operator template}, it can be called, named by a using-declarator,
+reflected by name, and have its address taken; @code{template_object_info}
+cannot be a template argument, nor can any type built from it.  No
+conversion to any other type is taken for it.  This
 option takes precedence over
 @option{-freflection-structural-metainfo-conversion}, and
 @option{-freflection-operator-template} over it; it defines the macro
