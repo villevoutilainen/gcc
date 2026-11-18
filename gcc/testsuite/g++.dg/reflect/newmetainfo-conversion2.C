@@ -36,4 +36,4 @@ class BB {};
 struct S : BB { private: class I; public: int m; };
 static_assert (members_of (^^S, access_context::current ()).size () == 8);
 static_assert (members_of (^^S, access_context::unchecked ()).size () == 9);
-struct K : A { using A::operator template_object_info; };   // { dg-error "cannot be named by a using-declarator" }
+struct K : A { using A::operator template_object_info; };   // OK

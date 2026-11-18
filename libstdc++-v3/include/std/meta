@@ -92,13 +92,15 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
     // () const', gives -- a reflection of the class's template parameter
     // object for a value.  Consteval-only, as info is.  Constructible from
     // a reflection, but not implicitly, so no conversion to info is taken
-    // for one.  Only the compiler takes the reflection back out
-    // (invoke_template_arg_fn): there is no conversion back, and two of
-    // them can only be compared.
+    // for one; and back, explicitly, so that a class whose template-
+    // argument function builds on its members' can look at what theirs
+    // give.  Two of them can be compared.
     struct template_object_info
     {
       consteval explicit
       template_object_info(info __r) noexcept : _M_r(__r) { }
+
+      consteval explicit operator info() const noexcept { return _M_r; }
 
       consteval friend bool
       operator==(template_object_info, template_object_info) = default;

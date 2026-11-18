@@ -6956,7 +6956,11 @@ mark_used (tree decl, tsubst_flags_t complain /* = tf_warning_or_error */)
      ([class.reflect.constant]).  */
   if (TREE_CODE (decl) == FUNCTION_DECL && DECL_DEFAULTED_FN (decl)
       && !DECL_DELETED_FN (decl) && reflect_constant_fn_p (decl)
-      && !flag_reflection_structural_metainfo_conversion)
+      && !flag_reflection_structural_metainfo_conversion
+      /* Its conversion-function spelling can be called: constant
+	 evaluation gives a reflection of the template parameter object
+	 (cxx_eval_call_expression).  */
+      && !flag_reflection_structural_newmetainfo_conversion)
     {
       if (complain & tf_error)
 	{

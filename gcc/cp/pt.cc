@@ -7897,14 +7897,9 @@ user_template_arg_fn (tree type)
    object argument, without regard to access control
    ([class.template.arg]/7), and return the reflection it gives.  */
 
-/* Whether invoke_template_arg_fn is calling a template-argument function,
-   the only use of one spelled as a conversion function.  */
-bool invoking_template_arg_fn;
-
 static tree
 invoke_template_arg_fn (tree type, tree fn, tree obj, tsubst_flags_t complain)
 {
-  auto invoking = make_temp_override (invoking_template_arg_fn, true);
   tree binfo = TYPE_BINFO (TYPE_MAIN_VARIANT (type));
   tree fns = build_baselink (binfo, binfo, fn, NULL_TREE);
   push_deferring_access_checks (dk_no_check);
@@ -8123,6 +8118,36 @@ normalize_metainfo_conversion_value (tree type, tree value,
     }
   *canon = cvalue;
   return key;
+}
+
+/* The template parameter object for VALUE, a constant of class TYPE, as
+   a template argument of TYPE gets ([temp.arg.nontype]): what TYPE's
+   user-provided template-argument function gives, or VALUE with each
+   subobject of a class that has one normalized to a copy of its own, or
+   VALUE itself.  What a call to TYPE's defaulted template-argument
+   function gives a reflection of
+   (-freflection-structural-newmetainfo-conversion).  */
+
+tree
+class_template_parm_object (tree type, tree value, tsubst_flags_t complain)
+{
+  tree v = value;
+  if (TREE_CODE (v) == TARGET_EXPR)
+    v = TARGET_EXPR_INITIAL (v);
+  if (!TREE_CONSTANT (v) || !reduced_constant_expression_p (v))
+    return error_mark_node;
+  v = unshare_expr (v);
+  if (metainfo_conversion_structural_p (type))
+    return template_arg_fn_object (type, v, complain);
+  if (TEMPLATE_ARG_FN_MODE_P () && has_metainfo_conversion_subobject_p (type))
+    {
+      tree canon;
+      if (normalize_metainfo_conversion_value (type, v, complain, &canon)
+	  == error_mark_node)
+	return error_mark_node;
+      return create_template_parm_object (canon, complain);
+    }
+  return create_template_parm_object (v, complain);
 }
 
 /* Return a VAR_DECL for the template parameter object corresponding to

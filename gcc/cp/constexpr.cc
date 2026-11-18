@@ -4939,6 +4939,42 @@ cxx_eval_call_expression (const constexpr_ctx *ctx, tree t,
   if (DECL_THUNK_P (fun))
     return cxx_eval_thunk_call (ctx, t, fun, lval, non_constant_p, overflow_p,
 				jump_target);
+  /* A defaulted template-argument function spelled as a conversion
+     function (-freflection-structural-newmetainfo-conversion) has no body:
+     it gives a reflection of its object's template parameter object, the
+     one a template argument of its class gets.  An aggregating class's own
+     can call its members'.  */
+  if (flag_reflection_structural_newmetainfo_conversion
+      && DECL_DEFAULTED_FN (fun) && !DECL_DELETED_FN (fun)
+      && template_arg_fn_named_p (fun))
+    {
+      tree arg = get_nth_callarg (t, 0);
+      tree obj = cxx_eval_constant_expression (ctx,
+					       cp_build_fold_indirect_ref (arg),
+					       vc_prvalue, non_constant_p,
+					       overflow_p, jump_target);
+      if (*non_constant_p || *jump_target)
+	return t;
+      tree type = DECL_CONTEXT (fun);
+      tree o = class_template_parm_object (type, obj,
+					   ctx->quiet ? tf_none
+					   : tf_warning_or_error);
+      if (o == error_mark_node)
+	{
+	  *non_constant_p = true;
+	  return t;
+	}
+      tree rtype = TREE_TYPE (t);
+      tree field = next_aggregate_field (TYPE_FIELDS (rtype));
+      if (!field)
+	{
+	  *non_constant_p = true;
+	  return t;
+	}
+      return build_constructor_single (rtype, field,
+				       reflect_object_reflection
+					 (cp_expr_loc_or_input_loc (t), o));
+    }
   if (metafunction_p (fun))
     {
       /* To be able to evaluate a metafunction, we may have to instantiate

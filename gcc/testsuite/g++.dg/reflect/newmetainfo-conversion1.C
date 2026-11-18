@@ -32,15 +32,19 @@ struct J { consteval explicit operator template_object_info() const; };
 consteval J::operator template_object_info() const = default;               // { dg-error "can only be defaulted in its class" }
 struct M { template <class T> consteval explicit operator template_object_info() const; };  // { dg-error "cannot be a function template" }
 
-// Like operator template, it can't be named outside its declarator: not
-// called, using-declared or reflected by name.
-struct K : A { using A::operator template_object_info; };          // { dg-error "cannot be named by a using-declarator" }
-constexpr info r0 = ^^A::operator template_object_info;           // { dg-error "cannot be named outside the declarator" }
-consteval info f (A a) { return info (a.operator template_object_info ()); }   // { dg-error "can only be used to find a template parameter object" }
-// Nor its address taken, even where an immediate function's may be: that
-// would let it be called after all.
-consteval info addr1 (Mod m) { auto p = &Mod::operator template_object_info; return info ((m.*p) ()); } // { dg-error "cannot be named outside the declarator" }
-consteval info addr2 (A a) { auto p = &A::operator template_object_info; return info ((a.*p) ()); }       // { dg-error "cannot be named outside the declarator" }
+// Unlike operator template, it can be named, called, using-declared and
+// reflected: what it gives is consteval-only, and only finds a template
+// parameter object (newmetainfo-conversion9.C, an aggregating class
+// building on its members').
+struct K : A { using A::operator template_object_info; };          // OK
+constexpr info r0 = ^^A::operator template_object_info;           // OK
+consteval info f (A a) { return info (a.operator template_object_info ()); }   // OK
+consteval info addr1 (Mod m) { auto p = &Mod::operator template_object_info; return info ((m.*p) ()); } // OK
+consteval info addr2 (A a) { auto p = &A::operator template_object_info; return info ((a.*p) ()); }       // OK
+// A defaulted or implicit one gives its template parameter object.
+static_assert (extract<const A &> (f (A{4})).i == 4);
+static_assert (f (A{4}) == addr2 (A{4}));
+static_assert (addr1 (Mod{10}) == addr1 (Mod{3}));
 // members_of lists it: a special member function, explicit.
 consteval info tafn (info c) {
   for (info m : std::meta::members_of (c, std::meta::access_context::unchecked ()))
@@ -62,9 +66,10 @@ static_assert (std::meta::is_special_member_function (tafn (^^Mod)));
 static_assert (std::meta::is_explicit (tafn (^^Mod)));
 static_assert (std::meta::is_user_provided (tafn (^^Mod)));
 static_assert (!std::meta::is_defaulted (tafn (^^Mod)));
-// Nor used otherwise: it only finds a template parameter object.
-consteval info c1 () { return info (static_cast<template_object_info> (Mod{10})); }  // { dg-error "can only be used to find a template parameter object" }
-consteval void c2 () { template_object_info t (A{1}); (void) t; }                  // { dg-error "can only be used to find a template parameter object" }
+// Converted explicitly, as a cast or an initialization.
+consteval info c1 () { return info (static_cast<template_object_info> (Mod{10})); }  // OK
+consteval info c2 () { template_object_info t (A{1}); return info (t); }            // OK
+static_assert (c1 () == addr1 (Mod{3}) && c2 () == f (A{1}));
 static_assert (std::is_same_v<T<Mod{3}>, T<Mod{10}>>);
 // A user-declared one must be explicit too.
 struct E1 { int i; consteval explicit operator template_object_info () const = default; };
@@ -123,9 +128,9 @@ Y<info *> y7;
 // A reflection doesn't convert implicitly.
 consteval void g () { template_object_info t = ^^A; }               // { dg-error "conversion from" }
 consteval void h () { template_object_info t (^^A); (void) t; }      // OK
-// Only the compiler takes the reflection back out: user code can only
-// compare two of them.
+// Back to the reflection it holds explicitly, not implicitly.
 consteval info h2 () { template_object_info t (^^A); return t; }      // { dg-error "cannot convert|could not convert" }
-consteval info h3 () { template_object_info t (^^A); return info (t); } // { dg-error "no matching|invalid cast|cannot convert" }
+consteval info h3 () { template_object_info t (^^A); return info (t); } // OK
+static_assert (h3 () == ^^A);
 static_assert (template_object_info (^^A) == template_object_info (^^A));
 static_assert (template_object_info (^^A) != template_object_info (^^int));

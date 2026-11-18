@@ -151,24 +151,6 @@ get_reflection (location_t loc, tree t, reflect_kind kind/*=REFLECT_UNDEF*/)
   STRIP_ANY_LOCATION_WRAPPER (t);
   t = STRIP_REFERENCE_REF (t);
 
-  /* A template-argument function spelled as a conversion function
-     (-freflection-structural-newmetainfo-conversion) can't be reflected by
-     name, as operator template can't ([class.template.arg]); members_of
-     gives it.  */
-  if (flag_reflection_structural_newmetainfo_conversion)
-    {
-      tree f = MAYBE_BASELINK_FUNCTIONS (t);
-      if (TREE_CODE (f) == OVERLOAD && !OVL_CHAIN (f))
-	f = OVL_FUNCTION (f);
-      f = STRIP_TEMPLATE (f);
-      if (TREE_CODE (f) == FUNCTION_DECL && template_arg_fn_named_p (f))
-	{
-	  error_at (loc, "%<operator std::meta::template_object_info%> "
-		    "cannot be named outside the declarator of its "
-		    "declaration");
-	  return error_mark_node;
-	}
-    }
 
   /* Constant template parameters and pack-index-expressions cannot
      appear as operands of the reflection operator.  */
@@ -4202,6 +4184,15 @@ eval_reflect_constant (location_t loc, const constexpr_ctx *ctx, tree type,
   return get_reflection_raw (loc, expr, get_reflection_kind (expr));
 }
 
+/* A reflection of OBJ, an object with static storage duration, as
+   std::meta::reflect_object gives.  */
+
+tree
+reflect_object_reflection (location_t loc, tree obj)
+{
+  return get_reflection_raw (loc, obj, REFLECT_OBJECT);
+}
+
 /* Process std::meta::reflect_object.
    Mandates: T is an object type.
    Returns: A reflection of the object designated by expr.
@@ -7931,12 +7922,10 @@ extract_member_or_function (location_t loc, const constexpr_ctx *ctx,
 {
   r = MAYBE_BASELINK_FUNCTIONS (r);
   if (!can_extract_member_or_function_p (T, r, kind)
-      /* A template-argument function can't be named
-	 ([meta.reflection.extract]/7), in either spelling.  */
+      /* operator template can't be named ([meta.reflection.extract]/7);
+	 its conversion-function spelling can.  */
       || (TREE_CODE (r) == FUNCTION_DECL
-	  && (DECL_NAME (r) == op_template_identifier
-	      || (flag_reflection_structural_newmetainfo_conversion
-		  && template_arg_fn_named_p (r)))))
+	  && DECL_NAME (r) == op_template_identifier))
     return throw_exception (loc, ctx, "value cannot be extracted", fun,
 			    non_constant_p, jump_target);
 
