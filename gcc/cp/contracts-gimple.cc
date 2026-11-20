@@ -10565,6 +10565,17 @@ struct cg_dom_fact_state
      through an address kept earlier, given no route itself (P4445
      caller6).  On any path, so a union at joins.  */
   hash_set<tree> escaped_routes;
+  /* A variable in memory holding routes copied out of other objects ('b
+     = a', of a type reaching memory: contract_type_reaches_memory_p)
+     maps to their identities, a TREE_LIST: a route to it, or a copy of
+     it, reaches what their facts as objects may be about.  A union at
+     joins.  As the AST engine's m_reach_from.  */
+  hash_map<tree, tree> reach_from;
+  /* The objects whose routes were handed out: given, or a copy, to a
+     call that may end lifetimes, or stored to memory other than a local
+     variable.  What they reach may change at any later such call
+     (cg_reach_end).  On any path, so a union at joins.  */
+  hash_set<tree> reach_escaped;
   hash_map<cg_field_key_hash, cg_field_fact> field;
   /* Stage 4d: the GIMPLE analogue of contracts.cc's own m_field_alias_
      target -- "the tracked pointer identity this pointer/reference-
@@ -10965,6 +10976,242 @@ cg_field_object_predicate_invalidate_all (tree base,
       cg_pred_remove (state, key);
 }
 
+/* Add to *LIST the identities of the objects whose routes the value of E
+   may carry, as the AST engine's oa_reach_sources: an aggregate variable
+   of a type reaching memory (contract_type_reaches_memory_p) itself, the
+   object a pointer to such a class designates, where a variable's routes
+   were copied from (cg_dom_fact_state::reach_from), and, following an
+   SSA name's definition, those of a member it was loaded from, a value
+   it converts or offsets, a PHI's arguments, or a call's (what a call
+   is given may come back in its result).  */
+
+static void
+cg_reach_sources_1 (tree e, cg_dom_fact_state &state, tree *list,
+		    hash_set<tree> &visited, int depth)
+{
+  if (!e || depth > 16)
+    return;
+  auto add = [&] (tree d)
+    {
+      if (d && !value_member (d, *list))
+	*list = tree_cons (NULL_TREE, d, *list);
+    };
+  switch (TREE_CODE (e))
+    {
+    case SSA_NAME:
+      {
+	if (visited.add (e))
+	  return;
+	tree t = TREE_TYPE (e);
+	if (POINTER_TYPE_P (t) && CLASS_TYPE_P (TREE_TYPE (t))
+	    && contract_type_reaches_memory_p (TREE_TYPE (t)))
+	  add (cg_gimple_object_identity (e));
+	if (SSA_NAME_IS_DEFAULT_DEF (e))
+	  return;
+	gimple *def = SSA_NAME_DEF_STMT (e);
+	if (is_gimple_assign (def))
+	  {
+	    if (gimple_assign_single_p (def) || gimple_assign_cast_p (def)
+		|| gimple_assign_rhs_code (def) == POINTER_PLUS_EXPR)
+	      cg_reach_sources_1 (gimple_assign_rhs1 (def), state, list,
+				  visited, depth + 1);
+	  }
+	else if (gphi *phi = dyn_cast<gphi *> (def))
+	  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	    cg_reach_sources_1 (gimple_phi_arg_def (phi, i), state, list,
+				visited, depth + 1);
+	else if (gcall *c = dyn_cast<gcall *> (def))
+	  for (unsigned i = 0; i < gimple_call_num_args (c); ++i)
+	    cg_reach_sources_1 (gimple_call_arg (c, i), state, list, visited,
+				depth + 1);
+	return;
+      }
+    case VAR_DECL:
+    case PARM_DECL:
+      if (CLASS_TYPE_P (TREE_TYPE (e))
+	  && contract_type_reaches_memory_p (TREE_TYPE (e)))
+	add (e);
+      if (const tree *from = state.reach_from.get (e))
+	for (tree l = *from; l; l = TREE_CHAIN (l))
+	  add (TREE_VALUE (l));
+      return;
+    case COMPONENT_REF:
+      /* A member that holds routes: those of the object holding it.  */
+      if (contract_type_reaches_memory_p (TREE_TYPE (e)))
+	cg_reach_sources_1 (TREE_OPERAND (e, 0), state, list, visited,
+			    depth + 1);
+      return;
+    case ADDR_EXPR:
+    case MEM_REF:
+    case ARRAY_REF:
+    case VIEW_CONVERT_EXPR:
+      cg_reach_sources_1 (TREE_OPERAND (e, 0), state, list, visited,
+			  depth + 1);
+      return;
+    default:
+      return;
+    }
+}
+
+static tree
+cg_reach_sources (tree e, cg_dom_fact_state &state)
+{
+  tree list = NULL_TREE;
+  hash_set<tree> visited;
+  cg_reach_sources_1 (e, state, &list, visited, 0);
+  return list;
+}
+
+/* What the routes of the object identity ID reach may have changed: its
+   facts as an object end -- its predicates, its members' and the
+   relations it takes part in as an object; not those of its value
+   (OA_RELATION_VALUE), which equal values have.  As the AST engine's
+   oa_env::reach_end.  */
+
+static void
+cg_reach_end (tree id, cg_field_object_cache &cache, cg_dom_fact_state &state)
+{
+  state.pred.remove (id);
+  if (state.relt.elements ())
+    {
+      auto_vec<tree, 8> keys;
+      for (auto it : state.relt)
+	for (unsigned i = 0; i < it.second.n; ++i)
+	  if (it.second.ids[i] == id
+	      && oa_relation_arg_kind_of (it.second.pred_fn, i)
+		 != OA_RELATION_VALUE)
+	    {
+	      keys.safe_push (it.first);
+	      break;
+	    }
+      for (tree k : keys)
+	state.relt.remove (k);
+    }
+  cg_field_object_predicate_invalidate_all (id, cache, state);
+}
+
+/* The local variable LHS's routes, wholly (WHOLE) or partly, now come
+   from the objects in SRC: as the AST engine's oa_reach_note_store.  A
+   part of anything else holding them hands them out.  */
+
+static void
+cg_reach_copy_to (tree lhs, tree src, cg_dom_fact_state &state)
+{
+  if (!src)
+    return;
+  tree base = get_base_address (lhs);
+  if (base && TREE_CODE (base) == MEM_REF
+      && TREE_CODE (TREE_OPERAND (base, 0)) == ADDR_EXPR)
+    base = get_base_address (TREE_OPERAND (TREE_OPERAND (base, 0), 0));
+  if (base && (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+      && !is_global_var (base))
+    {
+      const tree *mine = state.reach_from.get (base);
+      tree merged = base == lhs || !mine ? NULL_TREE : *mine;
+      for (tree l = src; l; l = TREE_CHAIN (l))
+	if (TREE_VALUE (l) != base && !value_member (TREE_VALUE (l), merged))
+	  merged = tree_cons (NULL_TREE, TREE_VALUE (l), merged);
+      if (merged)
+	state.reach_from.put (base, merged);
+      else
+	state.reach_from.remove (base);
+    }
+  else
+    for (tree l = src; l; l = TREE_CHAIN (l))
+      state.reach_escaped.add (TREE_VALUE (l));
+}
+
+/* A store of RHS (NULL_TREE: a call's result, cg_reach_note_call) to
+   LHS: through a route ('a.p->x = 1'), what the objects it came from
+   reach changes; and a copy of routes is where LHS's come from.  */
+
+static void
+cg_reach_note_store (tree lhs, tree rhs, cg_field_object_cache &cache,
+		     cg_dom_fact_state &state)
+{
+  if (TREE_CODE (lhs) == SSA_NAME)
+    return;
+  tree base = get_base_address (lhs);
+  if (base && TREE_CODE (base) == MEM_REF
+      && TREE_CODE (TREE_OPERAND (base, 0)) != ADDR_EXPR)
+    for (tree l = cg_reach_sources (TREE_OPERAND (base, 0), state); l;
+	 l = TREE_CHAIN (l))
+      cg_reach_end (TREE_VALUE (l), cache, state);
+  if (rhs && contract_type_reaches_memory_p (TREE_TYPE (lhs)))
+    cg_reach_copy_to (lhs, cg_reach_sources (rhs, state), state);
+}
+
+static tree cg_contract_check_call_p (gcall *, tree *, tree *, tree *);
+
+/* CALL is given routes: what the objects they were copied out of reach
+   may change, as the AST engine's oa_reach_note_call.  A callee that may
+   end lifetimes may change it through any route, a copy too, and keep it
+   for a later such call; a conveyor one only through a route to
+   non-const.  A symbolic callee is never run, nor is a contract's check
+   anything but a read.  */
+
+static void
+cg_reach_note_call (gcall *call, cg_field_object_cache &cache,
+		    cg_dom_fact_state &state)
+{
+  if (gimple_call_internal_p (call))
+    return;
+  tree fndecl = gimple_call_fndecl (call);
+  if (fndecl && DECL_DECLARED_SYMBOLIC_P (fndecl))
+    return;
+  tree sv, cd, dc;
+  if (cg_contract_check_call_p (call, &sv, &cd, &dc))
+    return;
+  bool ends = cg_call_ends_lifetimes_p (call);
+  if (ends && state.reach_escaped.elements ())
+    {
+      auto_vec<tree, 8> objs;
+      for (tree t : state.reach_escaped)
+	objs.safe_push (t);
+      for (tree t : objs)
+	cg_reach_end (t, cache, state);
+    }
+  bool ctor = fndecl && DECL_CONSTRUCTOR_P (fndecl);
+  tree parm_types = (gimple_call_fntype (call)
+		     ? TYPE_ARG_TYPES (gimple_call_fntype (call)) : NULL_TREE);
+  auto_vec<tree, 4> escapes;
+  tree given = NULL_TREE;
+  for (unsigned i = 0; i < gimple_call_num_args (call);
+       ++i, parm_types = parm_types ? TREE_CHAIN (parm_types) : NULL_TREE)
+    {
+      /* A constructor's own object is a new one.  */
+      if (i == 0 && ctor)
+	continue;
+      tree arg = gimple_call_arg (call, i);
+      tree type = (parm_types && TREE_VALUE (parm_types) != void_type_node
+		   ? TREE_VALUE (parm_types) : TREE_TYPE (arg));
+      tree src = cg_reach_sources (arg, state);
+      for (tree l = src; l; l = TREE_CHAIN (l))
+	if (!value_member (TREE_VALUE (l), given))
+	  given = tree_cons (NULL_TREE, TREE_VALUE (l), given);
+      if (!ends
+	  && !(INDIRECT_TYPE_P (type) && !TYPE_READONLY (TREE_TYPE (type))))
+	continue;
+      for (tree l = src; l; l = TREE_CHAIN (l))
+	{
+	  cg_reach_end (TREE_VALUE (l), cache, state);
+	  if (ends)
+	    escapes.safe_push (TREE_VALUE (l));
+	}
+    }
+  for (tree t : escapes)
+    state.reach_escaped.add (t);
+  /* What it is given may come back in what it constructs or returns.  */
+  if (ctor && gimple_call_num_args (call)
+      && TREE_CODE (gimple_call_arg (call, 0)) == ADDR_EXPR)
+    cg_reach_copy_to (TREE_OPERAND (gimple_call_arg (call, 0), 0), given,
+		      state);
+  tree lhs = gimple_call_lhs (call);
+  if (lhs && TREE_CODE (lhs) != SSA_NAME
+      && contract_type_reaches_memory_p (TREE_TYPE (lhs)))
+    cg_reach_copy_to (lhs, given, state);
+}
+
 /* The key under which cg_dom_fact_state::field holds the facts about
    the value of scalar DECL itself, for a scalar in memory.  */
 
@@ -11050,6 +11297,7 @@ cg_process_field_write (tree lhs, tree rhs, function *fun,
       if (!(base && VAR_P (base) && !is_global_var (base)))
 	cg_note_escaped_route (rhs, state, true);
     }
+  cg_reach_note_store (lhs, rhs, field_object_cache, state);
   if (rhs)
     cg_relt_process_assign (lhs, rhs, state);
   else
@@ -13652,6 +13900,7 @@ cg_invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
   tree call_callee = gimple_call_fndecl (call);
   if (call_callee && DECL_CONV_FN_P (call_callee))
     return;
+  cg_reach_note_call (call, field_object_cache, state);
   /* Any call may change what a reference refers to through an alias --
      but not a contract's check, whose condition changes nothing.  */
   {
@@ -15278,6 +15527,12 @@ cg_dom_fact_state_assign (cg_dom_fact_state *dst, const cg_dom_fact_state &src)
   dst->escaped_routes.empty ();
   for (tree t : src.escaped_routes)
     dst->escaped_routes.add (t);
+  dst->reach_from.empty ();
+  for (auto it : src.reach_from)
+    dst->reach_from.put (it.first, it.second);
+  dst->reach_escaped.empty ();
+  for (tree t : src.reach_escaped)
+    dst->reach_escaped.add (t);
   dst->field.empty ();
   for (auto it : src.field)
     dst->field.put (it.first, it.second);
@@ -15383,6 +15638,18 @@ cg_dom_fact_state_merge (cg_dom_fact_state *dst, cg_dom_fact_state &src,
     dst->escaped.add (t);
   for (tree t : src.escaped_routes)
     dst->escaped_routes.add (t);
+  /* Where a variable's routes may have come from, on either path.  */
+  for (auto it : src.reach_from)
+    {
+      const tree *mine = dst->reach_from.get (it.first);
+      tree merged = mine ? *mine : NULL_TREE;
+      for (tree l = it.second; l; l = TREE_CHAIN (l))
+	if (!value_member (TREE_VALUE (l), merged))
+	  merged = tree_cons (NULL_TREE, TREE_VALUE (l), merged);
+      dst->reach_from.put (it.first, merged);
+    }
+  for (tree t : src.reach_escaped)
+    dst->reach_escaped.add (t);
 
   auto_vec<std::pair<tree, tree>> field_remove;
   /* At a join no loop runs back into (UNITE_FIELDS), a field's facts are
@@ -15533,6 +15800,8 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
       || a.val_escaped.elements () != b.val_escaped.elements ()
       || a.escaped.elements () != b.escaped.elements ()
       || a.escaped_routes.elements () != b.escaped_routes.elements ()
+      || a.reach_from.elements () != b.reach_from.elements ()
+      || a.reach_escaped.elements () != b.reach_escaped.elements ()
       || a.field.elements () != b.field.elements ()
       || a.field_alias.elements () != b.field_alias.elements ()
       || a.call.elements () != b.call.elements ()
@@ -15564,6 +15833,18 @@ cg_dom_fact_state_equal (cg_dom_fact_state &a, cg_dom_fact_state &b)
   for (tree t : a.escaped_routes)
     if (!b.escaped_routes.contains (t))
       return false;
+  for (tree t : a.reach_escaped)
+    if (!b.reach_escaped.contains (t))
+      return false;
+  for (auto it : a.reach_from)
+    {
+      const tree *ov = b.reach_from.get (it.first);
+      if (!ov || list_length (*ov) != list_length (it.second))
+	return false;
+      for (tree l = it.second; l; l = TREE_CHAIN (l))
+	if (!value_member (TREE_VALUE (l), *ov))
+	  return false;
+    }
   for (auto it : a.val_src)
     {
       const tree *ov = b.val_src.get (it.first);

@@ -12617,6 +12617,9 @@ public:
     n -= m_escaped_pointee_map.elements ();
     for (auto it : m_derived_from)
       n -= list_length (it.second);
+    for (auto it : m_reach_from)
+      n -= list_length (it.second);
+    n -= m_reach_escaped_map.elements ();
     return n;
   }
   void invalidate_all_object_state ()
@@ -14098,6 +14101,8 @@ public:
     r.m_escaped_decl_map = m_escaped_decl_map;
     r.m_escaped_pointee_map = m_escaped_pointee_map;
     r.m_derived_from = m_derived_from;
+    r.m_reach_from = m_reach_from;
+    r.m_reach_escaped_map = m_reach_escaped_map;
     return r;
   }
   /* Replace *this's contents with a copy of OTHER's (hash_map itself
@@ -14141,6 +14146,8 @@ public:
     m_escaped_decl_map = other.m_escaped_decl_map;
     m_escaped_pointee_map = other.m_escaped_pointee_map;
     m_derived_from = other.m_derived_from;
+    m_reach_from = other.m_reach_from;
+    m_reach_escaped_map = other.m_reach_escaped_map;
   }
   /* Merge OTHER into *this in place: a decl remains provable only if
      provable in both (the if/else and loop-header "every incoming
@@ -14379,6 +14386,16 @@ private:
      TREE_LIST: the object it designates may be one they own, which a
      call that may end them may end too (P4445 caller9).  */
   oa_cow_map<tree, tree> m_derived_from;
+  /* A variable holding routes copied out of other objects ('H b = a',
+     'Impl *q = a.p', of a type reaching memory: contract_type_reaches_
+     memory_p) maps to them, a TREE_LIST: a route to the variable, or a
+     copy of its value, reaches what their facts may be about.  */
+  oa_cow_map<tree, tree> m_reach_from;
+  /* The objects whose routes have been handed out: given, or a copy of
+     them, to a call that isn't conveyor, or stored where this function
+     doesn't track them.  Any later call that isn't conveyor may change
+     what they reach (reach_end).  */
+  oa_cow_map<tree, bool> m_reach_escaped_map;
   /* What is known of KEY and its members holds again: a fact on it was
      established (a trust).  */
   void member_restore (tree key, int depth = 0)
@@ -14486,6 +14503,60 @@ public:
       m_derived_from.put (decl, sources);
     else if (m_derived_from.elements ())
       m_derived_from.remove (decl);
+  }
+  /* The objects DECL's routes were copied out of (m_reach_from).  */
+  tree reach_from_get (tree decl)
+  {
+    const tree *t = m_reach_from.get (decl);
+    return t ? *t : NULL_TREE;
+  }
+  void reach_from_set (tree decl, tree sources)
+  {
+    if (sources)
+      m_reach_from.put (decl, sources);
+    else if (m_reach_from.elements ())
+      m_reach_from.remove (decl);
+  }
+  /* OBJ's routes have been handed out.  */
+  void reach_escape (tree obj)
+  {
+    if (obj && DECL_P (obj))
+      m_reach_escaped_map.put (obj, true);
+  }
+  /* What OBJ's routes reach may have changed: its facts as an object end
+     -- its predicates, those of its members and the relations it takes
+     part in as an object.  Not those of its value (a by-value predicate,
+     OA_RELATION_VALUE): equal values have them.  */
+  void reach_end (tree obj)
+  {
+    if (m_predicate_fact_map.elements ())
+      m_predicate_fact_map.remove (obj);
+    if (m_relation_map.elements ())
+      {
+	auto_vec<tree> drop;
+	for (auto it : m_relation_map)
+	  for (unsigned i = 0; i < it.second.n; ++i)
+	    if (it.second.args[i] == obj
+		&& oa_relation_arg_kind_of (it.second.pred_fn, i)
+		   != OA_RELATION_VALUE)
+	      {
+		drop.safe_push (it.first);
+		break;
+	      }
+	for (tree k : drop)
+	  m_relation_map.remove (k);
+      }
+    field_object_predicate_invalidate_all (obj);
+  }
+  /* A call that isn't conveyor may change what the objects whose routes
+     have been handed out reach.  */
+  void reach_escaped_end ()
+  {
+    auto_vec<tree, 4> objs;
+    for (auto it : m_reach_escaped_map)
+      objs.safe_push (it.first);
+    for (tree o : objs)
+      reach_end (o);
   }
   /* OBJECT may have ended: so may every object whose address was
      obtained from it, transitively, and what is known of the pointers
@@ -14635,6 +14706,21 @@ public:
 	      merged = tree_cons (NULL_TREE, TREE_VALUE (l), merged);
 	  m_derived_from.put (it.first, merged);
 	}
+    /* And where a variable's routes may have come from, and whose
+       escaped, on either.  */
+    if (!m_reach_from.same_p (other.m_reach_from))
+      for (auto it : other.m_reach_from)
+	{
+	  const tree *mine = m_reach_from.get (it.first);
+	  tree merged = mine ? *mine : NULL_TREE;
+	  for (tree l = it.second; l; l = TREE_CHAIN (l))
+	    if (!value_member (TREE_VALUE (l), merged))
+	      merged = tree_cons (NULL_TREE, TREE_VALUE (l), merged);
+	  m_reach_from.put (it.first, merged);
+	}
+    if (!m_reach_escaped_map.same_p (other.m_reach_escaped_map))
+      for (auto it : other.m_reach_escaped_map)
+	m_reach_escaped_map.put (it.first, true);
     if (m_borrowed_map.same_p (other.m_borrowed_map))
       return;
     for (auto it : other.m_borrowed_map)
@@ -24597,6 +24683,33 @@ oa_predicate_conjunct_shape (tree conjunct, tree *pred_fn_out,
    supported.  A one-object fact ('is_open (f)') stays the business of
    oa_predicate_conjunct_shape and the one-object fact map.  */
 
+/* Whether an object of TYPE may hold a route to memory outside itself: a
+   pointer to an object or a reference, in it or in a member, base or
+   array element of it, at any depth.  What a fact about such an object
+   says may lie there (a pImpl handle's cache), and a copy of the object
+   carries the route.  A function or member pointer is no route, nor is a
+   vtable pointer.  */
+
+bool
+contract_type_reaches_memory_p (tree type)
+{
+  if (!type || type == error_mark_node)
+    return false;
+  type = strip_array_types (type);
+  if (TYPE_REF_P (type))
+    return true;
+  if (TYPE_PTR_P (type))
+    return !TYPE_PTRFN_P (type);
+  if (!RECORD_OR_UNION_TYPE_P (type) || TYPE_PTRMEMFUNC_P (type)
+      || !COMPLETE_TYPE_P (type))
+    return false;
+  for (tree f = TYPE_FIELDS (type); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FIELD_DECL && !DECL_VIRTUAL_P (f)
+	&& contract_type_reaches_memory_p (TREE_TYPE (f)))
+      return true;
+  return false;
+}
+
 /* The kind of argument a symbolic predicate's parameter of TYPE takes.  */
 
 oa_relation_arg_kind
@@ -29936,6 +30049,204 @@ oa_function_statics ()
   return oa_statics;
 }
 
+/* Add to *LIST the objects whose routes the value of E may carry (a
+   copy of them, a pointer read out of them, or one of the routes a call
+   is given that may come back in its result), when E's type reaches
+   memory (contract_type_reaches_memory_p): a variable of such a class
+   type itself, and whatever routes a variable was given were copied out
+   of (oa_env::reach_from_get).  A route to what they reach is a route
+   to what their facts as objects may be about.  */
+
+static void
+oa_reach_sources_1 (tree e, oa_env &env, tree *list, int depth)
+{
+  if (!e || e == error_mark_node || depth > 16)
+    return;
+  auto add = [&] (tree d)
+    {
+      if (d && !value_member (d, *list))
+	*list = tree_cons (NULL_TREE, d, *list);
+    };
+  e = STRIP_ANY_LOCATION_WRAPPER (e);
+  if (VAR_P (e) || TREE_CODE (e) == PARM_DECL)
+    {
+      tree d = e;
+      /* A reference: the object it is bound to, when known.  */
+      if (TYPE_REF_P (TREE_TYPE (d)))
+	{
+	  tree t = env.alias_find (d);
+	  if (t != d && DECL_P (t) && !TYPE_REF_P (TREE_TYPE (t)))
+	    {
+	      oa_reach_sources_1 (t, env, list, depth + 1);
+	      return;
+	    }
+	  if (contract_type_reaches_memory_p (TREE_TYPE (TREE_TYPE (d))))
+	    add (d);
+	}
+      else if (CLASS_TYPE_P (TREE_TYPE (d))
+	       && contract_type_reaches_memory_p (TREE_TYPE (d)))
+	add (d);
+      for (tree l = env.reach_from_get (d); l; l = TREE_CHAIN (l))
+	add (TREE_VALUE (l));
+      return;
+    }
+  if (tree call = oa_strip_to_call (e))
+    {
+      /* What the call is given may come back in its result.  */
+      bool aggr = TREE_CODE (call) == AGGR_INIT_EXPR;
+      int n = aggr ? aggr_init_expr_nargs (call) : call_expr_nargs (call);
+      for (int i = oa_call_first_real_arg (call); i < n; ++i)
+	oa_reach_sources_1 (aggr ? AGGR_INIT_EXPR_ARG (call, i)
+			    : CALL_EXPR_ARG (call, i), env, list, depth + 1);
+      return;
+    }
+  switch (TREE_CODE (e))
+    {
+    case NOP_EXPR:
+    case CONVERT_EXPR:
+    case NON_LVALUE_EXPR:
+    case VIEW_CONVERT_EXPR:
+    case ADDR_EXPR:
+    case INDIRECT_REF:
+    case ARRAY_REF:
+    case POINTER_PLUS_EXPR:
+    case SAVE_EXPR:
+      oa_reach_sources_1 (TREE_OPERAND (e, 0), env, list, depth + 1);
+      break;
+    case COMPONENT_REF:
+      /* A member that holds routes: those of the object holding it.  */
+      if (contract_type_reaches_memory_p (TREE_TYPE (e)))
+	oa_reach_sources_1 (TREE_OPERAND (e, 0), env, list, depth + 1);
+      break;
+    case COMPOUND_EXPR:
+    case INIT_EXPR:
+    case MODIFY_EXPR:
+      oa_reach_sources_1 (TREE_OPERAND (e, 1), env, list, depth + 1);
+      break;
+    case COND_EXPR:
+      oa_reach_sources_1 (TREE_OPERAND (e, 1), env, list, depth + 1);
+      oa_reach_sources_1 (TREE_OPERAND (e, 2), env, list, depth + 1);
+      break;
+    case TARGET_EXPR:
+      oa_reach_sources_1 (TARGET_EXPR_INITIAL (e), env, list, depth + 1);
+      break;
+    case CONSTRUCTOR:
+      {
+	unsigned i;
+	tree v;
+	FOR_EACH_CONSTRUCTOR_VALUE (CONSTRUCTOR_ELTS (e), i, v)
+	  oa_reach_sources_1 (v, env, list, depth + 1);
+      }
+      break;
+    default:
+      break;
+    }
+}
+
+static tree
+oa_reach_sources (tree e, oa_env &env)
+{
+  tree list = NULL_TREE;
+  oa_reach_sources_1 (e, env, &list, 0);
+  return list;
+}
+
+/* LHS is initialized or assigned from RHS: where LHS is (a part of) a
+   local variable, the objects whose routes RHS carries (oa_reach_
+   sources) are where that variable's routes come from; stored anywhere
+   else, their routes are handed out (oa_env::reach_escape).  And a store
+   through a route ('a.p->x = 1', '*q = 1' for 'q = a.p') changes what
+   the objects it came from reach: their facts as objects end.  */
+
+static void
+oa_reach_note_store (tree lhs, tree rhs, oa_env &env)
+{
+  if (!oa_fact_tracking_bookkeeping_active_p ())
+    return;
+  lhs = STRIP_ANY_LOCATION_WRAPPER (lhs);
+  /* The lvalue's base: a variable, or what a route designates.  */
+  tree base = lhs;
+  while (TREE_CODE (base) == COMPONENT_REF || TREE_CODE (base) == ARRAY_REF
+	 || TREE_CODE (base) == VIEW_CONVERT_EXPR
+	 || TREE_CODE (base) == NOP_EXPR)
+    base = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (base, 0));
+  if (TREE_CODE (base) == INDIRECT_REF && !REFERENCE_REF_P (base))
+    for (tree l = oa_reach_sources (TREE_OPERAND (base, 0), env); l;
+	 l = TREE_CHAIN (l))
+      env.reach_end (TREE_VALUE (l));
+  if (!contract_type_reaches_memory_p (TREE_TYPE (lhs)))
+    return;
+  tree src = oa_reach_sources (rhs, env);
+  if (REFERENCE_REF_P (base))
+    {
+      tree r = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (base, 0));
+      tree t = DECL_P (r) ? env.alias_find (r) : NULL_TREE;
+      base = t && t != r && DECL_P (t) ? t : base;
+    }
+  bool local = ((VAR_P (base) && !TREE_STATIC (base) && !DECL_EXTERNAL (base))
+		|| (TREE_CODE (base) == PARM_DECL
+		    && !TYPE_REF_P (TREE_TYPE (base))));
+  if (local)
+    {
+      /* Its own routes are its own: not where they come from.  */
+      tree merged = base == lhs ? NULL_TREE : env.reach_from_get (base);
+      for (tree l = src; l; l = TREE_CHAIN (l))
+	if (TREE_VALUE (l) != base && !value_member (TREE_VALUE (l), merged))
+	  merged = tree_cons (NULL_TREE, TREE_VALUE (l), merged);
+      env.reach_from_set (base, merged);
+    }
+  else
+    for (tree l = src; l; l = TREE_CHAIN (l))
+      env.reach_escape (TREE_VALUE (l));
+}
+
+/* CALL, to callee NAMED (NULL_TREE when unknown), is given routes: what
+   the objects they were copied out of reach may change.  A callee that
+   isn't conveyor may change it through any route, a copy too, and keep
+   it for a later call to; a conveyor callee only through one to
+   non-const (a copy, or a route to const, it can't change through:
+   the rule for the object itself).  A symbolic callee is never run.  */
+
+static void
+oa_reach_note_call (tree call, tree named, bool callee_is_conveyor,
+		    oa_env &env)
+{
+  if (!oa_fact_tracking_bookkeeping_active_p ())
+    return;
+  bool fn = named && TREE_CODE (named) == FUNCTION_DECL;
+  if (fn && DECL_DECLARED_SYMBOLIC_P (named))
+    return;
+  if (!callee_is_conveyor)
+    env.reach_escaped_end ();
+  bool aggr = TREE_CODE (call) == AGGR_INIT_EXPR;
+  int n = aggr ? aggr_init_expr_nargs (call) : call_expr_nargs (call);
+  tree parm = fn ? DECL_ARGUMENTS (named) : NULL_TREE;
+  if (oa_call_first_real_arg (call) && parm)
+    parm = DECL_CHAIN (parm);
+  auto_vec<tree, 4> escapes;
+  for (int i = oa_call_first_real_arg (call); i < n;
+       ++i, parm = parm ? DECL_CHAIN (parm) : NULL_TREE)
+    {
+      /* A constructor's own object is a new one.  */
+      if (i == 0 && !aggr && fn && DECL_CONSTRUCTOR_P (named))
+	continue;
+      tree arg = aggr ? AGGR_INIT_EXPR_ARG (call, i) : CALL_EXPR_ARG (call, i);
+      tree type = parm ? TREE_TYPE (parm) : TREE_TYPE (arg);
+      if (callee_is_conveyor
+	  && !(INDIRECT_TYPE_P (type)
+	       && !TYPE_READONLY (TREE_TYPE (type))))
+	continue;
+      for (tree l = oa_reach_sources (arg, env); l; l = TREE_CHAIN (l))
+	{
+	  env.reach_end (TREE_VALUE (l));
+	  if (!callee_is_conveyor)
+	    escapes.safe_push (TREE_VALUE (l));
+	}
+    }
+  for (tree o : escapes)
+    env.reach_escape (o);
+}
+
 static void
 oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
 {
@@ -30012,6 +30323,8 @@ oa_invalidate_symbolic_facts_for_call_args (tree call, oa_env &env)
   bool callee_is_conveyor = named != NULL_TREE
     && TREE_CODE (named) == FUNCTION_DECL
     && (DECL_DECLARED_CONVEYOR_P (named) || DECL_DECLARED_SYMBOLIC_P (named));
+  /* What the objects routes were copied out of reach.  */
+  oa_reach_note_call (call, named, callee_is_conveyor, env);
   /* D4324/P2680: a second, narrower exemption alongside CALLEE_IS_CONVEYOR
      above -- an argument passed via a CONST reference can't be deleted or
      reseated through THAT parameter by a well-formed callee (the same
@@ -37236,6 +37549,9 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 				         (DECL_INITIAL (decl)), decl);
 	    oa_relation_value_derived_set (decl, DECL_INITIAL (decl), env);
 	  }
+	if (VAR_P (decl) && DECL_INITIAL (decl)
+	    && !TYPE_REF_P (TREE_TYPE (decl)))
+	  oa_reach_note_store (decl, DECL_INITIAL (decl), env);
 	/* D4324/P2680: POINTER_TYPE_P also matches REFERENCE_TYPE (see its
 	   own definition in tree.h) -- so a lambda's own by-reference
 	   capture proxy (a REFERENCE_TYPE VAR_DECL) reaches this branch
@@ -38200,6 +38516,8 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
 	  }
 	if (VAR_P (lhs) && TYPE_REF_P (TREE_TYPE (lhs)))
 	  oa_note_reference_binding (lhs, rhs);
+	if (!TYPE_REF_P (TREE_TYPE (lhs)))
+	  oa_reach_note_store (lhs, rhs, env);
 	/* A local's address stored anywhere but in a local variable, which
 	   this function tracks (alias_set below), is handed out: a later
 	   call may write the local through it (P4445 BUG-17).  */

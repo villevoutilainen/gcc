@@ -1599,6 +1599,7 @@ enum oa_relation_arg_kind
   OA_RELATION_UNSUPPORTED
 };
 extern oa_relation_arg_kind oa_relation_param_kind (tree);
+extern bool contract_type_reaches_memory_p (tree);
 extern oa_relation_arg_kind oa_relation_arg_kind_of (tree, unsigned);
 extern bool oa_relation_conjunct_shape (tree, tree *, vec<tree> *, bool *);
 extern tree oa_relation_strip_arg (tree);
