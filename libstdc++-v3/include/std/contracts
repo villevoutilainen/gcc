@@ -154,6 +154,11 @@ namespace contracts
     const char* _M_comment;
     assertion_kind _M_kind;
     source_location _M_location;
+    // The condition's operands (see operand_count): their names, each
+    // followed by a NUL, and the format string.
+    const char* _M_operand_names;
+    __SIZE_TYPE__ _M_operand_count;
+    const char* _M_operand_format;
 
   public:
     constexpr evaluation_semantic semantic() const noexcept { return _M_semantic; }
@@ -177,6 +182,36 @@ namespace contracts
     // is being built.
     constexpr assertion_kind kind() const noexcept { return _M_kind; }
     constexpr source_location location() const noexcept { return _M_location; }
+
+    // The operands of the assertion's condition, which a control object
+    // whose operator() accepts them after the assertion_context is given:
+    // each parameter (this included), automatic variable and, for a
+    // postcondition, result the condition names, once, in order of first
+    // appearance.  operand_name(K) is the K-th one's name as written
+    // ("this" for the object), operand_format() the condition's text with
+    // each use of an operand's value replaced by a std::format replacement
+    // field naming its position ("{0} < {1}"), other braces doubled: an
+    // operand that is the object of a member call ('v' in 'v.size()'), and
+    // this, stay text.  All empty where comment() is.
+    constexpr __SIZE_TYPE__ operand_count() const noexcept
+    { return _M_operand_count; }
+
+    constexpr const char* operand_name(__SIZE_TYPE__ __k) const noexcept
+    {
+      if (__k >= _M_operand_count || !_M_operand_names)
+	return nullptr;
+      const char* __p = _M_operand_names;
+      for (; __k; --__k)
+	{
+	  while (*__p)
+	    ++__p;
+	  ++__p;
+	}
+      return __p;
+    }
+
+    constexpr const char* operand_format() const noexcept
+    { return _M_operand_format; }
   };
 
 #if __cpp_impl_reflection

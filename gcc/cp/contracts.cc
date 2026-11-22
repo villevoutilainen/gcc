@@ -7761,6 +7761,209 @@ assertion_static_info_location_type (tree info_type)
   return TREE_TYPE (f);
 }
 
+/* The contract whose checks or control object queries are being built
+   (contract_config_scope), for assertion_static_info's operand members;
+   null outside one.  */
+
+tree contract_static_info_contract;
+
+static vec<tree, va_gc> *contract_condition_operands (tree);
+
+/* The name OPERAND (contract_condition_operands) has in its condition.  */
+
+static const char *
+contract_operand_name (tree operand, tree postcond_id)
+{
+  if (TREE_CODE (operand) == COMPONENT_REF)
+    {
+      /* A lambda's capture: its member is named "__" and the capture's.  */
+      tree id = DECL_NAME (TREE_OPERAND (operand, 1));
+      const char *n = id ? IDENTIFIER_POINTER (id) : "";
+      return (n[0] == '_' && n[1] == '_') ? n + 2 : n;
+    }
+  if (TREE_CODE (operand) == RESULT_DECL
+      || (postcond_id && operand == postcond_id))
+    {
+      tree id = (postcond_id && DECL_P (postcond_id)
+		 ? DECL_NAME (postcond_id) : NULL_TREE);
+      return id ? IDENTIFIER_POINTER (id) : "";
+    }
+  if (TREE_CODE (operand) == PARM_DECL
+      && (is_this_parameter (operand)
+	  || (DECL_CONTEXT (operand)
+	      && TREE_CODE (DECL_CONTEXT (operand)) == FUNCTION_DECL
+	      && DECL_IOBJ_MEMBER_FUNCTION_P (DECL_CONTEXT (operand))
+	      && operand == DECL_ARGUMENTS (DECL_CONTEXT (operand)))))
+    return "this";
+  tree id = DECL_NAME (operand);
+  return id ? IDENTIFIER_POINTER (id) : "";
+}
+
+/* TEXT (a condition as written) as a std::format string over NAMES, its
+   operands' names in order: each identifier naming an operand's value
+   becomes the replacement field of its position, '{K}', other braces are
+   doubled.  An identifier stays text where it can't be an operand's
+   value: after '.', '->' or '::' (a member, a qualified name), before '('
+   (a function), before '.' or '->' and a member function call (the
+   operand is the object of the call: 'v' in 'v.size ()'), inside a
+   string or character literal, and 'this'.  A textual approximation: the
+   names of the operands are all it knows.  */
+
+static void
+contract_operand_format (const char *text, const vec<const char *> &names,
+			 auto_vec<char> &out)
+{
+  auto put = [&out] (const char *p, size_t n)
+    { for (size_t i = 0; i < n; ++i) out.safe_push (p[i]); };
+  auto ident_start = [] (char c)
+    { return ISALPHA (c) || c == '_'; };
+  auto ident_char = [] (char c)
+    { return ISALNUM (c) || c == '_'; };
+  size_t len = strlen (text);
+  size_t i = 0;
+  while (i < len)
+    {
+      char c = text[i];
+      if (c == '"' || c == '\'')
+	{
+	  size_t j = i + 1;
+	  while (j < len && text[j] != c)
+	    j += (text[j] == '\\' && j + 1 < len) ? 2 : 1;
+	  j = MIN (j + 1, len);
+	  for (size_t k = i; k < j; ++k)
+	    {
+	      if (text[k] == '{' || text[k] == '}')
+		out.safe_push (text[k]);
+	      out.safe_push (text[k]);
+	    }
+	  i = j;
+	  continue;
+	}
+      if (c == '{' || c == '}')
+	{
+	  out.safe_push (c);
+	  out.safe_push (c);
+	  ++i;
+	  continue;
+	}
+      if (!ident_start (c) || (i > 0 && ident_char (text[i - 1])))
+	{
+	  out.safe_push (c);
+	  ++i;
+	  continue;
+	}
+      size_t j = i;
+      while (j < len && ident_char (text[j]))
+	++j;
+      size_t n = j - i;
+      int index = -1;
+      if (!(n == 4 && !strncmp (text + i, "this", 4)))
+	for (unsigned k = 0; k < names.length (); ++k)
+	  if (strlen (names[k]) == n && !strncmp (names[k], text + i, n))
+	    {
+	      index = k;
+	      break;
+	    }
+      if (index >= 0)
+	{
+	  /* What precedes and follows, spaces skipped.  */
+	  size_t b = i;
+	  while (b > 0 && ISSPACE (text[b - 1]))
+	    --b;
+	  bool member = (b > 0 && (text[b - 1] == '.'
+				   || (b > 1 && text[b - 1] == '>'
+				       && text[b - 2] == '-')
+				   || (b > 1 && text[b - 1] == ':'
+				       && text[b - 2] == ':')));
+	  size_t a = j;
+	  while (a < len && ISSPACE (text[a]))
+	    ++a;
+	  bool call = a < len && text[a] == '(';
+	  bool object_of_call = false;
+	  if (a < len && (text[a] == '.'
+			  || (text[a] == '-' && a + 1 < len
+			      && text[a + 1] == '>')))
+	    {
+	      size_t m = a + (text[a] == '.' ? 1 : 2);
+	      while (m < len && ISSPACE (text[m]))
+		++m;
+	      if (m < len && ident_start (text[m]))
+		{
+		  while (m < len && ident_char (text[m]))
+		    ++m;
+		  while (m < len && ISSPACE (text[m]))
+		    ++m;
+		  object_of_call = m < len && text[m] == '(';
+		}
+	    }
+	  if (member || call || object_of_call)
+	    index = -1;
+	}
+      if (index >= 0)
+	{
+	  char buf[24];
+	  snprintf (buf, sizeof buf, "{%d}", index);
+	  put (buf, strlen (buf));
+	}
+      else
+	put (text + i, n);
+      i = j;
+    }
+  out.safe_push ('\0');
+}
+
+/* The operand members of assertion_static_info for the contract being
+   processed (contract_static_info_contract): the names, each followed by
+   a NUL, their number, and the format string; empty where its comment is
+   (no contract, -fcontract-violation-information=none, a condition still
+   dependent).  */
+
+static void
+contract_static_info_operands (tree *names, unsigned *count, tree *format)
+{
+  *names = *format = NULL_TREE;
+  *count = 0;
+  tree contract = contract_static_info_contract;
+  if (!contract || !CONTRACT_P (contract)
+      || !flag_contract_violation_information
+      || !CONTRACT_CONDITION (contract)
+      || CONTRACT_CONDITION (contract) == error_mark_node
+      || TREE_CODE (CONTRACT_CONDITION (contract)) == DEFERRED_PARSE
+      || (processing_template_decl
+	  && instantiation_dependent_expression_p
+	       (CONTRACT_CONDITION (contract))))
+    return;
+  vec<tree, va_gc> *operands = contract_condition_operands (contract);
+  tree postcond_id = (POSTCONDITION_P (contract)
+		      ? POSTCONDITION_IDENTIFIER (contract) : NULL_TREE);
+  auto_vec<const char *> ns;
+  auto_vec<char> all;
+  for (unsigned i = 0; i < vec_safe_length (operands); ++i)
+    {
+      tree o = (*operands)[i];
+      const char *n = contract_operand_name (o, postcond_id);
+      ns.safe_push (n);
+      for (const char *p = n; *p; ++p)
+	all.safe_push (*p);
+      all.safe_push ('\0');
+    }
+  *count = ns.length ();
+  if (*count)
+    *names = build_string_literal (all.length (), all.address ());
+  tree c = CONTRACT_COMMENT (contract);
+  STRIP_NOPS (c);
+  if (c && TREE_CODE (c) == ADDR_EXPR)
+    c = TREE_OPERAND (c, 0);
+  if (c && TREE_CODE (c) == ARRAY_REF)
+    c = TREE_OPERAND (c, 0);
+  if (c && TREE_CODE (c) == STRING_CST)
+    {
+      auto_vec<char> fmt;
+      contract_operand_format (TREE_STRING_POINTER (c), ns, fmt);
+      *format = build_string_literal (fmt.length (), fmt.address ());
+    }
+}
+
 static tree
 build_assertion_static_info_value (contract_check_side side, tree info_type,
 				   tree fn = NULL_TREE,
@@ -7813,7 +8016,7 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
 	   (contract_static_info_loc, TREE_TYPE (f7),
 	    fn ? resolve_fndecl_for_diagnostic_name (fn) : NULL_TREE)
        : build_constructor (TREE_TYPE (f7), NULL));
-  return build_constructor_va
+  tree info = build_constructor_va
     (info_type, 8,
      f0, build_int_cst (TREE_TYPE (f0), contract_evaluation_semantic_value ()),
      f1, build_int_cst (TREE_TYPE (f1), side_val),
@@ -7823,6 +8026,25 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
      f5, comment,
      f6, build_int_cst (TREE_TYPE (f6), contract_static_info_kind),
      f7, location);
+  /* The operand members, where the library has them.  */
+  tree f8 = next_aggregate_field (DECL_CHAIN (f7));
+  tree f9 = f8 ? next_aggregate_field (DECL_CHAIN (f8)) : NULL_TREE;
+  tree f10 = f9 ? next_aggregate_field (DECL_CHAIN (f9)) : NULL_TREE;
+  if (f10)
+    {
+      tree names, format;
+      unsigned count;
+      contract_static_info_operands (&names, &count, &format);
+      CONSTRUCTOR_APPEND_ELT (CONSTRUCTOR_ELTS (info), f8,
+			      names ? fold_convert (TREE_TYPE (f8), names)
+			      : build_zero_cst (TREE_TYPE (f8)));
+      CONSTRUCTOR_APPEND_ELT (CONSTRUCTOR_ELTS (info), f9,
+			      build_int_cst (TREE_TYPE (f9), count));
+      CONSTRUCTOR_APPEND_ELT (CONSTRUCTOR_ELTS (info), f10,
+			      format ? fold_convert (TREE_TYPE (f10), format)
+			      : build_zero_cst (TREE_TYPE (f10)));
+    }
+  return info;
 }
 
 /* The reflection a control-object query's assertion_declaration_info

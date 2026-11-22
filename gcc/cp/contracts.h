@@ -1642,6 +1642,7 @@ extern unsigned contract_apply_compute_semantic (tree, tree, int, unsigned);
    entries only.  No effect without a configuration.  */
 
 extern tree contract_static_info_comment;
+extern tree contract_static_info_contract;
 extern tree contract_fix_control_object (tree, tree);
 /* For assertion_static_info::kind and location: the assertion's kind (0:
    none) and location, of the contract assertion being processed.  */
@@ -1654,6 +1655,7 @@ class contract_config_scope
   unsigned m_saved;
   int m_saved_consteval;
   tree m_saved_comment;
+  tree m_saved_contract;
   unsigned m_saved_kind;
   location_t m_saved_loc;
   unsigned m_saved_base;
@@ -1663,6 +1665,7 @@ public:
     : m_saved (contract_config_override),
       m_saved_consteval (contract_config_consteval),
       m_saved_comment (contract_static_info_comment),
+      m_saved_contract (contract_static_info_contract),
       m_saved_kind (contract_static_info_kind),
       m_saved_loc (contract_static_info_loc),
       m_saved_base (contract_config_base)
@@ -1671,6 +1674,7 @@ public:
     if (contract && CONTRACT_P (contract))
       {
 	contract_static_info_comment = CONTRACT_COMMENT (contract);
+	contract_static_info_contract = contract;
 	contract_static_info_note (contract);
       }
     if (comptime != -2)
@@ -1693,6 +1697,7 @@ public:
     : m_saved (contract_config_override),
       m_saved_consteval (contract_config_consteval),
       m_saved_comment (contract_static_info_comment),
+      m_saved_contract (contract_static_info_contract),
       m_saved_kind (contract_static_info_kind),
       m_saved_loc (contract_static_info_loc),
       m_saved_base (contract_config_base)
@@ -1710,6 +1715,7 @@ public:
     contract_config_override = m_saved;
     contract_config_consteval = m_saved_consteval;
     contract_static_info_comment = m_saved_comment;
+    contract_static_info_contract = m_saved_contract;
     contract_static_info_kind = m_saved_kind;
     contract_static_info_loc = m_saved_loc;
     contract_config_base = m_saved_base;
