@@ -2819,6 +2819,7 @@ copy_contracts_list (tree contracts, tree fndecl,
 	continue;
 
       tree c = copy_node (contract);
+      contract_note_copy (contract, c);
       if (oa_synthesized_implicit_contracts
 	  && oa_synthesized_implicit_contracts->contains (contract))
 	oa_synthesized_implicit_contracts->add (c);
@@ -3184,6 +3185,7 @@ copy_and_remap_contracts (tree dest, tree source,
 	continue;
 
       tree stmt = copy_node (contract);
+      contract_note_copy (contract, stmt);
       /* A redundant caller-side check of a contract without a control
 	 object has its own semantic.  */
       if (for_wrapper && !CONTRACT_CONTROL_OBJECT (contract)
@@ -4280,6 +4282,7 @@ remap_object_contract (tree contract, tree dst_parms)
   tree orig_positional_parms = get_contract_positional_parms (contract);
 
   tree stmt = copy_node (contract);
+  contract_note_copy (contract, stmt);
 
   hash_map<tree, tree> decl_map;
   tree dp = dst_parms;
@@ -5328,6 +5331,7 @@ grok_contract (tree contract_spec, tree mode, tree result, cp_expr condition,
 
   CONTRACT_CONDITION (contract) = condition;
   check_contract_symbolic_use (contract);
+  contract_record_operand_order (contract);
 
   return contract;
 }
@@ -5348,6 +5352,7 @@ update_late_contract (tree contract, tree result, cp_expr condition)
   condition = finish_contract_condition (condition);
   CONTRACT_CONDITION (contract) = condition;
   check_contract_symbolic_use (contract);
+  contract_record_operand_order (contract);
 }
 
 /* Returns the precondition function for FNDECL, or null if not set.  */
@@ -9962,6 +9967,93 @@ contract_failure_terminates_p (tree contract, tree owner_fn)
    around the nested synthesis, so control returns to whichever of those two
    callers invoked this exactly as it was.  */
 
+static tree oa_condition_as_written (tree);
+
+/* The positions in their function's parameter list of the parameters
+   CONTRACT's condition uses, into USED: only those are passed to its
+   predicate core function (build_predicate_core_function_1) and stored in
+   its capture struct (build_predicate_arg_struct_var).  False if every
+   parameter must be passed: a parameter the condition uses isn't one of
+   its function's (a stale copy).  */
+
+static bool
+contract_used_parm_positions (tree contract,
+			      hash_set<int_hash<int, -1, -2>> &used)
+{
+  struct data_t { hash_set<int_hash<int, -1, -2>> *used; bool ok; };
+  data_t data = { &used, true };
+  /* The condition as written too: the GIMPLE engine reads the check's
+     facts about what it names (contract_check_arg_struct_info), and the
+     AST walk may have resolved some of that away (its is_object_address
+     calls).  */
+  tree conds[2] = { CONTRACT_CONDITION (contract),
+		    oa_condition_as_written (contract) };
+  for (tree cond : conds)
+    if (cond && cond != error_mark_node)
+      cp_walk_tree_without_duplicates
+	(&cond, [](tree *tp, int *, void *d) -> tree
+	   {
+	     auto *data = (data_t *) d;
+	     tree t = *tp;
+	     if (TREE_CODE (t) != PARM_DECL)
+	       return NULL_TREE;
+	     tree owner = DECL_CONTEXT (t);
+	     int i = 0;
+	     tree p = (owner && TREE_CODE (owner) == FUNCTION_DECL
+		       ? DECL_ARGUMENTS (owner) : NULL_TREE);
+	     for (; p && p != t; p = DECL_CHAIN (p))
+	       ++i;
+	     if (p)
+	       data->used->add (i);
+	     else
+	       data->ok = false;
+	     return NULL_TREE;
+	   }, &data);
+  return data.ok;
+}
+
+/* For each parameter of a predicate core function, what it stands for:
+   its function's parameter or the captured local
+   (build_predicate_core_function_1).  */
+
+static GTY(()) hash_map<tree, tree> *contract_pred_parm_origin;
+
+/* See contracts.h.  */
+
+tree
+contract_predicate_core_parm (tree core_fn, tree orig)
+{
+  if (!contract_pred_parm_origin)
+    return NULL_TREE;
+  for (tree p = DECL_ARGUMENTS (core_fn); p; p = DECL_CHAIN (p))
+    if (tree *o = contract_pred_parm_origin->get (p))
+      if (*o == orig)
+	return p;
+  /* ORIG may be a parameter of another copy of the function CORE_FN was
+     built from (a clone, a regenerated instantiation): the one at the same
+     position.  */
+  auto position = [] (tree parm) -> int
+    {
+      tree fn = DECL_CONTEXT (parm);
+      if (TREE_CODE (parm) != PARM_DECL || !fn
+	  || TREE_CODE (fn) != FUNCTION_DECL)
+	return -1;
+      int i = 0;
+      for (tree q = DECL_ARGUMENTS (fn); q; q = DECL_CHAIN (q), ++i)
+	if (q == parm)
+	  return i;
+      return -1;
+    };
+  int want = position (orig);
+  if (want < 0)
+    return NULL_TREE;
+  for (tree p = DECL_ARGUMENTS (core_fn); p; p = DECL_CHAIN (p))
+    if (tree *o = contract_pred_parm_origin->get (p))
+      if (position (*o) == want)
+	return p;
+  return NULL_TREE;
+}
+
 /* walk_tree callback data for find_condition_captures.  */
 
 struct find_condition_captures_data
@@ -10103,11 +10195,20 @@ build_predicate_core_function_1 (tree contract, tree orig)
      a postcondition with a non-void return.  */
   tree arg_types = NULL_TREE;
   tree *last_type = &arg_types;
-  for (tree p = DECL_ARGUMENTS (orig); p; p = DECL_CHAIN (p))
-    {
-      *last_type = build_tree_list (NULL_TREE, TREE_TYPE (p));
-      last_type = &TREE_CHAIN (*last_type);
-    }
+  /* Only the parameters the condition uses.  */
+  hash_set<int_hash<int, -1, -2>> used_parms;
+  bool filter_parms = contract_used_parm_positions (contract, used_parms);
+  auto parm_used = [&] (int i)
+    { return !filter_parms || used_parms.contains (i); };
+  {
+    int i = 0;
+    for (tree p = DECL_ARGUMENTS (orig); p; p = DECL_CHAIN (p), ++i)
+      if (parm_used (i))
+	{
+	  *last_type = build_tree_list (NULL_TREE, TREE_TYPE (p));
+	  last_type = &TREE_CHAIN (*last_type);
+	}
+  }
   /* A captured local is passed by reference where a copy would differ
      from it, so the condition sees the object itself: an array ('buf ==
      p'), a class object (copied behind its copy constructor's back), and
@@ -10158,9 +10259,15 @@ build_predicate_core_function_1 (tree contract, tree orig)
      local, plus a trailing result parameter.  */
   tree new_args = NULL_TREE;
   tree *last_arg = &new_args;
+  if (!contract_pred_parm_origin)
+    contract_pred_parm_origin = hash_map<tree, tree>::create_ggc (31);
+  int parm_pos = -1;
   for (tree p = DECL_ARGUMENTS (orig); p; p = DECL_CHAIN (p))
     {
+      if (!parm_used (++parm_pos))
+	continue;
       tree np = copy_decl (p);
+      contract_pred_parm_origin->put (np, p);
       DECL_CONTEXT (np) = fn;
       DECL_CHAIN (np) = NULL_TREE;
       suppress_warning (np);
@@ -10211,6 +10318,7 @@ build_predicate_core_function_1 (tree contract, tree orig)
       if (pname)
 	parm_names.add (pname);
       tree np = build_lang_decl (PARM_DECL, pname, capture_parm_type (cp));
+      contract_pred_parm_origin->put (np, cp);
       /* Only one bound here to the local itself: not a by-value scalar
 	 (a pointer's value proves nothing), nor a captured reference
 	 (only as valid as its own binding).  */
@@ -10285,8 +10393,15 @@ build_predicate_core_function_1 (tree contract, tree orig)
   id.eh_lp_nr = 0;
 
   tree dp = new_args;
-  for (tree sp = DECL_ARGUMENTS (orig); sp; sp = DECL_CHAIN (sp), dp = DECL_CHAIN (dp))
-    insert_decl_map (&id, sp, dp);
+  {
+    int i = 0;
+    for (tree sp = DECL_ARGUMENTS (orig); sp; sp = DECL_CHAIN (sp), ++i)
+      if (parm_used (i))
+	{
+	  insert_decl_map (&id, sp, dp);
+	  dp = DECL_CHAIN (dp);
+	}
+  }
   {
     tree ncp = new_captures;
     for (unsigned i = 0; i < vec_safe_length (captures); ++i, ncp = DECL_CHAIN (ncp))
@@ -10626,14 +10741,25 @@ resolve_inherited_contract (tree contract, tree using_fndecl,
   gcc_assert (binfo && binfo != error_mark_node);
 
   releasing_vec args;
-  tree adjusted_this = build_base_path (PLUS_EXPR, this_parm, binfo, 1,
-					 tf_warning_or_error);
-  vec_safe_push (args, adjusted_this);
+  /* CORE_FN takes only the parameters BASE_CONTRACT's condition uses.  */
+  hash_set<int_hash<int, -1, -2>> used_parms;
+  bool filter_parms = contract_used_parm_positions (base_contract,
+						     used_parms);
+  if (!filter_parms || used_parms.contains (0))
+    {
+      tree adjusted_this = build_base_path (PLUS_EXPR, this_parm, binfo, 1,
+					     tf_warning_or_error);
+      vec_safe_push (args, adjusted_this);
+    }
   /* USING_FNDECL's own DECL_ARGUMENTS never has a trailing result slot
      (that's specific to CORE_FN's own synthesized signature) -- just its
      ordinary parameters, all the way to the end.  */
-  for (tree p = DECL_CHAIN (this_parm); p; p = DECL_CHAIN (p))
-    vec_safe_push (args, p);
+  {
+    int i = 1;
+    for (tree p = DECL_CHAIN (this_parm); p; p = DECL_CHAIN (p), ++i)
+      if (!filter_parms || used_parms.contains (i))
+	vec_safe_push (args, p);
+  }
   /* The postcondition result placeholder, already built (and, for a
      copy made for a wrapper or outlined PRE_FN/POST_FN, already remapped
      onto that copy) as part of synthesizing this specifier.  */
@@ -22604,6 +22730,13 @@ oa_parm_object_trusted_p (tree callee, tree parm)
   return false;
 }
 
+/* For each contract, the operands of its condition as written
+   (contract_record_operand_order): folding may reorder the condition
+   ('n < (long) i' becomes '(long) i > n'), and the order of first
+   appearance is that of the source.  */
+
+static GTY(()) hash_map<tree, tree> *contract_operand_order_map;
+
 /* See contracts.h.  */
 
 void
@@ -22612,6 +22745,12 @@ contract_note_copy (tree from, tree to)
   if (oa_synthesized_implicit_contracts
       && oa_synthesized_implicit_contracts->contains (from))
     oa_synthesized_implicit_contracts->add (to);
+  if (contract_operand_order_map)
+    if (tree *v = contract_operand_order_map->get (from))
+      {
+	tree order = *v;
+	contract_operand_order_map->put (to, order);
+      }
 }
 
 /* See contracts.h.  */
@@ -44433,9 +44572,17 @@ build_base_contract_expr (tree base_fn, tree_code kind, tree using_fndecl,
 
       tree core_fn = get_or_build_predicate_core_function (c, fn);
       releasing_vec args;
-      vec_safe_push (args, adjusted_this);
-      for (tree p = DECL_CHAIN (this_parm); p; p = DECL_CHAIN (p))
-	vec_safe_push (args, p);
+      /* CORE_FN takes only the parameters C's condition uses.  */
+      hash_set<int_hash<int, -1, -2>> used_parms;
+      bool filter_parms = contract_used_parm_positions (c, used_parms);
+      if (!filter_parms || used_parms.contains (0))
+	vec_safe_push (args, adjusted_this);
+      {
+	int i = 1;
+	for (tree p = DECL_CHAIN (this_parm); p; p = DECL_CHAIN (p), ++i)
+	  if (!filter_parms || used_parms.contains (i))
+	    vec_safe_push (args, p);
+      }
       /* The override's result, as FN's postconditions see it.  */
       if (POSTCONDITION_P (contract))
 	vec_safe_push (args, convert_result_for_base_contract
@@ -44730,8 +44877,14 @@ build_contract_mark_struct_type (tree contract, tree fn, location_t)
 				? POSTCONDITION_IDENTIFIER (contract)
 				: NULL_TREE);
   auto_vec<tree> types;
-  for (tree p = DECL_ARGUMENTS (fn); p; p = DECL_CHAIN (p))
-    types.safe_push (TREE_TYPE (p));
+  hash_set<int_hash<int, -1, -2>> used_parms;
+  bool filter_parms = contract_used_parm_positions (contract, used_parms);
+  {
+    int i = 0;
+    for (tree p = DECL_ARGUMENTS (fn); p; p = DECL_CHAIN (p), ++i)
+      if (!filter_parms || used_parms.contains (i))
+	types.safe_push (TREE_TYPE (p));
+  }
   for (unsigned i = 0; i < vec_safe_length (captures); ++i)
     types.safe_push (TREE_TYPE ((*captures)[i]));
   if (postcondition && result_type && !VOID_TYPE_P (result_type))
@@ -44856,9 +45009,17 @@ build_predicate_arg_struct_var (tree contract, tree struct_type, tree cc_bind,
       ++field;
     };
 
-  for (tree real_val = DECL_ARGUMENTS (current_function_decl);
-       real_val && field < nfields; real_val = DECL_CHAIN (real_val))
-    fill_one (real_val);
+  /* The parameters the condition uses, as build_predicate_core_function_1
+     passes them.  */
+  hash_set<int_hash<int, -1, -2>> used_parms;
+  bool filter_parms = contract_used_parm_positions (contract, used_parms);
+  {
+    int i = 0;
+    for (tree real_val = DECL_ARGUMENTS (current_function_decl);
+	 real_val && field < nfields; real_val = DECL_CHAIN (real_val), ++i)
+      if (!filter_parms || used_parms.contains (i))
+	fill_one (real_val);
+  }
 
   tree postcond_id = POSTCONDITION_P (contract)
 		      ? POSTCONDITION_IDENTIFIER (contract) : NULL_TREE;
@@ -44907,6 +45068,280 @@ static tree build_real_source_location_value (location_t, tree, tree);
    its own terms, via a callback bundled into OP's single assertion_context
    parameter, instead of the compiler evaluating it eagerly.  Returns the
    call expression or error_mark_node.  */
+
+/* walk_tree callback data for contract_condition_operands.  */
+
+struct contract_operands_data
+{
+  hash_set<tree> seen;
+  vec<tree, va_gc> *operands;
+  tree postcond_id;
+};
+
+static tree
+contract_condition_operands_r (tree *tp, int *walk_subtrees, void *data_)
+{
+  auto *data = (contract_operands_data *) data_;
+  tree t = *tp;
+  /* A lambda's capture, by now its closure member: the operand is the
+     member, as the capture it stands for.  */
+  if (TREE_CODE (t) == COMPONENT_REF
+      && TREE_CODE (TREE_OPERAND (t, 1)) == FIELD_DECL
+      && LAMBDA_TYPE_P (TREE_TYPE (TREE_OPERAND (t, 0))))
+    {
+      *walk_subtrees = 0;
+      if (!data->seen.add (TREE_OPERAND (t, 1)))
+	vec_safe_push (data->operands, t);
+      return NULL_TREE;
+    }
+  bool operand
+    = (TREE_CODE (t) == PARM_DECL
+       || TREE_CODE (t) == RESULT_DECL
+       || (data->postcond_id && t == data->postcond_id)
+       || (VAR_P (t)
+	   && (is_capture_proxy (t)
+	       || (!DECL_ARTIFICIAL (t) && DECL_FUNCTION_SCOPE_P (t)
+		   && !TREE_STATIC (t) && !DECL_EXTERNAL (t)))));
+  if (operand && !data->seen.add (t))
+    vec_safe_push (data->operands, t);
+  return NULL_TREE;
+}
+
+/* The operands of CONTRACT's condition, in order of first appearance: each
+   parameter (this included), automatic variable and, for a postcondition,
+   the result that the condition names, once.  A control object whose
+   operator() accepts them after the assertion_context is given them
+   (build_contract_control_call).  */
+
+static vec<tree, va_gc> *
+contract_condition_operands_walk (tree contract)
+{
+  contract_operands_data data;
+  data.operands = NULL;
+  data.postcond_id = (POSTCONDITION_P (contract)
+		      ? POSTCONDITION_IDENTIFIER (contract) : NULL_TREE);
+  tree cond = CONTRACT_CONDITION (contract);
+  walk_tree (&cond, contract_condition_operands_r, &data, NULL);
+  return data.operands;
+}
+
+/* See contracts.h.  */
+
+void
+contract_record_operand_order (tree contract)
+{
+  if (processing_template_decl
+      || !CONTRACT_CONDITION (contract)
+      || CONTRACT_CONDITION (contract) == error_mark_node
+      || TREE_CODE (CONTRACT_CONDITION (contract)) == DEFERRED_PARSE)
+    return;
+  vec<tree, va_gc> *ops = contract_condition_operands_walk (contract);
+  tree v = make_tree_vec (vec_safe_length (ops));
+  for (unsigned i = 0; i < vec_safe_length (ops); ++i)
+    TREE_VEC_ELT (v, i) = (*ops)[i];
+  if (!contract_operand_order_map)
+    contract_operand_order_map = hash_map<tree, tree>::create_ggc (31);
+  contract_operand_order_map->put (contract, v);
+}
+
+static vec<tree, va_gc> *
+contract_condition_operands (tree contract)
+{
+  /* The decls the condition uses now (the ones its check can reach), in
+     the order of the condition as written: matched to the recorded ones
+     by identity, else by kind and name (the condition may since have been
+     substituted or copied).  */
+  vec<tree, va_gc> *ops = contract_condition_operands_walk (contract);
+  tree *v = (contract_operand_order_map
+	     ? contract_operand_order_map->get (contract) : NULL);
+  if (!v || vec_safe_length (ops) < 2)
+    return ops;
+  auto rank = [v] (tree d) -> int
+    {
+      for (int i = 0; i < TREE_VEC_LENGTH (*v); ++i)
+	if (TREE_VEC_ELT (*v, i) == d)
+	  return i;
+      if (TREE_CODE (d) == COMPONENT_REF)
+	{
+	  for (int i = 0; i < TREE_VEC_LENGTH (*v); ++i)
+	    {
+	      tree w = TREE_VEC_ELT (*v, i);
+	      if (VAR_P (w) && DECL_HAS_VALUE_EXPR_P (w))
+		{
+		  tree x = DECL_VALUE_EXPR (w);
+		  if (TREE_CODE (x) == COMPONENT_REF
+		      && TREE_OPERAND (x, 1) == TREE_OPERAND (d, 1))
+		    return i;
+		}
+	    }
+	  return TREE_VEC_LENGTH (*v);
+	}
+      for (int i = 0; i < TREE_VEC_LENGTH (*v); ++i)
+	{
+	  tree w = TREE_VEC_ELT (*v, i);
+	  if (TREE_CODE (w) == TREE_CODE (d) && DECL_NAME (w)
+	      && DECL_NAME (w) == DECL_NAME (d))
+	    return i;
+	}
+      return TREE_VEC_LENGTH (*v);
+    };
+  /* A stable insertion sort: few operands.  */
+  for (unsigned i = 1; i < ops->length (); ++i)
+    {
+      tree d = (*ops)[i];
+      int r = rank (d);
+      unsigned j = i;
+      while (j > 0 && rank ((*ops)[j - 1]) > r)
+	{
+	  (*ops)[j] = (*ops)[j - 1];
+	  --j;
+	}
+      (*ops)[j] = d;
+    }
+  return ops;
+}
+
+/* OPERAND (contract_condition_operands) as an lvalue of const type in
+   CURRENT_FUNCTION_DECL, where the check is: a parameter of the function
+   the contract belongs to is the corresponding parameter of a wrapper that
+   checks it, and the result is CURRENT_FUNCTION_DECL's.  NULL_TREE if it
+   can't be found there.  */
+
+static tree
+contract_operand_at_check (tree operand, tree postcond_id)
+{
+  tree e = operand;
+  if (TREE_CODE (operand) == COMPONENT_REF)
+    ;
+  else if (TREE_CODE (operand) == PARM_DECL
+	   && DECL_CONTEXT (operand) != current_function_decl)
+    {
+      tree owner = DECL_CONTEXT (operand);
+      if (!owner || TREE_CODE (owner) != FUNCTION_DECL)
+	return NULL_TREE;
+      tree p = DECL_ARGUMENTS (owner);
+      tree c = DECL_ARGUMENTS (current_function_decl);
+      for (; p && c && p != operand; p = DECL_CHAIN (p), c = DECL_CHAIN (c))
+	;
+      if (!p || !c)
+	return NULL_TREE;
+      e = c;
+    }
+  else if (TREE_CODE (operand) == RESULT_DECL
+	   || (postcond_id && operand == postcond_id))
+    {
+      e = DECL_RESULT (current_function_decl);
+      if (!e || VOID_TYPE_P (TREE_TYPE (e)))
+	return NULL_TREE;
+    }
+  else if (VAR_P (operand) && DECL_CONTEXT (operand) != current_function_decl
+	   && !is_capture_proxy (operand))
+    return NULL_TREE;
+  /* 'this' (a lambda's closure pointer too) is a prvalue: pass its
+     value.  */
+  if (is_this_parameter (e)
+      || (TREE_CODE (e) == PARM_DECL && DECL_CONTEXT (e)
+	  && TREE_CODE (DECL_CONTEXT (e)) == FUNCTION_DECL
+	  && DECL_IOBJ_MEMBER_FUNCTION_P (DECL_CONTEXT (e))
+	  && e == DECL_ARGUMENTS (DECL_CONTEXT (e))))
+    return e;
+  /* A parameter or result passed by invisible reference: by the time the
+     check is built its type is already the reference, and its address is
+     what the middle end takes as the object's (as
+     build_predicate_arg_struct_var's fill_one does).  */
+  if ((TREE_CODE (e) == PARM_DECL || TREE_CODE (e) == RESULT_DECL)
+      && DECL_BY_REFERENCE (e))
+    {
+      tree type = TREE_TYPE (TREE_TYPE (e));
+      tree ctype = cp_build_qualified_type (type, cp_type_quals (type)
+						    | TYPE_QUAL_CONST);
+      return build_fold_indirect_ref
+	       (fold_convert (build_pointer_type (ctype),
+			      build_fold_addr_expr (e)));
+    }
+  e = convert_from_reference (e);
+  tree type = TREE_TYPE (e);
+  tree ctype = cp_build_qualified_type (type, cp_type_quals (type)
+						| TYPE_QUAL_CONST);
+  /* As a reference to const bound to it: the shape genericization lowers
+     also for a parameter passed by invisible reference.  */
+  return convert_from_reference
+	   (build_nop (cp_build_reference_type (ctype, false),
+		       build_address (e)));
+}
+
+/* The type of the const lvalue contract_operand_at_check makes of OPERAND,
+   without making it: for probing overload resolution, which must not mark
+   anything addressable (that would change what the analyses see) unless
+   the operands are really passed.  NULL_TREE as there.  */
+
+static tree
+contract_operand_probe (tree operand, tree postcond_id)
+{
+  tree e = operand;
+  if (TREE_CODE (operand) == RESULT_DECL
+      || (postcond_id && operand == postcond_id))
+    {
+      e = DECL_RESULT (current_function_decl);
+      if (!e || VOID_TYPE_P (TREE_TYPE (e)))
+	return NULL_TREE;
+    }
+  tree type = TREE_TYPE (e);
+  if (TREE_CODE (e) == PARM_DECL
+      && (is_this_parameter (e)
+	  || (DECL_CONTEXT (e) && TREE_CODE (DECL_CONTEXT (e)) == FUNCTION_DECL
+	      && DECL_IOBJ_MEMBER_FUNCTION_P (DECL_CONTEXT (e))
+	      && e == DECL_ARGUMENTS (DECL_CONTEXT (e)))))
+    return build_stub_object (type);
+  type = non_reference (type);
+  tree ctype = cp_build_qualified_type (type, cp_type_quals (type)
+						| TYPE_QUAL_CONST);
+  return build_stub_object (cp_build_reference_type (ctype, false));
+}
+
+/* The call of CTRL_VAR (a control object of CTRL_TYPE) with the context
+   CTX_VAR and the operands of CONTRACT's condition, if overload resolution
+   for that call finds any viable candidate (so the call is formed, with
+   its usual errors); NULL_TREE otherwise, for the plain call with the
+   context.  In CURRENT_FUNCTION_DECL, where the check is.  */
+
+static tree
+contract_control_operand_call (tree contract, tree ctrl_type, tree ctrl_var,
+			       tree ctx_var, tsubst_flags_t complain)
+{
+  vec<tree, va_gc> *operands = contract_condition_operands (contract);
+  if (!operands)
+    return NULL_TREE;
+  tree fns = lookup_member (ctrl_type, call_op_identifier,
+			    /*protect=*/1, /*want_type=*/false, tf_none);
+  if (!fns || fns == error_mark_node || !BASELINK_P (fns))
+    return NULL_TREE;
+  tree postcond_id = (POSTCONDITION_P (contract)
+		      ? POSTCONDITION_IDENTIFIER (contract) : NULL_TREE);
+  releasing_vec probe;
+  vec_safe_push (probe, ctx_var);
+  for (tree o : *operands)
+    {
+      tree e = contract_operand_probe (o, postcond_id);
+      if (!e)
+	return NULL_TREE;
+      vec_safe_push (probe, e);
+    }
+  if (build_new_method_call (ctrl_var, fns, &probe, NULL_TREE, LOOKUP_NORMAL,
+			     NULL, tf_any_viable) != void_node)
+    return NULL_TREE;
+  releasing_vec cargs;
+  vec_safe_push (cargs, ctx_var);
+  for (tree o : *operands)
+    {
+      tree e = contract_operand_at_check (o, postcond_id);
+      if (!e)
+	return NULL_TREE;
+      vec_safe_push (cargs, e);
+    }
+  return build_new_method_call (ctrl_var, fns, &cargs, NULL_TREE,
+				LOOKUP_NORMAL, NULL, complain);
+}
 
 static tree
 build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
@@ -45010,6 +45445,17 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   tree result_type = TREE_TYPE (fntype);
   if (SCALAR_TYPE_P (result_type) || VOID_TYPE_P (result_type))
     result_type = cv_unqualified (result_type);
+
+  /* The operands of the condition, after the context, if overload
+     resolution for that call finds any viable candidate; otherwise
+     OP (ctx), as before.  */
+  if (tree call = contract_control_operand_call (contract, ctrl_type,
+						 ctrl_var, ctx_var,
+						 tf_warning_or_error))
+    {
+      mark_used (op);
+      return call;
+    }
 
   tree ctx_arg = fold_convert (t_ctx, build_fold_addr_expr (ctx_var));
 
@@ -45325,7 +45771,16 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
 
   tree args[2] = { this_arg, ctx_arg };
   mark_used (op);
-  tree call = build_call_array_loc (loc, result_type, fn_addr, 2, args);
+  tree call;
+  /* The condition's operands too, as in build_contract_control_call.  */
+  {
+    temp_override<tree> cfd (current_function_decl, fndecl);
+    call = contract_control_operand_call (contract, ctrl_type, ctrl_var,
+					  ctx_var,
+					  quiet ? tf_none : tf_warning_or_error);
+  }
+  if (!call)
+    call = build_call_array_loc (loc, result_type, fn_addr, 2, args);
 
   /* Package CTRL_VAR/CTX_VAR's declarations and the call into a small,
      self-contained BIND_EXPR: the constexpr evaluator already knows how to

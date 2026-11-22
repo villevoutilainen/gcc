@@ -6453,7 +6453,7 @@ enum tsubst_flags {
   tf_any_viable = 1 << 11,	 /* Return void_node if there are any viable
 				    candidates.  Currently only supported on
 				    finish_call_expr on perform_koenig_lookup
-				    result.  */
+				    result and on build_new_method_call.  */
   tf_tst_ok = 1 << 12,		 /* Allow a typename-specifier to name
 				    a template (C++17 or later).  */
   tf_dguide = 1 << 13,		 /* Building a deduction guide from a ctor.  */

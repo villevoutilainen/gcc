@@ -12523,11 +12523,9 @@ cg_seed_predicate_self_trust (function *fun, cg_dom_fact_state &seed)
 	      tree field = cg_object_address_field (oa_arg, &base);
 	      if (!field || TREE_CODE (base) != PARM_DECL)
 		continue;
-	      /* OWNER's parameter -> FNDECL's at the same position.  */
-	      tree c = DECL_ARGUMENTS (fndecl), q = DECL_ARGUMENTS (owner);
-	      for (; q && c && q != base; q = DECL_CHAIN (q), c = DECL_CHAIN (c))
-		;
-	      if (!q || !c)
+	      /* OWNER's parameter -> FNDECL's standing for it.  */
+	      tree c = contract_predicate_core_parm (fndecl, base);
+	      if (!c)
 		continue;
 	      if (tree ssa = ssa_default_def (fun, c))
 		{
@@ -21299,15 +21297,12 @@ cg_seed_predicate_from_preconditions (function *fun,
   tree self = predicate_core_function_contract (fun->decl, &owner);
   if (!self || !owner)
     return;
-  /* OWNER's parameter -> FUN's parameter at the same position.  */
+  /* OWNER's parameter -> FUN's parameter standing for it (FUN has only
+     the parameters its condition uses).  */
   auto core_parm = [&] (tree parm) -> tree
     {
-      tree c = DECL_ARGUMENTS (fun->decl);
-      for (tree p = DECL_ARGUMENTS (owner); p && c;
-	   p = DECL_CHAIN (p), c = DECL_CHAIN (c))
-	if (p == parm)
-	  return cg_self_trust_key (fun, c);
-      return NULL_TREE;
+      tree c = contract_predicate_core_parm (fun->decl, parm);
+      return c ? cg_self_trust_key (fun, c) : NULL_TREE;
     };
   for (tree contract : fn_contracts (owner))
     {

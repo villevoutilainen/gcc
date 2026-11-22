@@ -12477,15 +12477,20 @@ build_new_method_call (tree instance, tree fns, vec<tree, va_gc> **args,
       add_list_candidates (fns, first_mem_arg, user_args,
 			   basetype, explicit_targs, template_only,
 			   conversion_path, access_binfo, flags,
-			   &candidates, complain);
+			   &candidates, complain & ~tf_any_viable);
     }
   else
     add_candidates (fns, first_mem_arg, user_args, optype,
 		    explicit_targs, template_only, conversion_path,
-		    access_binfo, flags, &candidates, complain);
+		    access_binfo, flags, &candidates,
+		    complain & ~tf_any_viable);
 
   any_viable_p = false;
   candidates = splice_viable (candidates, false, &any_viable_p);
+
+  /* Only whether any candidate is viable was asked (tf_any_viable).  */
+  if (complain & tf_any_viable)
+    return any_viable_p ? void_node : error_mark_node;
 
   if (!any_viable_p)
     {
@@ -12711,6 +12716,7 @@ skip_prune:
 
   return call;
 }
+
 
 /* Returns true iff standard conversion sequence ICS1 is a proper
    subsequence of ICS2.  */

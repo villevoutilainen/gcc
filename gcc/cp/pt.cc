@@ -13143,6 +13143,7 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
 
   if (undeduced_result_type_p)
     --processing_template_decl;
+  contract_record_operand_order (r);
   processing_postcondition = old_pc;
   gcc_checking_assert (scope_chain && scope_chain->bindings
 		       && scope_chain->bindings->kind == sk_contract);

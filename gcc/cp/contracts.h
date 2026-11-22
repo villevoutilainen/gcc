@@ -567,6 +567,10 @@ extern int contract_obligation_conveyor_code;
 extern bool contract_parm_object_trusted_p (tree callee, tree parm);
 /* TO is a copy of the contract FROM: it is synthesized if FROM is.  */
 extern void contract_note_copy (tree from, tree to);
+extern void contract_record_operand_order (tree);
+/* The parameter of predicate core function CORE_FN standing for ORIG (its
+   function's parameter or a captured local), or NULL_TREE.  */
+extern tree contract_predicate_core_parm (tree core_fn, tree orig);
 extern bool oa_contract_self_check_mode_public (tree contract, tree owner_fn,
 						bool *never_proven,
 						bool *conveyor_forced,
