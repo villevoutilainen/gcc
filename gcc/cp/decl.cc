@@ -5787,6 +5787,25 @@ cxx_init_decl_processing (void)
 			       BUILT_IN_FRONTEND, NULL, NULL_TREE);
   set_call_expr_flags (decl, ECF_CONST | ECF_NOTHROW | ECF_LEAF);
 
+  /* D4324: the concrete return types, std::contracts::assertion_static_info
+     and std::meta::info, are deduced on first use as for
+     __builtin_source_location.  */
+  if (cxx_dialect >= cxx26)
+    {
+      tree auto_vaftype = build_varargs_function_type_list (make_auto (),
+							    NULL_TREE);
+      decl = add_builtin_function ("__builtin_contract_static_info",
+				   auto_vaftype,
+				   CP_BUILT_IN_CONTRACT_STATIC_INFO,
+				   BUILT_IN_FRONTEND, NULL, NULL_TREE);
+      set_call_expr_flags (decl, ECF_CONST | ECF_NOTHROW | ECF_LEAF);
+      decl = add_builtin_function ("__builtin_contract_current_scope",
+				   auto_vaftype,
+				   CP_BUILT_IN_CONTRACT_CURRENT_SCOPE,
+				   BUILT_IN_FRONTEND, NULL, NULL_TREE);
+      set_call_expr_flags (decl, ECF_CONST | ECF_NOTHROW | ECF_LEAF);
+    }
+
   tree bool_vaftype = build_varargs_function_type_list (boolean_type_node,
 							NULL_TREE);
   decl
@@ -22549,6 +22568,37 @@ require_deduced_type (tree decl, tsubst_flags_t complain)
 	  type = cp_build_qualified_type (type, TYPE_QUAL_CONST);
 	  type = build_pointer_type (type);
 	  apply_deduced_return_type (decl, type);
+	  return true;
+	}
+
+      if (TREE_CODE (decl) == FUNCTION_DECL
+	  && fndecl_built_in_p (decl, CP_BUILT_IN_CONTRACT_STATIC_INFO,
+				BUILT_IN_FRONTEND))
+	{
+	  /* Its return type: std::contracts::assertion_static_info.  */
+	  tree type = contract_static_info_type ();
+	  if (!type)
+	    {
+	      error ("%qs used without %qs declaration",
+		     "__builtin_contract_static_info",
+		     "std::contracts::assertion_static_info");
+	      return false;
+	    }
+	  apply_deduced_return_type (decl, type);
+	  return true;
+	}
+      if (TREE_CODE (decl) == FUNCTION_DECL
+	  && fndecl_built_in_p (decl, CP_BUILT_IN_CONTRACT_CURRENT_SCOPE,
+				BUILT_IN_FRONTEND))
+	{
+	  /* Its return type: std::meta::info.  */
+	  if (!flag_reflection)
+	    {
+	      error ("%qs requires %<-freflection%>",
+		     "__builtin_contract_current_scope");
+	      return false;
+	    }
+	  apply_deduced_return_type (decl, meta_info_type_node);
 	  return true;
 	}
 

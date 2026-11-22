@@ -568,6 +568,9 @@ extern bool contract_parm_object_trusted_p (tree callee, tree parm);
 /* TO is a copy of the contract FROM: it is synthesized if FROM is.  */
 extern void contract_note_copy (tree from, tree to);
 extern void contract_record_operand_order (tree);
+extern tree contract_static_info_type ();
+extern tree fold_builtin_contract_static_info (location_t, tree *, tree, bool);
+extern tree fold_builtin_contract_current_scope (location_t, int);
 /* The parameter of predicate core function CORE_FN standing for ORIG (its
    function's parameter or a captured local), or NULL_TREE.  */
 extern tree contract_predicate_core_parm (tree core_fn, tree orig);

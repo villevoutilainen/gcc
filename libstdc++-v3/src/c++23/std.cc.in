@@ -1072,6 +1072,10 @@ export namespace std::contracts
   using std::contracts::ignore;
   using std::contracts::ignore_v;
   using std::contracts::invoke_violation_handler;
+  using std::contracts::evaluate_with;
+#if __has_builtin(__builtin_contract_static_info)
+  using std::contracts::assertion_info_for;
+#endif
   using std::contracts::mandatory;
   using std::contracts::mandatory_v;
   using std::contracts::never_proven_conveyor;

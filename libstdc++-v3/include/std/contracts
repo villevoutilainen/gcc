@@ -160,6 +160,8 @@ namespace contracts
     __SIZE_TYPE__ _M_operand_count;
     const char* _M_operand_format;
 
+    friend struct __evaluate_with_access;
+
   public:
     constexpr evaluation_semantic semantic() const noexcept { return _M_semantic; }
     constexpr assertion_check_side side() const noexcept { return _M_side; }
@@ -377,13 +379,147 @@ namespace contracts
     // type's own comment for why it exists as a separate, freely
     // user-constructible type rather than just widening this one.
     constexpr assertion_info info() const noexcept
-    { return assertion_info(comment(), location(), semantic(), kind()); }
+    {
+      assertion_info __i(comment(), location(), semantic(), kind());
+      __i.set_message(message());
+      return __i;
+    }
+
+    // A message for the violation handler that the code evaluating the
+    // assertion supplied (evaluate_with); null in the context of an
+    // assertion written as one (pre, post, contract_assert), whose
+    // control object supplies its own if any.  A control object that
+    // reports forwards it (assertion_info::set_message, as info() does).
+    constexpr const char* message() const
+    { return __message_fn ? __message_fn(__message_arg) : nullptr; }
 
   private:
     assertion_static_info __static_info;
     void* __args;
     bool (*__check)(void*);
+    // Not set by the compiler.
+    const char* (*__message_fn)(const void*);
+    const void* __message_arg;
+
+    friend struct __evaluate_with_access;
   };
+
+  // D4324: evaluating an assertion that isn't written as one.
+  // assertion_info_for gives the static info an assertion naming a
+  // control object would have at a site, by the configuration;
+  // evaluate_with then has the control object evaluate a predicate with
+  // it, as the compiler has it evaluate an assertion's -- so a check in
+  // ordinary code (a library's assertion macro) gets the configuration and
+  // the control object's whole behavior.
+  struct __evaluate_with_access
+  {
+    template<typename _Pred>
+      static constexpr bool
+      __check(void* __p)
+      { return static_cast<bool>((*static_cast<_Pred*>(__p))()); }
+
+    static constexpr const char*
+    __message_value(const void* __p)
+    { return static_cast<const char*>(__p); }
+
+    template<typename _Msg>
+      static constexpr const char*
+      __message_call(const void* __p)
+      { return (*static_cast<const _Msg*>(__p))(); }
+
+    template<typename _Pred, typename _Msg>
+      static constexpr assertion_context
+      __make(const assertion_static_info& __info, _Pred& __pred,
+	     const char* __comment, const _Msg& __message)
+      {
+	assertion_context __ctx;
+	__ctx.__static_info = __info;
+	if (__comment)
+	  __ctx.__static_info._M_comment = __comment;
+	__ctx.__args = const_cast<void*>(static_cast<const volatile void*>(
+			 __builtin_addressof(__pred)));
+	__ctx.__check = &__check<_Pred>;
+	if constexpr (__is_same(_Msg, decltype(nullptr)))
+	  {
+	    __ctx.__message_fn = nullptr;
+	    __ctx.__message_arg = nullptr;
+	  }
+	else if constexpr (requires { static_cast<const char*>(__message); })
+	  {
+	    __ctx.__message_fn = &__message_value;
+	    __ctx.__message_arg = static_cast<const char*>(__message);
+	  }
+	else
+	  {
+	    __ctx.__message_fn = &__message_call<_Msg>;
+	    __ctx.__message_arg = __builtin_addressof(__message);
+	  }
+	return __ctx;
+      }
+  };
+
+  // Has CTRL evaluate an assertion with static info INFO (typically from
+  // assertion_info_for) whose predicate is PRED, a callable with no
+  // arguments whose result is contextually converted to bool, called when
+  // (and as often as) CTRL calls the context's check(); exceptions it
+  // throws propagate from check().  COMMENT, if given, is the context's
+  // comment(), MESSAGE its message(): a const char*, or a callable
+  // returning one, called only when message() is.  If CTRL is callable
+  // with the context followed by OPS, it is called so, otherwise with the
+  // context alone.  The predicate is not constified.
+  template<typename _Ctrl, typename _Pred, typename _Msg = decltype(nullptr),
+	   typename... _Ops>
+    constexpr void
+    evaluate_with(const _Ctrl& __ctrl, const assertion_static_info& __info,
+		  _Pred&& __pred, const char* __comment = nullptr,
+		  const _Msg& __message = nullptr, const _Ops&... __ops)
+    {
+      using _Pt = __remove_reference(_Pred);
+      const assertion_context __ctx
+	= __evaluate_with_access::__make<_Pt, _Msg>(__info, __pred,
+						    __comment, __message);
+      if constexpr (sizeof...(_Ops) > 0
+		    && requires { __ctrl(__ctx, __ops...); })
+	__ctrl(__ctx, __ops...);
+      else
+	__ctrl(__ctx);
+    }
+
+#if __has_builtin(__builtin_contract_static_info)
+  // The static info an assertion of KIND naming control object CTRL would
+  // be given at LOC, of FUNCTION in ENCLOSING_NAMESPACE (by default, the
+  // caller's), for its evaluation at compile time if CONSTANT_EVALUATION,
+  // else at run time: the semantic the configuration gives it there, then
+  // CTRL's compute_semantic.  Its side is not applicable; it has no comment
+  // and no operands.
+#if __cpp_impl_reflection
+  template<typename _Ctrl>
+    consteval assertion_static_info
+    assertion_info_for(const _Ctrl& __ctrl, assertion_kind __kind,
+		       bool __constant_evaluation = false,
+		       source_location __loc = source_location::current(),
+		       decltype(^^int) __function
+			 = __builtin_contract_current_scope(0),
+		       decltype(^^int) __enclosing_namespace
+			 = __builtin_contract_current_scope(1))
+    {
+      return __builtin_contract_static_info(__ctrl, __kind,
+					    __constant_evaluation, __loc,
+					    __function, __enclosing_namespace);
+    }
+#else
+  // Without reflection, no function and the global namespace.
+  template<typename _Ctrl>
+    consteval assertion_static_info
+    assertion_info_for(const _Ctrl& __ctrl, assertion_kind __kind,
+		       bool __constant_evaluation = false,
+		       source_location __loc = source_location::current())
+    {
+      return __builtin_contract_static_info(__ctrl, __kind,
+					    __constant_evaluation, __loc, 0, 0);
+    }
+#endif
+#endif
 
   // Every one of these bool-returning static member functions -- the
   // mandatory is_ignored/constify/assumable below, and the optional

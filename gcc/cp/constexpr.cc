@@ -3346,6 +3346,58 @@ cxx_eval_builtin_function_call (const constexpr_ctx *ctx, tree t, tree fun,
 	  return fold_builtin_source_location (t);
 	}
 
+      case CP_BUILT_IN_CONTRACT_CURRENT_SCOPE:
+	{
+	  /* Like __builtin_source_location: the function whose evaluation
+	     (or, outside one, whose parsing) this is -- in a default
+	     argument, the caller's.  */
+	  temp_override<tree> ovr (current_function_decl);
+	  if (ctx->call && ctx->call->fundef)
+	    current_function_decl = ctx->call->fundef->decl;
+	  tree arg = (call_expr_nargs (t) > 0
+		      ? cxx_eval_constant_expression (ctx, CALL_EXPR_ARG (t, 0),
+						      vc_prvalue,
+						      non_constant_p,
+						      overflow_p, jump_target)
+		      : integer_zero_node);
+	  if (*non_constant_p)
+	    return t;
+	  tree r = fold_builtin_contract_current_scope
+		     (EXPR_LOCATION (t), integer_zerop (arg) ? 0 : 1);
+	  if (!r)
+	    *non_constant_p = true;
+	  return r ? r : t;
+	}
+
+      case CP_BUILT_IN_CONTRACT_STATIC_INFO:
+	{
+	  int nargs = call_expr_nargs (t);
+	  if (nargs != 6)
+	    {
+	      if (!ctx->quiet)
+		error_at (EXPR_LOCATION (t), "wrong number of arguments to %qs",
+			  "__builtin_contract_static_info");
+	      *non_constant_p = true;
+	      return t;
+	    }
+	  tree args[6];
+	  for (int i = 0; i < nargs; ++i)
+	    {
+	      args[i] = cxx_eval_constant_expression (ctx, CALL_EXPR_ARG (t, i),
+						      vc_prvalue,
+						      non_constant_p,
+						      overflow_p, jump_target);
+	      if (*non_constant_p)
+		return t;
+	    }
+	  tree r = fold_builtin_contract_static_info (EXPR_LOCATION (t), args,
+						      CALL_EXPR_ARG (t, 0),
+						      ctx->quiet);
+	  if (!r)
+	    *non_constant_p = true;
+	  return r ? r : t;
+	}
+
       case CP_BUILT_IN_EH_PTR_ADJUST_REF:
 	return cxx_eval_cxa_builtin_fn (ctx, t, BUILTIN_EH_PTR_ADJUST_REF,
 					fun, non_constant_p, overflow_p,

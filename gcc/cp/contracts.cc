@@ -7508,6 +7508,16 @@ unsigned contract_config_base;
 unsigned contract_static_info_kind;
 location_t contract_static_info_loc;
 
+/* For __builtin_contract_static_info (fold_builtin_contract_static_info):
+   the location, as a std::source_location value, and the file, line and
+   column, of the hypothetical assertion whose static info is being built;
+   and its namespace (CONTRACT_CONFIG_NS_OVERRIDE_P: given).  */
+
+static tree contract_static_info_location_override;
+static expanded_location *contract_config_xloc_override;
+static bool contract_config_ns_override_p;
+static tree contract_config_ns_override;
+
 /* Note CONTRACT's kind and location for assertion_static_info
    (contract_config_scope).  */
 
@@ -8010,6 +8020,8 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
      one outside one or under -fcontract-violation-information=none.  */
   tree location
     = (location_value ? location_value
+       : contract_static_info_location_override
+       ? contract_static_info_location_override
        : (contract_static_info_kind && flag_contract_violation_information
 	  && contract_static_info_loc != UNKNOWN_LOCATION)
        ? build_real_source_location_value
@@ -8090,6 +8102,170 @@ contract_namespace_reflection (tree fn)
   if (!ns)
     ns = global_namespace;
   return get_reflection (DECL_SOURCE_LOCATION (ns), ns);
+}
+
+static unsigned contract_apply_compute_semantic_1 (tree, tree,
+						    contract_check_side,
+						    unsigned, location_t);
+
+/* See contracts.h.  */
+
+tree
+contract_static_info_type ()
+{
+  tree type = lookup_std_contracts_type (get_identifier ("assertion_static_info"));
+  return (type && type != error_mark_node && CLASS_TYPE_P (type)
+	  && COMPLETE_TYPE_P (type)) ? type : NULL_TREE;
+}
+
+/* See contracts.h: __builtin_contract_current_scope (WHICH), a reflection
+   of the function being evaluated or parsed (WHICH 0), or of the innermost
+   namespace enclosing it (WHICH 1), as assertion_declaration_info gives
+   them.  */
+
+tree
+fold_builtin_contract_current_scope (location_t, int which)
+{
+  if (!flag_reflection)
+    return NULL_TREE;
+  tree fn = current_function_decl;
+  return which ? contract_namespace_reflection (fn)
+	       : contract_function_reflection (fn);
+}
+
+/* The member named NAME of CONSTRUCTOR CTOR's value, or NULL_TREE.  */
+
+static tree
+contract_ctor_member (tree ctor, const char *name)
+{
+  if (!ctor || TREE_CODE (ctor) != CONSTRUCTOR)
+    return NULL_TREE;
+  unsigned HOST_WIDE_INT i;
+  tree field, value;
+  FOR_EACH_CONSTRUCTOR_ELT (CONSTRUCTOR_ELTS (ctor), i, field, value)
+    if (field && TREE_CODE (field) == FIELD_DECL && DECL_NAME (field)
+	&& !strcmp (IDENTIFIER_POINTER (DECL_NAME (field)), name))
+      return value;
+  return NULL_TREE;
+}
+
+/* The file, line and column of LOC, a constant std::source_location
+   value, into *XLOC.  False if it can't be read.  */
+
+static bool
+contract_source_location_value_xloc (tree loc, expanded_location *xloc)
+{
+  memset (xloc, 0, sizeof *xloc);
+  if (!loc || TREE_CODE (loc) != CONSTRUCTOR)
+    return false;
+  /* Its single member points to a static __impl.  */
+  tree impl = CONSTRUCTOR_NELTS (loc) ? CONSTRUCTOR_ELT (loc, 0)->value
+	      : NULL_TREE;
+  STRIP_NOPS (impl);
+  if (!impl || TREE_CODE (impl) != ADDR_EXPR)
+    return !impl || integer_zerop (impl);
+  impl = TREE_OPERAND (impl, 0);
+  if (VAR_P (impl))
+    impl = DECL_INITIAL (impl);
+  tree file = contract_ctor_member (impl, "_M_file_name");
+  tree line = contract_ctor_member (impl, "_M_line");
+  tree column = contract_ctor_member (impl, "_M_column");
+  if (file)
+    {
+      STRIP_NOPS (file);
+      if (TREE_CODE (file) == ADDR_EXPR)
+	file = TREE_OPERAND (file, 0);
+      if (TREE_CODE (file) == ARRAY_REF)
+	file = TREE_OPERAND (file, 0);
+      if (TREE_CODE (file) == STRING_CST)
+	xloc->file = TREE_STRING_POINTER (file);
+    }
+  if (line && TREE_CODE (line) == INTEGER_CST)
+    xloc->line = tree_to_shwi (line);
+  if (column && TREE_CODE (column) == INTEGER_CST)
+    xloc->column = tree_to_shwi (column);
+  return true;
+}
+
+/* See contracts.h: __builtin_contract_static_info (CTRL, KIND,
+   CONSTANT_EVALUATION, LOC, FUNCTION, NS), with ARGS its arguments'
+   values: the std::contracts::assertion_static_info an assertion of KIND
+   (an assertion_kind) at LOC (a std::source_location) of FUNCTION in NS
+   (reflections; null ones: none, the global namespace) naming control
+   object CTRL would be given, for its evaluation at compile time if
+   CONSTANT_EVALUATION, else at run time: the configuration's semantic for
+   it, then CTRL's compute_semantic.  Its side is not applicable, it has
+   no comment and no operands.  CTRL_EXPR is CTRL as written.  NULL_TREE
+   if the arguments are unusable (diagnosed unless QUIET).  */
+
+tree
+fold_builtin_contract_static_info (location_t loc, tree *args,
+				   tree ctrl_expr, bool quiet)
+{
+  tree info_type = contract_static_info_type ();
+  tree ctrl = args[0];
+  if (!info_type || !ctrl || !CLASS_TYPE_P (TREE_TYPE (ctrl))
+      || TREE_CODE (args[1]) != INTEGER_CST
+      || TREE_CODE (args[2]) != INTEGER_CST)
+    {
+      if (!quiet)
+	error_at (loc, "invalid arguments to %qs",
+		  "__builtin_contract_static_info");
+      return NULL_TREE;
+    }
+  (void) ctrl_expr;
+  unsigned kind = tree_to_uhwi (args[1]);
+  int comptime = integer_zerop (args[2]) ? 0 : 1;
+  expanded_location xloc;
+  if (!contract_source_location_value_xloc (args[3], &xloc))
+    {
+      if (!quiet)
+	error_at (loc, "invalid source location argument to %qs",
+		  "__builtin_contract_static_info");
+      return NULL_TREE;
+    }
+  tree fn = NULL_TREE, ns = NULL_TREE;
+  if (args[4] && REFLECT_EXPR_P (args[4]))
+    {
+      fn = REFLECT_EXPR_HANDLE (args[4]);
+      if (fn && TREE_CODE (fn) == TEMPLATE_DECL)
+	fn = DECL_TEMPLATE_RESULT (fn);
+      if (fn && TREE_CODE (fn) != FUNCTION_DECL)
+	fn = NULL_TREE;
+    }
+  if (args[5] && REFLECT_EXPR_P (args[5]))
+    {
+      ns = REFLECT_EXPR_HANDLE (args[5]);
+      if (ns && TREE_CODE (ns) != NAMESPACE_DECL)
+	ns = NULL_TREE;
+    }
+
+  /* As contract_config_scope sets them for a contract.  */
+  temp_override<unsigned> o1 (contract_config_override);
+  temp_override<unsigned> o2 (contract_config_base);
+  temp_override<int> o3 (contract_config_consteval, comptime);
+  temp_override<unsigned> o4 (contract_static_info_kind, kind);
+  temp_override<location_t> o5 (contract_static_info_loc, UNKNOWN_LOCATION);
+  temp_override<tree> o6 (contract_static_info_comment, NULL_TREE);
+  temp_override<tree> o7 (contract_static_info_contract, NULL_TREE);
+  temp_override<tree> o8 (contract_static_info_location_override, args[3]);
+  temp_override<expanded_location *> o9 (contract_config_xloc_override,
+					 &xloc);
+  temp_override<bool> o10 (contract_config_ns_override_p, true);
+  temp_override<tree> o11 (contract_config_ns_override,
+			   ns ? ns : global_namespace);
+
+  contract_config_override
+    = (contract_config_table.is_empty () ? 0
+       : contract_config_semantic_for (kind, UNKNOWN_LOCATION, ctrl, fn,
+				       comptime, false));
+  contract_config_base = contract_config_override;
+  if (flag_contract_control_objects)
+    contract_config_override
+      = contract_apply_compute_semantic_1 (ctrl, fn, ccs_not_applicable,
+					   contract_config_override, loc);
+  return build_assertion_static_info_value (ccs_not_applicable, info_type,
+					    fn, NULL_TREE, args[3]);
 }
 
 /* Whether TYPE is std::contracts::assertion_declaration_info.  */
@@ -8514,6 +8690,10 @@ contract_control_bool_member (tree ctrl, const char *name,
    so a per-assertion decision a query makes reaches the evaluation.
    SEMANTIC if there is no such query.  */
 
+static unsigned contract_apply_compute_semantic_1 (tree, tree,
+						    contract_check_side,
+						    unsigned, location_t);
+
 unsigned
 contract_apply_compute_semantic (tree contract, tree fn, int side,
 				 unsigned semantic)
@@ -8524,6 +8704,8 @@ contract_apply_compute_semantic (tree contract, tree fn, int side,
   tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
   if (!ctrl || error_operand_p (ctrl))
     return semantic;
+  /* The side only if there is a query to give it to (FN may not be a
+     function: an object declaration's contracts).  */
   tree type = contract_control_naming_type (ctrl);
   if (!type || !CLASS_TYPE_P (type) || !COMPLETE_TYPE_P (type)
       || !contract_control_query_member (type, "compute_semantic"))
@@ -8531,6 +8713,23 @@ contract_apply_compute_semantic (tree contract, tree fn, int side,
   contract_check_side cside
     = (side < 0 ? contract_side_of (contract, fn)
        : (contract_check_side) side);
+  return contract_apply_compute_semantic_1 (ctrl, fn, cside, semantic,
+					    EXPR_LOCATION (contract));
+}
+
+/* What control object CTRL's compute_semantic query returns for an
+   assertion of FN checked on CSIDE whose semantic is otherwise SEMANTIC
+   (contract_apply_compute_semantic); LOC is where to complain.  */
+
+static unsigned
+contract_apply_compute_semantic_1 (tree ctrl, tree fn,
+				   contract_check_side cside,
+				   unsigned semantic, location_t loc)
+{
+  tree type = contract_control_naming_type (ctrl);
+  if (!type || !CLASS_TYPE_P (type) || !COMPLETE_TYPE_P (type)
+      || !contract_control_query_member (type, "compute_semantic"))
+    return semantic;
   /* An assertion its is_ignored ignores, with SEMANTIC, is not computed
      a semantic.  */
   if (contract_control_query_member (type, "is_ignored")
@@ -8541,7 +8740,7 @@ contract_apply_compute_semantic (tree contract, tree fn, int side,
     return semantic;
   if (v < CES_IGNORE || v > CES_QUICK)
     {
-      error_at (EXPR_LOCATION (contract),
+      error_at (loc,
 		"%<compute_semantic%> for control object of type %qT "
 		"returns an invalid evaluation semantic", type);
       return semantic;
@@ -9027,8 +9226,10 @@ contract_config_loc_matches (const char *file, const int *lines,
 static char *
 contract_config_ns_of (tree fn)
 {
-  tree scope = fn && fn != error_mark_node ? CP_DECL_CONTEXT (fn)
-	       : current_namespace;
+  tree scope = (contract_config_ns_override_p
+		? contract_config_ns_override
+		: fn && fn != error_mark_node ? CP_DECL_CONTEXT (fn)
+		: current_namespace);
   scope = decl_namespace_context (scope);
   if (!scope || scope == global_namespace)
     return NULL;
@@ -9103,7 +9304,9 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
   if (contract_config_table.is_empty ())
     return 0;
   char *ns = contract_config_ns_of (fn);
-  expanded_location xloc = expand_location (loc);
+  expanded_location xloc = (contract_config_xloc_override
+			    ? *contract_config_xloc_override
+			    : expand_location (loc));
   const char *mask = (caller && contract_config_caller_mask
 		      ? IDENTIFIER_POINTER (contract_config_caller_mask)
 		      : NULL);
