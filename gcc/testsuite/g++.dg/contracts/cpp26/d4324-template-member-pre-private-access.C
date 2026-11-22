@@ -1,7 +1,10 @@
 // D4324: a precondition of a class template's member may use the class's
 // private and protected members (and a hidden friend's, its class's), also
 // when the precondition is substituted early for a call met before the
-// member's definition is instantiated (oa_maybe_instantiate_contracts).
+// member's definition is instantiated (oa_maybe_instantiate_contracts) --
+// also when that call is parsed tentatively, with access checks deferred to
+// the caller ('(void)(a.h ())' in a lambda, as libc++'s
+// TEST_LIBCPP_ASSERT_FAILURE writes it).
 // Found by the plain-contracts experiment on libc++ (static_packed_bounded_iter,
 // expected, common_iterator).
 // { dg-do run { target c++26 } }
@@ -44,9 +47,18 @@ public:
   friend int swap_ (const A &x, const A &y) pre<cco{}> (x.v == y.v) { return 0; }
 };
 
+template <class F>
+int
+run (F f)
+{
+  f ();
+  return 0;
+}
+
 int
 main ()
 {
   A<int> a, b;
-  return a.f () + a.g () + a.h () + swap_ (a, b);
+  int r = run ([&] () { (void) (a.h ()); });
+  return r + a.f () + a.g () + a.h () + swap_ (a, b);
 }

@@ -32718,7 +32718,12 @@ oa_maybe_instantiate_contracts (tree fn)
 	  bool in_class = DECL_FRIEND_CONTEXT (fn) || DECL_CLASS_SCOPE_P (fn);
 	  if (in_class)
 	    push_access_scope (fn);
+	  /* And check access now, in that scope: the call may be parsed
+	     tentatively, with access checks deferred to be performed in
+	     the caller's context.  */
+	  push_deferring_access_checks (dk_no_deferred);
 	  tsubst_regenerated_contract_specifiers (fn, code_pattern, DECL_TI_ARGS (fn));
+	  pop_deferring_access_checks ();
 	  if (in_class)
 	    pop_access_scope (fn);
 	  maybe_pop_from_top_level (push_to_top);
