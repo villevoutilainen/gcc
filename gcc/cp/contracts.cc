@@ -9987,8 +9987,12 @@ find_condition_captures_r (tree *tp, int *, void *data_)
      the outlined function's own local temporary storage, corrupting
      the target-expr's own semantics entirely.  A genuine, user-written
      local variable is never artificial.  */
-  if ((VAR_P (t) || TREE_CODE (t) == PARM_DECL)
-      && !DECL_ARTIFICIAL (t)
+  /* A RESULT_DECL in a contract_assert's condition is a local the named
+     return value optimization turned into the result ('T tmp; ...
+     contract_assert (tmp.ok ()); return tmp;'): captured like the local
+     it was.  It's artificial, so it gets its own test.  */
+  if ((((VAR_P (t) || TREE_CODE (t) == PARM_DECL) && !DECL_ARTIFICIAL (t))
+       || TREE_CODE (t) == RESULT_DECL)
       && !data->exclude->contains (t))
     {
       bool already = false;
@@ -10024,10 +10028,14 @@ find_condition_captures (tree condition, tree orig, tree postcond_id)
   hash_set<tree> exclude;
   for (tree p = DECL_ARGUMENTS (orig); p; p = DECL_CHAIN (p))
     exclude.add (p);
-  if (tree result = DECL_RESULT (orig))
-    exclude.add (result);
+  /* A postcondition's result is mapped apart; any other condition can
+     reference DECL_RESULT only as a named-return-value local, captured.  */
   if (postcond_id)
-    exclude.add (postcond_id);
+    {
+      if (tree result = DECL_RESULT (orig))
+	exclude.add (result);
+      exclude.add (postcond_id);
+    }
 
   find_condition_captures_data data;
   data.exclude = &exclude;
@@ -10286,8 +10294,13 @@ build_predicate_core_function_1 (tree contract, tree orig)
 	tree cp = (*captures)[i];
 	/* A capture that wasn't a reference is now one: its uses are
 	   uses of what the parameter refers to.  */
+	/* So is a named-return-value result passed by invisible
+	   reference: the condition uses it as the object, its type is
+	   already the reference.  */
 	insert_decl_map (&id, cp, TYPE_REF_P (TREE_TYPE (ncp))
-				  && !TYPE_REF_P (TREE_TYPE (cp))
+				  && (!TYPE_REF_P (TREE_TYPE (cp))
+				      || (TREE_CODE (cp) == RESULT_DECL
+					  && DECL_BY_REFERENCE (cp)))
 				  ? convert_from_reference (ncp) : ncp);
       }
   }
