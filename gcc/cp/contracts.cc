@@ -32695,7 +32695,19 @@ oa_maybe_instantiate_contracts (tree fn)
       if (code_pattern && code_pattern != fn && push_tinst_level (fn))
 	{
 	  bool push_to_top = maybe_push_to_top_level (fn);
+	  /* A member's or friend's in its class's access scope, as
+	     regenerate_decl_from_template does: a precondition of a class
+	     template's member may use the class's private members.  Not a
+	     namespace-scope function's: push_access_scope's own
+	     push_to_top_level would leave its namespace (and so what
+	     std::meta::access_context::current () names in a control
+	     object written there).  */
+	  bool in_class = DECL_FRIEND_CONTEXT (fn) || DECL_CLASS_SCOPE_P (fn);
+	  if (in_class)
+	    push_access_scope (fn);
 	  tsubst_regenerated_contract_specifiers (fn, code_pattern, DECL_TI_ARGS (fn));
+	  if (in_class)
+	    pop_access_scope (fn);
 	  maybe_pop_from_top_level (push_to_top);
 	  pop_tinst_level ();
 	  /* A constructor or destructor call resolves to one of FN's
