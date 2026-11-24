@@ -1061,6 +1061,10 @@ export namespace std::contracts
   using std::contracts::group_semantic_rules_view;
   using std::contracts::invoke_violation_handler;
   using std::contracts::evaluate_with;
+  using std::contracts::format_operands_to;
+#if _GLIBCXX_HOSTED
+  using std::contracts::format_operands;
+#endif
 #if __has_builtin(__builtin_contract_static_info)
   using std::contracts::assertion_info_for;
 #endif

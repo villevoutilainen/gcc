@@ -1024,6 +1024,39 @@ namespace contracts
 	__put(*__s++);
     }
 
+    // S (N bytes) between QUOTEs, escaped as std::format's debug format
+    // ({:?}) escapes it: \t \n \r \\, the quote, and other control
+    // characters as \u{hex}.  Other bytes are written as they are.
+    void
+    __put_quoted(const char* __s, __SIZE_TYPE__ __n, char __quote) noexcept
+    {
+      __put(__quote);
+      for (__SIZE_TYPE__ __i = 0; __i != __n; ++__i)
+	{
+	  unsigned char __c = __s[__i];
+	  if (__c == '\t')
+	    __put("\\t");
+	  else if (__c == '\n')
+	    __put("\\n");
+	  else if (__c == '\r')
+	    __put("\\r");
+	  else if (__c == '\\' || __c == (unsigned char) __quote)
+	    {
+	      __put('\\');
+	      __put(char(__c));
+	    }
+	  else if (__c < 0x20 || __c == 0x7f)
+	    {
+	      __put("\\u{");
+	      __put_unsigned(__c, 16);
+	      __put('}');
+	    }
+	  else
+	    __put(char(__c));
+	}
+      __put(__quote);
+    }
+
     void
     __put_unsigned(unsigned long long __v, unsigned __base = 10) noexcept
     {
@@ -1141,7 +1174,7 @@ namespace contracts
       if constexpr (__is_same(_Tp, bool))
 	__out.__put(__v ? "true" : "false");
       else if constexpr (__is_same(_Tp, char))
-	__out.__put(__v);
+	__out.__put_quoted(&__v, 1, '\'');
       else if constexpr (__is_same(_Tp, decltype(nullptr)))
 	__out.__put("nullptr");
       else if constexpr (__is_same(_Tp, float) || __is_same(_Tp, double))
@@ -1169,7 +1202,7 @@ namespace contracts
       else if constexpr (__is_same(_Tp, const char*) || __is_same(_Tp, char*))
 	{
 	  if (__v)
-	    __out.__put(__v);
+	    __out.__put_quoted(__v, __builtin_strlen(__v), '"');
 	  else
 	    __out.__put("nullptr");
 	}
@@ -1189,16 +1222,42 @@ namespace contracts
     __simple_print_erased(__contract_text& __out, const void* __p) noexcept
     { __simple_print(__out, *static_cast<const _Tp*>(__p)); }
 
-  // FMT, an assertion_static_info::operand_format() string, with each
-  // {N} replaced by operand N, printed by PRINT[N], and {{ and }} by
-  // { and }.
+  // How the list of operands the format string leaves as text prints
+  // 'this' (__format_operands): as the string it points to, for a
+  // std::string or std::string_view, through a printer of what an
+  // operand of type _Tp points to; not at all otherwise (null).
+  template<typename _Tp>
+    struct __deref_string_printer
+    {
+      static constexpr void (*value)(__contract_text&, const void*) = nullptr;
+    };
+  template<typename _Tp>
+    struct __deref_string_printer<_Tp*>
+    {
+      static void
+      __print(__contract_text& __out, const void* __p) noexcept
+      { __simple_print(__out, **static_cast<_Tp* const*>(__p)); }
+
+      static constexpr void (*value)(__contract_text&, const void*)
+	= __is_char_string<__remove_cv(_Tp)>::value ? &__print : nullptr;
+    };
+
+  using __operand_printer = void (*)(__contract_text&, const void*);
+
+  // INFO's operand_format () with each {N} replaced by operand N (OPS[N],
+  // printed by PRINT[N]) and {{ and }} by { and }; then, in brackets,
+  // each operand the format string leaves as text ('s' in 's.size ()'),
+  // 'name: value' -- 'this' only as '*this', the string it points to,
+  // for a std::string or std::string_view (THIS_PRINT[N] not null).
   inline void
-  __format_operands(__contract_text& __out, const char* __fmt,
-		    const void* const* __ops,
-		    void (*const* __print)(__contract_text&, const void*),
-		    __SIZE_TYPE__ __count) noexcept
+  __format_operands(__contract_text& __out, const assertion_static_info& __info,
+		    const void* const* __ops, const __operand_printer* __print,
+		    const __operand_printer* __this_print, __SIZE_TYPE__ __count)
+	noexcept
   {
-    for (const char* __p = __fmt; *__p; ++__p)
+    constexpr __SIZE_TYPE__ __max = 64;
+    bool __shown[__max] = {};
+    for (const char* __p = __info.operand_format(); *__p; ++__p)
       {
 	if ((__p[0] == '{' && __p[1] == '{') || (__p[0] == '}' && __p[1] == '}'))
 	  {
@@ -1214,12 +1273,42 @@ namespace contracts
 	    if (*__q == '}' && __q != __p + 1 && __n < __count)
 	      {
 		__print[__n](__out, __ops[__n]);
+		if (__n < __max)
+		  __shown[__n] = true;
 		__p = __q;
 		continue;
 	      }
 	  }
 	__out.__put(*__p);
       }
+
+    bool __first = true;
+    for (__SIZE_TYPE__ __i = 0; __i < __count && __i < __max; ++__i)
+      {
+	if (__shown[__i])
+	  continue;
+	const char* __name = __info.operand_name(__i);
+	if (!__name)
+	  continue;
+	bool __this = __builtin_strcmp(__name, "this") == 0;
+	if (__this && !__this_print[__i])
+	  continue;
+	__out.__put(__first ? " [" : ", ");
+	__first = false;
+	if (__this)
+	  {
+	    __out.__put("*this: ");
+	    __this_print[__i](__out, __ops[__i]);
+	  }
+	else
+	  {
+	    __out.__put(__name);
+	    __out.__put(": ");
+	    __print[__i](__out, __ops[__i]);
+	  }
+      }
+    if (!__first)
+      __out.__put(']');
   }
 
   // The message a violation report gives, written into BUF (of size N):
@@ -1228,9 +1317,8 @@ namespace contracts
   inline const char*
   __operand_message(char* __buf, __SIZE_TYPE__ __n,
 		    const assertion_context& __ctx, const char* __message,
-		    const void* const* __ops,
-		    void (*const* __print)(__contract_text&, const void*),
-		    __SIZE_TYPE__ __count)
+		    const void* const* __ops, const __operand_printer* __print,
+		    const __operand_printer* __this_print, __SIZE_TYPE__ __count)
   {
     // No format string (-fcontract-violation-information=none): no
     // values either.
@@ -1243,7 +1331,8 @@ namespace contracts
 	__out.__put(__message);
 	__out.__put(": ");
       }
-    __format_operands(__out, __fmt, __ops, __print, __count);
+    __format_operands(__out, __ctx.static_info(), __ops, __print, __this_print,
+		      __count);
     *__out._M_cur = '\0';
     return __buf;
   }
@@ -1255,22 +1344,24 @@ namespace contracts
 			     const char* __message, const _Ops&... __ops) noexcept
     {
       const void* __ptrs[] = { static_cast<const void*>(__builtin_addressof(__ops))... };
-      void (*const __print[])(__contract_text&, const void*)
-	= { &__simple_print_erased<_Ops>... };
+      const __operand_printer __print[] = { &__simple_print_erased<_Ops>... };
+      const __operand_printer __this_print[]
+	= { __deref_string_printer<_Ops>::value... };
       return __operand_message(__buf, _Nm, __ctx, __message, __ptrs, __print,
-			       sizeof...(_Ops));
+			       __this_print, sizeof...(_Ops));
     }
 
   // MESSAGE, then VALUES (the condition with its operands' values) if not
-  // null: "MESSAGE: VALUES", or VALUES alone if MESSAGE is null.
+  // null: "MESSAGE: VALUES", or VALUES alone if MESSAGE is null or just
+  // the condition's text again, COMMENT (as __glibcxx_assert's is).
   template<__SIZE_TYPE__ _Nm>
     const char*
     __message_with_values(char (&__buf)[_Nm], const char* __message,
-			  const char* __values) noexcept
+			  const char* __values, const char* __comment) noexcept
     {
       if (!__values)
 	return __message;
-      if (!__message)
+      if (!__message || (__comment && !__builtin_strcmp(__message, __comment)))
 	return __values;
       __contract_text __out{__buf, __buf + _Nm - 1};
       __out.__put(__message);
@@ -1516,7 +1607,8 @@ namespace contracts
 				    evaluation_semantic::enforce, __ctx.kind());
 	      char __mbuf[__contract_message_size];
 	      __info.set_message(__message_with_values(__mbuf, __message,
-						       __values));
+						       __values,
+						       __ctx.comment()));
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -1625,7 +1717,8 @@ namespace contracts
 				    evaluation_semantic::enforce, __ctx.kind());
 	      char __mbuf[__contract_message_size];
 	      __info.set_message(__message_with_values(__mbuf, __message,
-						       __values));
+						       __values,
+						       __ctx.comment()));
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -1733,7 +1826,8 @@ namespace contracts
 				    evaluation_semantic::enforce, __ctx.kind());
 	      char __mbuf[__contract_message_size];
 	      __info.set_message(__message_with_values(__mbuf, __message,
-						       __values));
+						       __values,
+						       __ctx.comment()));
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -1921,7 +2015,8 @@ namespace contracts
 				    evaluation_semantic::enforce, __ctx.kind());
 	      char __mbuf[__contract_message_size];
 	      __info.set_message(__message_with_values(__mbuf, __message,
-						       __values));
+						       __values,
+						       __ctx.comment()));
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -2020,7 +2115,8 @@ namespace contracts
 				    evaluation_semantic::enforce, __ctx.kind());
 	      char __mbuf[__contract_message_size];
 	      __info.set_message(__message_with_values(__mbuf, __message,
-						       __values));
+						       __values,
+						       __ctx.comment()));
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -2119,7 +2215,7 @@ inline namespace controls
       contract_assert<never_proven_conveyor_v>
 	(std::is_object_address(__builtin_addressof(__v)));
 #endif
-      __out.__put(__v.data(), __v.size());
+      __out.__put_quoted(__v.data(), __v.size(), '"');
     }
 } // inline namespace controls
 } // namespace contracts
