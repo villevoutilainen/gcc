@@ -1175,10 +1175,19 @@ tree conveyor_auto_probe_decl;
    contract control object's own operator(): only the condition itself
    is ever checked against conveyor rules.  */
 
+/* True while building the call of a control object's operator() with a
+   condition's operands: like the plain call with the context, which is
+   built directly, it is the library's own dispatch, not a call in the
+   function the check is in.  */
+
+static bool suppress_conveyor_restrictions_for_control_call_p;
+
 bool
 conveyor_restrictions_active_p ()
 {
   if (suppress_conveyor_restrictions_for_trait_query_p)
+    return false;
+  if (suppress_conveyor_restrictions_for_control_call_p)
     return false;
   if (suppress_conveyor_restrictions_for_converted_constant_expr_p)
     return false;
@@ -10111,7 +10120,12 @@ cct_call_may_return_p (tree t, cct_env *env, int depth)
   if (call_expr_flags (t) & ECF_NORETURN)
     return false;
   tree fn = get_callee_fndecl (t);
-  if (fn && depth < 4 && DECL_SAVED_TREE (fn) && !DECL_CONSTRUCTOR_P (fn))
+  /* A constexpr callee already gimplified has no DECL_SAVED_TREE, but
+     cct_fn_may_return analyzes the body kept for constant evaluation, so
+     that the answer doesn't depend on the order functions are compiled
+     in.  */
+  if (fn && depth < 4 && !DECL_CONSTRUCTOR_P (fn)
+      && (DECL_SAVED_TREE (fn) || DECL_DECLARED_CONSTEXPR_P (fn)))
     return cct_fn_may_return (fn, env, depth + 1);
   return true;
 }
@@ -45780,9 +45794,14 @@ contract_operand_probe (tree operand, tree postcond_id)
    its usual errors); NULL_TREE otherwise, for the plain call with the
    context.  In CURRENT_FUNCTION_DECL, where the check is.  */
 
+/* The operator() overloads of CTRL_TYPE, if a call of CTRL_OBJ (an
+   object of CTRL_TYPE) with CTX (an assertion_context) and the operands
+   of CONTRACT's condition finds a viable candidate; NULL_TREE otherwise,
+   for the plain call with the context.  */
+
 static tree
-contract_control_operand_call (tree contract, tree ctrl_type, tree ctrl_var,
-			       tree ctx_var, tsubst_flags_t complain)
+contract_control_operand_overloads (tree contract, tree ctrl_type,
+				    tree ctrl_obj, tree ctx)
 {
   vec<tree, va_gc> *operands = contract_condition_operands (contract);
   if (!operands)
@@ -45794,7 +45813,7 @@ contract_control_operand_call (tree contract, tree ctrl_type, tree ctrl_var,
   tree postcond_id = (POSTCONDITION_P (contract)
 		      ? POSTCONDITION_IDENTIFIER (contract) : NULL_TREE);
   releasing_vec probe;
-  vec_safe_push (probe, ctx_var);
+  vec_safe_push (probe, ctx);
   for (tree o : *operands)
     {
       tree e = contract_operand_probe (o, postcond_id);
@@ -45802,9 +45821,23 @@ contract_control_operand_call (tree contract, tree ctrl_type, tree ctrl_var,
 	return NULL_TREE;
       vec_safe_push (probe, e);
     }
-  if (build_new_method_call (ctrl_var, fns, &probe, NULL_TREE, LOOKUP_NORMAL,
+  if (build_new_method_call (ctrl_obj, fns, &probe, NULL_TREE, LOOKUP_NORMAL,
 			     NULL, tf_any_viable) != void_node)
     return NULL_TREE;
+  return fns;
+}
+
+static tree
+contract_control_operand_call (tree contract, tree ctrl_type, tree ctrl_var,
+			       tree ctx_var, tsubst_flags_t complain)
+{
+  tree fns = contract_control_operand_overloads (contract, ctrl_type,
+						 ctrl_var, ctx_var);
+  if (!fns)
+    return NULL_TREE;
+  vec<tree, va_gc> *operands = contract_condition_operands (contract);
+  tree postcond_id = (POSTCONDITION_P (contract)
+		      ? POSTCONDITION_IDENTIFIER (contract) : NULL_TREE);
   releasing_vec cargs;
   vec_safe_push (cargs, ctx_var);
   for (tree o : *operands)
@@ -45814,13 +45847,178 @@ contract_control_operand_call (tree contract, tree ctrl_type, tree ctrl_var,
 	return NULL_TREE;
       vec_safe_push (cargs, e);
     }
+  auto ovr = make_temp_override
+    (suppress_conveyor_restrictions_for_control_call_p, true);
   return build_new_method_call (ctrl_var, fns, &cargs, NULL_TREE,
 				LOOKUP_NORMAL, NULL, complain);
 }
 
+/* walk_tree callback for contract_dispatch_remap: replace a decl DATA
+   maps.  */
+
+static tree
+contract_dispatch_remap_r (tree *tp, int *walk_subtrees, void *data)
+{
+  hash_map<tree, tree> *map = (hash_map<tree, tree> *) data;
+  if (TYPE_P (*tp))
+    *walk_subtrees = 0;
+  else if (DECL_P (*tp))
+    {
+      if (tree *r = map->get (*tp))
+	*tp = *r;
+      *walk_subtrees = 0;
+    }
+  return NULL_TREE;
+}
+
+/* A file-local 'void NAME (const CTRL_TYPE *c, const CTX_TYPE *x)' that
+   calls c->operator() with *x and the operands of CONTRACT's condition,
+   which it reads back from the capture block x->__args points to (laid
+   out as STRUCT_TYPE, for CORE_FN's parameters, see
+   build_predicate_thunk_function).  The check site calls it, with the
+   same two addresses it would give operator() (ctx) itself, so the
+   analyses see a check of the same shape whether or not the control
+   object takes the operands; like the thunk, it is a generated helper
+   they don't analyze (ldf_contract_predicate_helper).  NULL_TREE if an
+   operand can't be read back.  */
+
+static tree
+build_contract_dispatch_function (tree contract, tree core_fn,
+				  tree struct_type, tree ctrl_type,
+				  tree ctx_type, tree fns)
+{
+  location_t loc = EXPR_LOCATION (contract);
+  vec<tree, va_gc> *operands = contract_condition_operands (contract);
+  tree postcond_id = (POSTCONDITION_P (contract)
+		      ? POSTCONDITION_IDENTIFIER (contract) : NULL_TREE);
+
+  tree args_field = NULL_TREE;
+  for (tree f = TYPE_FIELDS (ctx_type); f; f = DECL_CHAIN (f))
+    if (TREE_CODE (f) == FIELD_DECL && DECL_NAME (f)
+	&& id_equal (DECL_NAME (f), "__args"))
+      args_field = f;
+  if (!args_field)
+    return NULL_TREE;
+
+  /* Each decl an operand names, and the index of the core function's
+     parameter (so the capture block's field) it is captured as.  */
+  auto_vec<tree> core_parms;
+  for (tree cp = DECL_ARGUMENTS (core_fn); cp; cp = DECL_CHAIN (cp))
+    core_parms.safe_push (cp);
+  auto_vec<std::pair<tree, unsigned>> captured;
+  for (tree o : *operands)
+    {
+      tree base = o;
+      while (handled_component_p (base) || INDIRECT_REF_P (base)
+	     || TREE_CODE (base) == NOP_EXPR)
+	base = TREE_OPERAND (base, 0);
+      if (!DECL_P (base))
+	return NULL_TREE;
+      unsigned idx = core_parms.length ();
+      /* A postcondition's result is the core function's last parameter
+	 (see build_contract_mark_struct_type).  */
+      if (postcond_id
+	  && (base == postcond_id || TREE_CODE (base) == RESULT_DECL)
+	  && !core_parms.is_empty ())
+	idx = core_parms.length () - 1;
+      else
+	{
+	  tree cp = contract_predicate_core_parm (core_fn, base);
+	  for (unsigned i = 0; i < core_parms.length (); ++i)
+	    if (core_parms[i] == cp)
+	      idx = i;
+	}
+      if (idx == core_parms.length ())
+	return NULL_TREE;
+      captured.safe_push ({ base, idx });
+    }
+
+  tree ctrl_ptr = build_pointer_type (cp_build_qualified_type
+				      (ctrl_type, TYPE_QUAL_CONST));
+  tree ctx_ptr = build_pointer_type (cp_build_qualified_type
+				     (ctx_type, TYPE_QUAL_CONST));
+  tree arg_types = tree_cons (NULL_TREE, ctrl_ptr,
+			      tree_cons (NULL_TREE, ctx_ptr, void_list_node));
+  tree fn_type = build_function_type (void_type_node, arg_types);
+  tree name = clone_function_name_numbered (core_fn, "dispatch");
+  tree fn = build_lang_decl_loc (loc, FUNCTION_DECL, name, fn_type);
+  DECL_CONTEXT (fn) = NULL_TREE;
+  DECL_SOURCE_LOCATION (fn) = loc;
+  SET_DECL_ASSEMBLER_NAME (fn, name);
+  tree c = build_lang_decl (PARM_DECL, get_identifier ("c"), ctrl_ptr);
+  tree x = build_lang_decl (PARM_DECL, get_identifier ("x"), ctx_ptr);
+  DECL_CONTEXT (c) = DECL_CONTEXT (x) = fn;
+  DECL_ARTIFICIAL (c) = DECL_ARTIFICIAL (x) = 1;
+  DECL_CHAIN (c) = x;
+  DECL_ARGUMENTS (fn) = c;
+  DECL_RESULT (fn) = NULL_TREE;
+  TREE_STATIC (fn) = 1;
+  TREE_USED (fn) = 1;
+  DECL_ARTIFICIAL (fn) = 1;
+  TREE_PUBLIC (fn) = 0;
+  DECL_EXTERNAL (fn) = 0;
+  DECL_INTERFACE_KNOWN (fn) = 1;
+  contract_helper_linkage (fn, core_fn);
+  CONTRACT_HELPER (fn) = ldf_contract_predicate_helper;
+  suppress_warning (fn);
+
+  push_to_top_level ();
+  start_preparsed_function (fn, NULL_TREE, SF_PRE_PARSED | SF_DEFAULT);
+  /* As in build_predicate_thunk_function: the call below may throw.  */
+  cp_function_chain->can_throw = true;
+  tree body = begin_function_body ();
+
+  /* The capture block, and each captured decl's value read back from it:
+     its address is in the field, or for a reference its value.  */
+  tree xd = build_simple_mem_ref (x);
+  tree argsv = build3 (COMPONENT_REF, TREE_TYPE (args_field), xd, args_field,
+		       NULL_TREE);
+  tree block = build_simple_mem_ref
+    (build1 (NOP_EXPR, build_pointer_type (struct_type), argsv));
+  hash_map<tree, tree> map;
+  for (auto &p : captured)
+    {
+      tree addr = capture_slot (block, p.second);
+      tree ptype = TREE_TYPE (core_parms[p.second]);
+      tree val = (TYPE_REF_P (TREE_TYPE (p.first))
+		  ? fold_convert (TREE_TYPE (p.first), addr)
+		  : build_simple_mem_ref (fold_convert
+					  (build_pointer_type
+					   (non_reference (ptype)), addr)));
+      map.put (p.first, val);
+    }
+
+  releasing_vec cargs;
+  vec_safe_push (cargs, xd);
+  for (tree o : *operands)
+    {
+      tree r = unshare_expr (o);
+      walk_tree (&r, contract_dispatch_remap_r, &map, NULL);
+      tree e = contract_operand_at_check (r, postcond_id);
+      if (!e)
+	e = error_mark_node;
+      vec_safe_push (cargs, e);
+    }
+  tree call;
+  {
+    auto ovr = make_temp_override
+      (suppress_conveyor_restrictions_for_control_call_p, true);
+    call = build_new_method_call (build_simple_mem_ref (c), fns, &cargs,
+				  NULL_TREE, LOOKUP_NORMAL, NULL,
+				  tf_warning_or_error);
+  }
+  finish_expr_stmt (call);
+  finish_function_body (body);
+  fn = finish_function (/*inline_p=*/false);
+  contract_helper_expand_or_defer_fn (fn);
+  pop_from_top_level ();
+  return error_operand_p (call) ? NULL_TREE : fn;
+}
+
 static tree
 build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
-			      tree args_ptr, tree thunk_fn)
+			      tree args_ptr, tree thunk_fn, tree core_fn,
+			      tree struct_type)
 {
   contract_config_scope ccs (contract, current_function_decl);
   location_t loc = EXPR_LOCATION (contract);
@@ -45921,18 +46119,29 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
   if (SCALAR_TYPE_P (result_type) || VOID_TYPE_P (result_type))
     result_type = cv_unqualified (result_type);
 
-  /* The operands of the condition, after the context, if overload
-     resolution for that call finds any viable candidate; otherwise
-     OP (ctx), as before.  */
-  if (tree call = contract_control_operand_call (contract, ctrl_type,
-						 ctrl_var, ctx_var,
-						 tf_warning_or_error))
-    {
-      mark_used (op);
-      return call;
-    }
-
   tree ctx_arg = fold_convert (t_ctx, build_fold_addr_expr (ctx_var));
+
+  /* The operands of the condition, after the context, if overload
+     resolution for that call finds any viable candidate, through a
+     generated helper (build_contract_dispatch_function); otherwise
+     OP (ctx), as before.  */
+  if (tree fns = contract_control_operand_overloads (contract, ctrl_type,
+						     ctrl_var, ctx_var))
+    if (tree dispatch = build_contract_dispatch_function
+	  (contract, core_fn, struct_type, ctrl_type, ctx_type, fns))
+      {
+	mark_used (op);
+	tree dargs[2]
+	  = { fold_convert (TREE_VALUE (TYPE_ARG_TYPES (TREE_TYPE (dispatch))),
+			    build_fold_addr_expr (ctrl_var)),
+	      fold_convert (TREE_VALUE (TREE_CHAIN
+					(TYPE_ARG_TYPES (TREE_TYPE (dispatch)))),
+			    build_fold_addr_expr (ctx_var)) };
+	return build_call_array_loc (loc, void_type_node,
+				     build_addr_func (dispatch,
+						      tf_warning_or_error),
+				     2, dargs);
+      }
 
   tree args[2] = { this_arg, ctx_arg };
   mark_used (op);
@@ -46550,7 +46759,8 @@ build_symbolic_runtime_check (tree contract, tree ctrl, location_t loc,
 						       cc_bind, loc);
       finish_expr_stmt (build_contract_control_call (contract, ctrl, control_op,
 						      cc_bind, args_ptr,
-						      thunk_fn));
+						      thunk_fn, core_fn,
+						      struct_type));
     }
 
   BIND_EXPR_BODY (cc_bind) = pop_stmt_list (BIND_EXPR_BODY (cc_bind));
@@ -46872,7 +47082,8 @@ build_contract_check (tree contract)
 						       cc_bind, loc);
       finish_expr_stmt (build_contract_control_call (contract, ctrl, control_op,
 						      cc_bind, args_ptr,
-						      thunk_fn));
+						      thunk_fn, core_fn,
+						      struct_type));
     }
   else
     {
