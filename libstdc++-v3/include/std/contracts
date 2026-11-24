@@ -934,6 +934,109 @@ namespace contracts
 
   inline constexpr default_control default_v{};
 
+  // A contract group's name, as "name"group writes it: what annotated
+  // takes to tell a group from a message.
+  struct group_name
+  {
+    const char* _M_name = nullptr;
+  };
+
+  // Not inline, so that 'using namespace std::contracts;' doesn't make
+  // this literal compete with <contract_labels>' P3400 one: a user opts
+  // in with 'using namespace std::contracts::literals;'.
+  namespace literals
+  {
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wliteral-suffix"
+    constexpr group_name
+    operator""group(const char* __s, __SIZE_TYPE__) noexcept
+    { return group_name{__s}; }
+#pragma GCC diagnostic pop
+  }
+
+  // default_control with a group, a message, or both:
+  //   pre<annotated("lib.io"group, "x must be positive")>
+  //   pre<annotated("lib.io"group)>
+  //   pre<annotated("x must be positive")>
+  // groups() gives the group, if any, for a configuration's "group" rules
+  // to match; a violation reports the message, if any, to the violation
+  // handler alongside the comment.
+  class annotated
+  {
+    const char* _M_group = nullptr;
+    const char* _M_message = nullptr;
+
+    // A range of at most one name: the group, or none.
+    struct __groups
+    {
+      const char* const* _M_begin;
+      const char* const* _M_end;
+      constexpr const char* const* begin() const noexcept { return _M_begin; }
+      constexpr const char* const* end() const noexcept { return _M_end; }
+    };
+
+  public:
+    constexpr explicit
+    annotated(group_name __g) noexcept
+    : _M_group(__g._M_name) { }
+
+    constexpr
+    annotated(group_name __g, const char* __message) noexcept
+    : _M_group(__g._M_name), _M_message(__message) { }
+
+    constexpr explicit
+    annotated(const char* __message) noexcept
+    : _M_message(__message) { }
+
+    constexpr const char* group() const noexcept { return _M_group; }
+    constexpr const char* message() const noexcept { return _M_message; }
+
+    constexpr __groups
+    groups() const noexcept
+    { return { &_M_group, &_M_group + (_M_group != nullptr) }; }
+
+    static constexpr bool
+    is_ignored(assertion_static_info __info) noexcept
+    { return default_control::is_ignored(__info); }
+
+    static constexpr bool
+    constify(assertion_static_info __info) noexcept
+    { return default_control::constify(__info); }
+
+    static constexpr bool
+    assumable(assertion_static_info __info) noexcept
+    { return default_control::assumable(__info); }
+
+    // As default_control's, with the message.
+    constexpr void
+    operator()(const assertion_context& __ctx) const
+    {
+      if (__ctx.check())
+	return;
+      const char* __what = _M_message ? _M_message : __ctx.comment();
+      if consteval
+	{
+	  if (__ctx.semantic() == evaluation_semantic::observe)
+	    constexpr_warning_str ("contract", __what);
+	  else
+	    constexpr_error_str ("contract", __what);
+	}
+      else
+	{
+	  if (__ctx.semantic() != evaluation_semantic::quick_enforce)
+	    {
+	      assertion_info __info{__ctx.comment(), __ctx.location(),
+				    __ctx.semantic(), __ctx.kind()};
+	      __info.set_message(_M_message);
+	      invoke_violation_handler(__info,
+				       detection_mode::predicate_false);
+	    }
+	  if (__ctx.semantic() != evaluation_semantic::observe)
+	    __d4324_terminate_wrapper();
+	}
+    }
+  };
+
   struct review {
     static constexpr bool
     is_ignored(assertion_static_info __info) noexcept

@@ -1065,8 +1065,10 @@ export namespace std::contracts
   using std::contracts::contract_validation_result;
   using std::contracts::conveyor_assert;
   using std::contracts::conveyor_assert_v;
+  using std::contracts::annotated;
   using std::contracts::default_control;
   using std::contracts::default_v;
+  using std::contracts::group_name;
   using std::contracts::group_semantic_rule;
   using std::contracts::group_semantic_rules_view;
   using std::contracts::ignore;
@@ -1096,6 +1098,10 @@ export namespace std::contracts
 export namespace std
 {
   using std::is_object_address;
+}
+export namespace std::contracts::literals
+{
+  using std::contracts::literals::operator""group;
 }
 #endif // __cpp_lib_contracts
 
