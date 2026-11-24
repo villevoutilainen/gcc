@@ -11,7 +11,6 @@
 #include <contracts>
 #include <cstring>
 using namespace std::contracts;
-using namespace std::contracts::literals;
 
 int calls;
 const char *last_message;

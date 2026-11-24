@@ -890,6 +890,13 @@ namespace contracts
       { __builtin_constexpr_diag(2 | 16, __tag, __msg); }
   }
 
+  // The control objects, and the "name"group literal.  Inline, so that
+  // they are std::contracts:: names as well: 'using namespace
+  // std::contracts::controls;' brings in just these, and
+  // 'namespace SC = std::contracts::controls;' names them.
+  inline namespace controls
+  {
+
   struct default_control {
     static constexpr bool
     is_ignored(assertion_static_info __info) noexcept
@@ -934,25 +941,109 @@ namespace contracts
 
   inline constexpr default_control default_v{};
 
-  // A contract group's name, as "name"group writes it: what annotated
-  // takes to tell a group from a message.
+  // Whether the group a rule names, RULE, covers the group NAME: NAME
+  // itself, or any group nested in it by a dotted suffix -- "lib" covers
+  // "lib" and "lib.io", not "library".
+  constexpr bool
+  __group_matches(const char* __rule, const char* __name) noexcept
+  {
+    if (!__rule || !__name)
+      return false;
+    while (*__rule && *__rule == *__name)
+      {
+	++__rule;
+	++__name;
+      }
+    return *__rule == '\0' && (*__name == '\0' || *__name == '.');
+  }
+
+  // The semantic for an assertion in group GROUP (none if null): the
+  // first -fcontracts-group-evaluation-semantic= rule covering it, else
+  // the configured one.  (A P3595 configuration's "group" rules have
+  // already given INFO's semantic, through groups().)
+  constexpr evaluation_semantic
+  __group_semantic(const char* __group, assertion_static_info __info) noexcept
+  {
+    if (__group)
+      for (const group_semantic_rule& __rule : __info.group_semantic_rules())
+	if (__group_matches(__rule.group_name(), __group))
+	  return __rule.semantic();
+    return __info.semantic();
+  }
+
+  // What a default_control-like control object does for an assertion
+  // whose semantic is SEM: report a false predicate, with MESSAGE (if
+  // not null) alongside the comment, and terminate unless observing.
+  constexpr void
+  __default_check(const assertion_context& __ctx, evaluation_semantic __sem,
+		  const char* __message)
+  {
+    if (__ctx.check())
+      return;
+    const char* __what = __message ? __message : __ctx.comment();
+    if consteval
+      {
+	if (__sem == evaluation_semantic::observe)
+	  constexpr_warning_str ("contract", __what);
+	else
+	  constexpr_error_str ("contract", __what);
+      }
+    else
+      {
+	// quick_enforce terminates at once, without the violation handler.
+	if (__sem != evaluation_semantic::quick_enforce)
+	  {
+	    assertion_info __info{__ctx.comment(), __ctx.location(), __sem,
+				  __ctx.kind()};
+	    __info.set_message(__message);
+	    invoke_violation_handler(__info, detection_mode::predicate_false);
+	  }
+	if (__sem != evaluation_semantic::observe)
+	  __d4324_terminate_wrapper();
+      }
+  }
+
+  // A range of at most one name: *_M_name, or none if it is null.
+  struct __one_group
+  {
+    const char* const* _M_name;
+    constexpr const char* const* begin() const noexcept { return _M_name; }
+    constexpr const char* const* end() const noexcept
+    { return _M_name + (*_M_name != nullptr); }
+  };
+
+  // A contract group's name, as "name"group writes it.  It is a control
+  // object, default_control in that group, and what annotated takes to
+  // tell a group from a message.
   struct group_name
   {
     const char* _M_name = nullptr;
+
+    constexpr __one_group
+    groups() const noexcept
+    { return { &_M_name }; }
+
+    constexpr bool
+    is_ignored(assertion_static_info __info) const noexcept
+    { return __group_semantic(_M_name, __info) == evaluation_semantic::ignore; }
+
+    static constexpr bool
+    constify(assertion_static_info) noexcept { return false; }
+    static constexpr bool
+    assumable(assertion_static_info) noexcept { return false; }
+
+    constexpr void
+    operator()(const assertion_context& __ctx) const
+    { __default_check(__ctx, __group_semantic(_M_name, __ctx.static_info()),
+		      nullptr); }
   };
 
-  // Not inline, so that 'using namespace std::contracts;' doesn't make
-  // this literal compete with <contract_labels>' P3400 one: a user opts
-  // in with 'using namespace std::contracts::literals;'.
-  namespace literals
-  {
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wliteral-suffix"
-    constexpr group_name
-    operator""group(const char* __s, __SIZE_TYPE__) noexcept
-    { return group_name{__s}; }
+  constexpr group_name
+  operator""group(const char* __s, __SIZE_TYPE__) noexcept
+  { return group_name{__s}; }
 #pragma GCC diagnostic pop
-  }
 
   // default_control with a group, a message, or both:
   //   pre<annotated("lib.io"group, "x must be positive")>
@@ -965,15 +1056,6 @@ namespace contracts
   {
     const char* _M_group = nullptr;
     const char* _M_message = nullptr;
-
-    // A range of at most one name: the group, or none.
-    struct __groups
-    {
-      const char* const* _M_begin;
-      const char* const* _M_end;
-      constexpr const char* const* begin() const noexcept { return _M_begin; }
-      constexpr const char* const* end() const noexcept { return _M_end; }
-    };
 
   public:
     constexpr explicit
@@ -991,50 +1073,23 @@ namespace contracts
     constexpr const char* group() const noexcept { return _M_group; }
     constexpr const char* message() const noexcept { return _M_message; }
 
-    constexpr __groups
+    constexpr __one_group
     groups() const noexcept
-    { return { &_M_group, &_M_group + (_M_group != nullptr) }; }
+    { return { &_M_group }; }
+
+    constexpr bool
+    is_ignored(assertion_static_info __info) const noexcept
+    { return __group_semantic(_M_group, __info) == evaluation_semantic::ignore; }
 
     static constexpr bool
-    is_ignored(assertion_static_info __info) noexcept
-    { return default_control::is_ignored(__info); }
-
+    constify(assertion_static_info) noexcept { return false; }
     static constexpr bool
-    constify(assertion_static_info __info) noexcept
-    { return default_control::constify(__info); }
+    assumable(assertion_static_info) noexcept { return false; }
 
-    static constexpr bool
-    assumable(assertion_static_info __info) noexcept
-    { return default_control::assumable(__info); }
-
-    // As default_control's, with the message.
     constexpr void
     operator()(const assertion_context& __ctx) const
-    {
-      if (__ctx.check())
-	return;
-      const char* __what = _M_message ? _M_message : __ctx.comment();
-      if consteval
-	{
-	  if (__ctx.semantic() == evaluation_semantic::observe)
-	    constexpr_warning_str ("contract", __what);
-	  else
-	    constexpr_error_str ("contract", __what);
-	}
-      else
-	{
-	  if (__ctx.semantic() != evaluation_semantic::quick_enforce)
-	    {
-	      assertion_info __info{__ctx.comment(), __ctx.location(),
-				    __ctx.semantic(), __ctx.kind()};
-	      __info.set_message(_M_message);
-	      invoke_violation_handler(__info,
-				       detection_mode::predicate_false);
-	    }
-	  if (__ctx.semantic() != evaluation_semantic::observe)
-	    __d4324_terminate_wrapper();
-	}
-    }
+    { __default_check(__ctx, __group_semantic(_M_group, __ctx.static_info()),
+		      _M_message); }
   };
 
   struct review {
@@ -1786,6 +1841,8 @@ namespace contracts
   };
 
   inline constexpr assume assume_v{};
+
+  } // inline namespace controls
 
 } // namespace contracts
 

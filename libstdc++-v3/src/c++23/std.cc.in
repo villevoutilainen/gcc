@@ -1043,10 +1043,6 @@ export namespace std::contracts
   using std::contracts::contract_violation;
   using std::contracts::invoke_default_contract_violation_handler;
   // D4324
-  using std::contracts::analyzed_conveyor_t;
-  using std::contracts::analyzed_conveyor_v;
-  using std::contracts::analyzed_symbolic_t;
-  using std::contracts::analyzed_symbolic_v;
   using std::contracts::assertion_check_side;
   using std::contracts::assertion_context;
   using std::contracts::assertion_control;
@@ -1055,53 +1051,57 @@ export namespace std::contracts
 #if __cpp_impl_reflection
   using std::contracts::assertion_declaration_info;
 #endif
-  using std::contracts::assume;
-  using std::contracts::assume_v;
   using std::contracts::base_contract;
   using std::contracts::constexpr_error_str;
   using std::contracts::constexpr_message;
   using std::contracts::constexpr_print_str;
   using std::contracts::constexpr_warning_str;
   using std::contracts::contract_validation_result;
-  using std::contracts::conveyor_assert;
-  using std::contracts::conveyor_assert_v;
-  using std::contracts::annotated;
-  using std::contracts::default_control;
-  using std::contracts::default_v;
-  using std::contracts::group_name;
   using std::contracts::group_semantic_rule;
   using std::contracts::group_semantic_rules_view;
-  using std::contracts::ignore;
-  using std::contracts::ignore_v;
   using std::contracts::invoke_violation_handler;
   using std::contracts::evaluate_with;
 #if __has_builtin(__builtin_contract_static_info)
   using std::contracts::assertion_info_for;
 #endif
-  using std::contracts::mandatory;
-  using std::contracts::mandatory_v;
-  using std::contracts::never_proven_conveyor;
-  using std::contracts::never_proven_conveyor_v;
-  using std::contracts::never_proven_symbolic;
-  using std::contracts::never_proven_symbolic_v;
-  using std::contracts::noexcept_assert;
-  using std::contracts::noexcept_assert_v;
-  using std::contracts::proven_conveyor_t;
-  using std::contracts::proven_conveyor_v;
-  using std::contracts::proven_symbolic_t;
-  using std::contracts::proven_symbolic_v;
-  using std::contracts::review;
-  using std::contracts::review_v;
-  using std::contracts::symbolic_assert;
-  using std::contracts::symbolic_assert_v;
 }
 export namespace std
 {
   using std::is_object_address;
 }
-export namespace std::contracts::literals
+export namespace std::contracts::inline controls
 {
-  using std::contracts::literals::operator""group;
+  using std::contracts::controls::analyzed_conveyor_t;
+  using std::contracts::controls::analyzed_conveyor_v;
+  using std::contracts::controls::analyzed_symbolic_t;
+  using std::contracts::controls::analyzed_symbolic_v;
+  using std::contracts::controls::annotated;
+  using std::contracts::controls::assume;
+  using std::contracts::controls::assume_v;
+  using std::contracts::controls::conveyor_assert;
+  using std::contracts::controls::conveyor_assert_v;
+  using std::contracts::controls::default_control;
+  using std::contracts::controls::default_v;
+  using std::contracts::controls::group_name;
+  using std::contracts::controls::ignore;
+  using std::contracts::controls::ignore_v;
+  using std::contracts::controls::mandatory;
+  using std::contracts::controls::mandatory_v;
+  using std::contracts::controls::never_proven_conveyor;
+  using std::contracts::controls::never_proven_conveyor_v;
+  using std::contracts::controls::never_proven_symbolic;
+  using std::contracts::controls::never_proven_symbolic_v;
+  using std::contracts::controls::noexcept_assert;
+  using std::contracts::controls::noexcept_assert_v;
+  using std::contracts::controls::proven_conveyor_t;
+  using std::contracts::controls::proven_conveyor_v;
+  using std::contracts::controls::proven_symbolic_t;
+  using std::contracts::controls::proven_symbolic_v;
+  using std::contracts::controls::review;
+  using std::contracts::controls::review_v;
+  using std::contracts::controls::symbolic_assert;
+  using std::contracts::controls::symbolic_assert_v;
+  using std::contracts::controls::operator""group;
 }
 #endif // __cpp_lib_contracts
 

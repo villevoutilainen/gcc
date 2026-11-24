@@ -347,16 +347,7 @@ namespace contracts
     // own that reads group_semantic_rules() can use it too.
     constexpr bool
     group_matches (const char* __rule, const char* __name) noexcept
-    {
-      if (!__rule || !__name)
-	return false;
-      while (*__rule && *__rule == *__name)
-	{
-	  ++__rule;
-	  ++__name;
-	}
-      return *__rule == '\0' && (*__name == '\0' || *__name == '.');
-    }
+    { return __group_matches (__rule, __name); }
 
     // ---- group_semantic_rules()-driven group configuration ----
     //
@@ -735,51 +726,37 @@ namespace contracts
     };
     inline constexpr audit_t audit{};
 
-    // ---- Grouping labels: assertion_group_label<N> + operator""group ----
+    // ---- Grouping labels: "name"group ----
+    //
+    // "name"group is <contracts>' literal (std::contracts::controls), so
+    // that a translation unit using both std::contracts and this
+    // namespace sees one.  Its group_name is a control object of its own,
+    // so pre<"name"group>(...) works as P3400 writes it; combined with a
+    // label, it becomes a __group_name_label.
 
-    // A class-type non-type template parameter (needs a fixed-size,
-    // structural-comparable char array, not a pointer -- matching the
-    // paper's own __assertion_group_label<N> design, not the raw
-    // const-char*-based group_name_view used elsewhere in this file).
-    template <__SIZE_TYPE__ _Nm>
-    struct assertion_group_label_t
+    // Visible through 'using namespace std::contracts::P3400;' too: the
+    // same literal, so never ambiguous with <contracts>' own.
+    using std::contracts::controls::operator""group;
+
+    // A group_name as a P3400 label: one group name, held by value.
+    struct __group_name_label : label_base<__group_name_label>
     {
-      char _M_name[_Nm] = {};
+      using assertion_control_object = __group_name_label;
+
+      struct __names
+      {
+	const char* _M_name;
+	constexpr const char* const* begin () const noexcept { return &_M_name; }
+	constexpr const char* const* end () const noexcept
+	{ return &_M_name + (_M_name != nullptr); }
+      };
+      __names group_names;
 
       constexpr
-      assertion_group_label_t (const char (&__name)[_Nm]) noexcept
-      {
-	for (__SIZE_TYPE__ __i = 0; __i != _Nm; ++__i)
-	  _M_name[__i] = __name[__i];
-      }
+      __group_name_label (group_name __g) noexcept
+      : group_names{ __g._M_name }
+      { }
     };
-
-    template <assertion_group_label_t _Label>
-    struct __group_result_t : label_base<__group_result_t<_Label>>
-    {
-      using assertion_control_object = __group_result_t;
-      static constexpr const char* _S_names[1] = { _Label._M_name };
-      static constexpr group_name_view group_names{ _S_names, 1 };
-    };
-
-    // operator""group's own suffix ("group") isn't underscore-prefixed
-    // -- like every other genuinely-reserved literal-operator suffix
-    // this library defines (see basic_string's own operator""s in
-    // bits/basic_string.h for the identical push/ignored/pop pattern),
-    // this needs an explicit -Wliteral-suffix suppression: the warning
-    // is a blanket "no non-underscore suffix" check with no built-in
-    // notion of which suffixes are actually standard-reserved -- that
-    // distinction only exists by convention, enforced here by hand.
-    // Without this, a -pedantic-errors build fails to compile any
-    // translation unit that transitively includes <contract_labels> at
-    // all, found via a full, unfiltered testsuite sweep.
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wliteral-suffix"
-    template <assertion_group_label_t _Label>
-    constexpr auto
-    operator""group () noexcept
-    { return __group_result_t<_Label>{}; }
-#pragma GCC diagnostic pop
 
     // ---- dimension_list<...> combination utilities (Section 3.3.3) ----
 
@@ -842,45 +819,29 @@ namespace contracts
 
     // ---- combined_label<LHS, RHS> + operator| (Section 3.4.3) ----
 
-    // A small range-like proxy concatenating two group_name_views
-    // without needing to build a new, physically-contiguous array.
+    // A combined label's group names, held by value: no pointer into the
+    // label itself, so a label used as a temporary (pre<a | b>) is still
+    // a constant expression.
     struct __combined_group_names
     {
-      group_name_view _M_lhs{};
-      group_name_view _M_rhs{};
+      static constexpr __SIZE_TYPE__ _S_max = 16;
+      const char* _M_names[_S_max] = {};
+      __SIZE_TYPE__ _M_size = 0;
 
-      struct iterator
+      constexpr const char* const* begin () const noexcept { return _M_names; }
+      constexpr const char* const* end () const noexcept { return _M_names + _M_size; }
+
+      template <typename _Names>
+      constexpr void
+      __append (const _Names& __names)
       {
-	const char* const* _M_cur;
-	const char* const* _M_lhs_end;
-	const char* const* _M_rhs_cur;
-
-	constexpr const char*
-	operator* () const noexcept
-	{ return (_M_cur != _M_lhs_end) ? *_M_cur : *_M_rhs_cur; }
-
-	constexpr iterator&
-	operator++ () noexcept
-	{
-	  if (_M_cur != _M_lhs_end)
-	    ++_M_cur;
-	  else
-	    ++_M_rhs_cur;
-	  return *this;
-	}
-
-	constexpr bool
-	operator!= (const iterator& __o) const noexcept
-	{ return _M_cur != __o._M_cur || _M_rhs_cur != __o._M_rhs_cur; }
-      };
-
-      constexpr iterator
-      begin () const noexcept
-      { return { _M_lhs.begin (), _M_lhs.end (), _M_rhs.begin () }; }
-
-      constexpr iterator
-      end () const noexcept
-      { return { _M_lhs.end (), _M_lhs.end (), _M_rhs.end () }; }
+	for (const char* __name : __names)
+	  {
+	    if (_M_size == _S_max)
+	      __builtin_unreachable (); // more group names than a label holds
+	    _M_names[_M_size++] = __name;
+	  }
+      }
     };
 
     template <typename _LHS, typename _RHS>
@@ -907,13 +868,12 @@ namespace contracts
       static constexpr __combined_group_names
       __compute_group_names (const _LHS& __l, const _RHS& __r) noexcept
       {
-	group_name_view __lv{};
-	group_name_view __rv{};
+	__combined_group_names __names;
 	if constexpr (identification_label<_LHS>)
-	  __lv = __l.group_names;
+	  __names.__append (__l.group_names);
 	if constexpr (identification_label<_RHS>)
-	  __rv = __r.group_names;
-	return { __lv, __rv };
+	  __names.__append (__r.group_names);
+	return __names;
       }
 
       constexpr
@@ -1036,6 +996,21 @@ namespace contracts
     constexpr combined_label<_LHS, _RHS>
     operator| (const _LHS& __lhs, const _RHS& __rhs) noexcept
     { return combined_label<_LHS, _RHS> (__lhs, __rhs); }
+
+    // "name"group combined with a label, or with another "name"group.
+    template <assertion_control_object _RHS>
+    constexpr combined_label<__group_name_label, _RHS>
+    operator| (group_name __lhs, const _RHS& __rhs) noexcept
+    { return { __group_name_label (__lhs), __rhs }; }
+
+    template <assertion_control_object _LHS>
+    constexpr combined_label<_LHS, __group_name_label>
+    operator| (const _LHS& __lhs, group_name __rhs) noexcept
+    { return { __lhs, __group_name_label (__rhs) }; }
+
+    constexpr combined_label<__group_name_label, __group_name_label>
+    operator| (group_name __lhs, group_name __rhs) noexcept
+    { return { __group_name_label (__lhs), __group_name_label (__rhs) }; }
 
   } // namespace P3400
 
