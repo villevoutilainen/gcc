@@ -9,9 +9,7 @@
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 
-// Not <contracts>, which includes <format>: this test declares
-// names <compare> and <cstdlib> do.  Any header brings in the core.
-#include <cstddef>
+#include <contracts>
 
 namespace std {
 struct strong_ordering {

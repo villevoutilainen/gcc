@@ -1,8 +1,9 @@
 // D4324: <contracts>' control objects print a violated assertion's
-// operands into the violation's message with std::format, whatever it
-// can format (a user's own formatter included), and anything else as
-// the library's simple printing does; a message given to the control
-// object comes first.  The comment stays the condition's text.
+// operands as the library's own do, simply, without std::format: a
+// class, even one with a formatter, as '?' (std::contracts::
+// format_operands_to, in <format>, uses its formatter).  A message given
+// to the control object comes first; the comment stays the condition's
+// text.
 // { dg-do run { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-evaluation-semantic=observe" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
@@ -24,7 +25,7 @@ handle_contract_violation (const std::contracts::contract_violation& v)
   std::strcpy (message, v.message () ? v.message () : "(null)");
 }
 
-struct P { int a; };	// formattable
+struct P { int a; };	// formattable, but not printed simply
 template<>
 struct std::formatter<P> : std::formatter<int>
 {
@@ -54,9 +55,9 @@ int
 main ()
 {
   d (-1, 0.1, "str");
-  expect ("x > 0 && v < 0.1 && s == \"\"", "-1 > 0 && 0.1 < 0.1 && \"str\" == \"\"");
+  expect ("x > 0 && v < 0.1 && s == \"\"", "-1 > 0 && 0.10000000000000001 < 0.1 && \"str\" == \"\"");
   r (P{7}, Q{8});
-  expect ("ok (p) && ok (q)", "ok (700) && ok (?)");
+  expect ("ok (p) && ok (q)", "ok (?) && ok (?)");
   m (-2);
   expect ("x > 0", "x must be positive: -2 > 0");
   if (calls != 3)

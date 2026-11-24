@@ -6807,6 +6807,114 @@ namespace __format
 #undef _GLIBCXX_WIDEN
 #undef _GLIBCXX_CONSTEXPR_FORMAT
 
+#if __glibcxx_contracts
+namespace contracts
+{
+  // Formatting a violated assertion's operands with std::format, for a
+  // control object of the user's own: here, not in <contracts>, so that
+  // using contracts doesn't mean including <format>.  The library's own
+  // control objects print them simply (<bits/contracts.h>).
+inline namespace controls
+{
+  // An operand of a violated assertion, printed with std::format if it
+  // can be (in a hosted build) -- with the debug format ({:?}) where its
+  // formatter has one, so strings and characters are quoted and escaped
+  // -- else as __simple_print prints it.
+  template<typename _Tp>
+    void
+    __rich_print_erased(__contract_text& __out, const void* __p)
+    {
+      const _Tp& __v = *static_cast<const _Tp*>(__p);
+      if constexpr (std::formattable<_Tp, char>)
+	{
+	  constexpr bool __debug = requires (std::formatter<_Tp, char>& __f)
+	    { __f.set_debug_format(); };
+	  auto __write = [&]
+	    {
+	      __SIZE_TYPE__ __room = __out._M_end - __out._M_cur;
+	      if constexpr (__debug)
+		__out._M_cur = std::format_to_n(__out._M_cur, __room, "{:?}",
+						__v).out;
+	      else
+		__out._M_cur = std::format_to_n(__out._M_cur, __room, "{}",
+						__v).out;
+	    };
+	  if constexpr (std::is_scalar_v<_Tp>)
+	    // Can't throw: a valid format string for any scalar.
+	    __write();
+	  else
+	    {
+	      // A class's formatter may throw: the violation is still
+	      // reported.
+	      __try
+		{
+		  __write();
+		}
+	      __catch(...)
+		{
+		  __out.__put('?');
+		}
+	    }
+	}
+      else
+	__simple_print(__out, __v);
+    }
+
+
+} // inline namespace controls
+
+  // A violated assertion's condition with its operands' values, for a
+  // control object's operator () taking the operands after the context:
+  // CTX.static_info ().operand_format () with each operand's value in
+  // place ("5 < s.size ()"), then, in brackets, the operands it leaves as
+  // text ("[s: \"hello\"]"; 'this' only as the string it points to, for
+  // a std::string or std::string_view).  Printed with std::format where
+  // an operand can be (strings and characters quoted), else as simply as
+  // the library's own control objects print, '?' at worst.  Empty without
+  // a format string (-fcontract-violation-information=none).
+
+  // Into BUF, of N bytes: truncated if longer, always NUL-terminated (N
+  // at least 1); returns BUF.  Allocates nothing itself -- a user's own
+  // formatter may.
+  template<typename... _Ops>
+    const char*
+    format_operands_to(char* __buf, __SIZE_TYPE__ __n,
+		       const assertion_context& __ctx, const _Ops&... __ops)
+    {
+      const void* __ptrs[]
+	= { static_cast<const void*>(__builtin_addressof(__ops))..., nullptr };
+      const __operand_printer __print[]
+	= { &__rich_print_erased<_Ops>..., nullptr };
+      const __operand_printer __this_print[]
+	= { __deref_string_printer<_Ops>::value..., nullptr };
+      if (!__ctx.static_info().operand_format())
+	{
+	  __buf[0] = '\0';
+	  return __buf;
+	}
+      return __operand_message(__buf, __n, __ctx, nullptr, __ptrs, __print,
+			       __this_print, sizeof...(_Ops));
+    }
+
+  template<__SIZE_TYPE__ _Nm, typename... _Ops>
+    const char*
+    format_operands_to(char (&__buf)[_Nm], const assertion_context& __ctx,
+		       const _Ops&... __ops)
+    { return std::contracts::format_operands_to(+__buf, _Nm, __ctx, __ops...); }
+
+  // ... as a std::string (of at most 4095 characters).
+  template<typename... _Ops>
+    std::string
+    format_operands(const assertion_context& __ctx, const _Ops&... __ops)
+    {
+      char __buf[4096];
+      return std::string(std::contracts::format_operands_to(__buf, __ctx,
+							     __ops...));
+    }
+
+} // namespace contracts
+#endif // __glibcxx_contracts
+
 _GLIBCXX_END_NAMESPACE_VERSION
 } // namespace std
 #endif // __cpp_lib_format

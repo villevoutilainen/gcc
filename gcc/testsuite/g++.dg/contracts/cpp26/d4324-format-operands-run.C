@@ -1,4 +1,5 @@
-// D4324: std::contracts::format_operands_to and format_operands, for a
+// D4324: std::contracts::format_operands_to and format_operands (in
+// <format>), for a
 // control object of the user's own: a violated assertion's condition
 // with its operands' values in place, then, in brackets, the operands
 // the format string leaves as text (the objects of member calls), each
@@ -10,6 +11,7 @@
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
+#include <format>
 #include <cstring>
 #include <string>
 #include <tuple>
