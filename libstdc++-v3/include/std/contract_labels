@@ -433,6 +433,14 @@ namespace contracts
 	return __configured;
       }
 
+      // The P4324 groups() query, which a P3595 configuration's "group"
+      // key matches against, answered from the P3400 group_names facet
+      // (a data member, so it can't share the query's name).
+      constexpr const auto&
+      groups () const noexcept
+	requires identification_label<_Self>
+      { return static_cast<const _Self&> (*this).group_names; }
+
       constexpr evaluation_semantic
       __effective_semantic (evaluation_semantic __configured) const noexcept
       {

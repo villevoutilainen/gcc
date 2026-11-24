@@ -11,6 +11,7 @@
 #include <contracts>
 #include <contract_labels>
 #include <cstring>
+#include <span>
 using namespace std::contracts;
 using namespace std::contracts::P3400;
 
@@ -26,24 +27,18 @@ handle_contract_violation (const contract_violation& v)
     throw 0;
 }
 
-// group_names is a range of names: here at most one, none if null.
-struct one_name
-{
-  const char *name = nullptr;
-  constexpr const char *const *begin () const { return &name; }
-  constexpr const char *const *end () const { return &name + (name != nullptr); }
-};
-
 // A group and a message, given by a constructor; whichever isn't given
-// stays null.
+// stays null.  groups() returns a range of names: the group, or none.
 struct grouped
 {
-  one_name group_names;
+  const char *group = nullptr;
   const char *message = nullptr;
 
-  constexpr grouped (const char *g) : group_names{g} { }
-  constexpr grouped (const char *g, const char *m)
-    : group_names{g}, message (m) { }
+  constexpr grouped (const char *g) : group (g) { }
+  constexpr grouped (const char *g, const char *m) : group (g), message (m) { }
+
+  constexpr std::span<const char *const> groups () const
+  { return { &group, group != nullptr }; }
 
   static constexpr bool is_ignored (assertion_static_info i)
   { return i.semantic () == evaluation_semantic::ignore; }

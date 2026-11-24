@@ -1,5 +1,5 @@
 // D4324, QoI: the P3595 configuration's "group" key matches any of the
-// names in a control object's group_names, a range the compiler walks at
+// names a control object's groups() returns, a range the compiler walks at
 // compile time: a combined label is in both its operands' groups, and a
 // user's own control object may give its names any type with data()
 // (returning const char *) and size(), or const char *.
@@ -46,7 +46,7 @@ struct mine_ctrl
   { return i.semantic () == std::contracts::evaluation_semantic::ignore; }
   static constexpr bool constify (std::contracts::assertion_static_info) { return false; }
   static constexpr bool assumable (std::contracts::assertion_static_info) { return false; }
-  static constexpr names group_names { my_names, my_names + 2 };
+  static constexpr names groups () { return { my_names, my_names + 2 }; }
   void operator() (const std::contracts::assertion_context& c) const
   { if (!c.check ()) __builtin_abort (); }
 };

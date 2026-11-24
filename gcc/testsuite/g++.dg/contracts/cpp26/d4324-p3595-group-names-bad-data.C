@@ -1,4 +1,4 @@
-// D4324: a name in a control object's group_names read through data() and
+// D4324: a name a control object's groups() returns read through data() and
 // size() needs a data() that returns const char *.
 // { dg-do compile { target c++26 } }
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
@@ -27,7 +27,7 @@ struct ctrl
   static constexpr bool is_ignored (std::contracts::assertion_static_info) { return false; }
   static constexpr bool constify (std::contracts::assertion_static_info) { return false; }
   static constexpr bool assumable (std::contracts::assertion_static_info) { return false; }
-  static constexpr names group_names { my_names, my_names + 1 };
+  static constexpr names groups () { return { my_names, my_names + 1 }; }
   void operator() (const std::contracts::assertion_context&) const {}
 };
 inline constexpr ctrl ctrl_v {};

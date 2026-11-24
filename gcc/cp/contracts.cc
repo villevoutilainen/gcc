@@ -8759,13 +8759,15 @@ contract_apply_compute_semantic_1 (tree ctrl, tree fn,
    object is evaluated with.  */
 
 /* A control object's group names, for the P3595 configuration's "group"
-   key: P3400's group_names facet, a range of names.  The compiler walks
-   it as a range-based for does, constant-evaluating the walk; a name is
-   read through its data() and size() if it has them (data() must return
+   key: what its groups() member function returns, a range of names (an
+   empty one: no group).  <contract_labels>' label_base answers groups()
+   from P3400's group_names facet.  The compiler walks the range as a
+   range-based for does, constant-evaluating the walk; a name is read
+   through its data() and size() if it has them (data() must return
    const char *), else converted to const char * and read up to its NUL.
    std::string_view is never needed, so <contracts> needn't include it.  */
 
-/* The most names a group_names may hold.  */
+/* The most names a groups() may give.  */
 #define CONTRACT_GROUP_NAMES_MAX 4096
 
 /* What contract_group_names_query computes.  */
@@ -8829,9 +8831,10 @@ contract_group_name_has_data_size (tree type, bool *data_ok)
   return true;
 }
 
-/* An expression that constant-evaluates to one fact about GN, a control
-   object's group_names (an lvalue): with CGN_COUNT the number of its names,
-   counting no further than CONTRACT_GROUP_NAMES_MAX + 1; with CGN_LENGTHS
+/* An expression that constant-evaluates to one fact about GN, what a
+   control object's groups() returns (an lvalue, or a TARGET_EXPR): with
+   CGN_COUNT the number of its names, counting no further than
+   CONTRACT_GROUP_NAMES_MAX + 1; with CGN_LENGTHS
    an array of the lengths of its first COUNT names; with CGN_CHARS an array
    of the TOTAL characters of those names, one after another.  The range is
    walked once, as a range-based for walks it.  *BAD_DATA is set if a name
@@ -9087,9 +9090,10 @@ contract_group_names_values (tree v, unsigned HOST_WIDE_INT n,
   return true;
 }
 
-/* The names in the group_names of control object CTRL, into NAMES (empty:
-   none, or no group_names).  A group_names that is a range of names but
-   can't be read as a constant expression, or holds more than
+/* The names CTRL.groups() gives for control object CTRL, into NAMES
+   (empty: none, or no groups member).  A groups that isn't a member
+   function callable with no arguments, or that doesn't return a range of
+   names readable as a constant expression, or that holds more than
    CONTRACT_GROUP_NAMES_MAX names, or whose names' data() doesn't return
    const char *, is diagnosed at LOC.  */
 
@@ -9105,14 +9109,39 @@ contract_control_group_names (tree ctrl, location_t loc,
   complete_type (type);
   if (!COMPLETE_TYPE_P (type))
     return;
-  tree member = lookup_member (type, get_identifier ("group_names"),
-			       /*protect=*/1, /*want_type=*/false, tf_none);
-  if (!member || member == error_mark_node)
+  tree id = get_identifier ("groups");
+  tree member = lookup_member (type, id, /*protect=*/1, /*want_type=*/false,
+			       tf_none);
+  if (!member)
     return;
-  tree gn = finish_class_member_access_expr (ctrl, get_identifier
-					     ("group_names"), false, tf_none);
-  if (error_operand_p (gn))
-    return;
+  if (member == error_mark_node || !BASELINK_P (member))
+    {
+      error_at (loc, "%<groups%> of control object %qT is not a member "
+		"function", type);
+      return;
+    }
+  /* CTRL.groups (), its result bound as a range-based for binds its
+     range; built afresh for each walk.  */
+  auto groups_call = [&] () -> tree
+    {
+      tree fn = finish_class_member_access_expr (ctrl, id, false, tf_none);
+      if (error_operand_p (fn))
+	return error_mark_node;
+      releasing_vec args;
+      tree call = finish_call_expr (fn, &args, /*disallow_virtual=*/false,
+				    /*koenig_p=*/false, tf_none);
+      if (error_operand_p (call))
+	return error_mark_node;
+      if (!lvalue_p (call))
+	call = get_target_expr (call, tf_none);
+      return call;
+    };
+  if (error_operand_p (groups_call ()))
+    {
+      error_at (loc, "%<groups%> of control object %qT cannot be called "
+		"with no arguments", type);
+      return;
+    }
 
   bool saved_suppress = suppress_conveyor_restrictions_for_trait_query_p;
   suppress_conveyor_restrictions_for_trait_query_p = true;
@@ -9122,24 +9151,30 @@ contract_control_group_names (tree ctrl, location_t loc,
 		       auto_vec<HOST_WIDE_INT> &out) -> int
     {
       bool bad_data = false;
-      tree q = contract_group_names_query (loc, gn, what, count, total,
-					   &bad_data);
+      tree gn = groups_call ();
+      tree q = (error_operand_p (gn) ? NULL_TREE
+		: contract_group_names_query (loc, gn, what, count, total,
+					      &bad_data));
       if (bad_data)
 	{
-	  error_at (loc, "the names in the %<group_names%> of control object "
-		    "%qT have a %<data()%> that does not return "
+	  error_at (loc, "the names the %<groups%> of control object %qT "
+		    "returns have a %<data()%> that does not return "
 		    "%<const char *%>", type);
 	  return -1;
 	}
       if (!q)
-	return 0;	/* Not a range of names: no groups.  */
+	{
+	  error_at (loc, "%<groups%> of control object %qT does not return "
+		    "a range of names", type);
+	  return -1;
+	}
       tree v = maybe_constant_value (q, NULL_TREE, mce_true);
       if (v && !error_operand_p (v)
 	  && contract_group_names_values (v, what == CGN_CHARS ? total
 					     : count, out))
 	return 1;
-      error_at (loc, "the %<group_names%> of control object %qT is not a "
-		"constant expression", type);
+      error_at (loc, "the names the %<groups%> of control object %qT "
+		"returns are not a constant expression", type);
       return -1;
     };
 
@@ -9148,7 +9183,7 @@ contract_control_group_names (tree ctrl, location_t loc,
     {
       HOST_WIDE_INT count = counted[0];
       if (count > CONTRACT_GROUP_NAMES_MAX)
-	error_at (loc, "the %<group_names%> of control object %qT holds more "
+	error_at (loc, "the %<groups%> of control object %qT holds more "
 		  "than %d names", type, CONTRACT_GROUP_NAMES_MAX);
       else if (count > 0
 	       && evaluate (CGN_LENGTHS, count, 0, lens) == 1)
