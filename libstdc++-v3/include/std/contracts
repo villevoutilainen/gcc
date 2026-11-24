@@ -62,6 +62,12 @@ namespace contracts
     static constexpr bool
     assumable(assertion_static_info) noexcept { return false; }
 
+    // A contract configuration's "control" (or "dynamic") may replace it
+    // where the code names it, as it replaces the default_v a bare
+    // assertion gets.
+    static constexpr bool
+    config_replaceable(assertion_static_info) noexcept { return true; }
+
     // Not noexcept: an exception thrown by the predicate propagates to
     // the caller, neither terminating nor reported as a violation.
     // quick_enforce terminates at once, as a plain contract does under

@@ -1,7 +1,8 @@
 // D4324: a P3595 configuration's "output": "control" chooses the control
 // object the compiler creates for a matching assertion whose code chose
 // none (a bare assertion), or whose control object's config_replaceable
-// query says it may be replaced; one the code chose is kept otherwise.
+// query says it may be replaced -- as std::contracts::default_v's (and so
+// annotated's) does; one the code chose is kept otherwise.
 // Matched here by "namespace" and by "function" (a fully qualified name
 // without template arguments, naming all overloads: a non-member, an
 // in-class member, a function template, the function holding a
@@ -67,6 +68,7 @@ namespace mylib
 int replace_me (int x) pre<replaceable_v> (x > 0) { return x; }
 int replace_me (long x) pre<fixed_v> (x > 0) { return x; }
 int replace_me (short x) pre<sc::default_v> (x > 0) { return x; }
+int replace_me (char x) pre<sc::annotated ("message")> (x > 0) { return x; }
 
 struct S
 {
@@ -87,13 +89,14 @@ main ()
   mylib::a (-1);		// namespace: audit
   replace_me (-1);		// function, config_replaceable: audit
   replace_me (-1L);		// function, not replaceable: fixed
-  replace_me ((short) -1);	// function, explicit default_v: kept
+  replace_me ((short) -1);	// function, explicit default_v: audit
+  replace_me ((char) -1);	// function, annotated: audit
   S ().m (-1);			// in-class member: audit
   tf (-1);			// function template: audit
   asserts (-1);			// contract_assert in a function: audit
   ign (-1);			// function chooses the semantic: ignored
   plain (-1);			// no match: default_v
-  if (audit_calls != 5 || fixed_calls != 1 || replaceable_calls != 0
-      || handler_calls != 2)
+  if (audit_calls != 7 || fixed_calls != 1 || replaceable_calls != 0
+      || handler_calls != 1)
     __builtin_abort ();
 }
