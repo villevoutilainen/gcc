@@ -3910,6 +3910,13 @@ maybe_contract_wrap_call (tree fndecl, tree call)
   return wrapcall;
 }
 
+/* How many contract wrappers define_contract_wrapper_func has built: a
+   wrapper's checks can use templates not yet instantiated, so building
+   one means c_parse_final_cleanups must instantiate again
+   (emit_contract_wrapper_func).  */
+
+static unsigned contract_wrappers_defined;
+
 /* Map traversal callback to define a wrapper function.
    This generates code for client-side contract check wrappers and the
    noexcept wrapper around the contract violation handler.  */
@@ -3921,6 +3928,7 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl,
   /* If we already built this function on a previous pass, then do nothing.  */
   if (DECL_INITIAL (wrapdecl) && DECL_INITIAL (wrapdecl) != error_mark_node)
     return true;
+  ++contract_wrappers_defined;
 
   gcc_checking_assert (!DECL_HAS_CONTRACTS_P (wrapdecl));
   /* The caller mask of the calls this wrapper serves.  */
@@ -3998,6 +4006,7 @@ bool
 emit_contract_wrapper_func (bool done)
 {
   bool more = false;
+  unsigned defined_before = contract_wrappers_defined;
   /* The virtual-dispatch wrappers, then the non-virtual ones (a non-null
      traversal argument).  */
   for (int nv = 0; nv < 2; ++nv)
@@ -4035,6 +4044,9 @@ emit_contract_wrapper_func (bool done)
 	decl_masked_wrapper_fn->empty ();
     }
   gcc_checking_assert (!done || !more);
+  /* A wrapper built: what its checks use may need instantiating.  */
+  if (!done && contract_wrappers_defined != defined_before)
+    more = true;
   return more;
 }
 
