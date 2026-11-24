@@ -897,50 +897,6 @@ namespace contracts
   inline namespace controls
   {
 
-  struct default_control {
-    static constexpr bool
-    is_ignored(assertion_static_info __info) noexcept
-    { return __info.semantic() == evaluation_semantic::ignore; }
-
-    static constexpr bool
-    constify(assertion_static_info) noexcept { return false; }
-    static constexpr bool
-    assumable(assertion_static_info) noexcept { return false; }
-
-    // Not noexcept: an exception thrown by the predicate propagates to
-    // the caller, neither terminating nor reported as a violation.
-    constexpr void
-    operator()(const assertion_context& __ctx) const
-    {
-      if (__ctx.check())
-	return;
-      if consteval
-	{
-	  if (__ctx.semantic() == evaluation_semantic::observe)
-	    constexpr_warning_str ("contract", __ctx.comment());
-	  else
-	    constexpr_error_str ("contract", __ctx.comment());
-	}
-      else
-	{
-	  // quick_enforce terminates at once, without calling the violation
-	  // handler, as a plain contract does under
-	  // -fcontract-evaluation-semantic=quick_enforce.  Otherwise the
-	  // replaceable violation handler is called; an exception it throws
-	  // propagates.
-	  if (__ctx.semantic() != evaluation_semantic::quick_enforce)
-	    invoke_violation_handler
-	      ({__ctx.comment(), __ctx.location(), __ctx.semantic(),
-		__ctx.kind()},
-	       detection_mode::predicate_false);
-	  if (__ctx.semantic() != evaluation_semantic::observe)
-	    __d4324_terminate_wrapper();
-	}
-    }
-  };
-
-  inline constexpr default_control default_v{};
-
   // Whether the group a rule names, RULE, covers the group NAME: NAME
   // itself, or any group nested in it by a dotted suffix -- "lib" covers
   // "lib" and "lib.io", not "library".
@@ -1045,29 +1001,33 @@ namespace contracts
   { return group_name{__s}; }
 #pragma GCC diagnostic pop
 
-  // default_control with a group, a message, or both:
-  //   pre<annotated("lib.io"group, "x must be positive")>
-  //   pre<annotated("lib.io"group)>
-  //   pre<annotated("x must be positive")>
+  // A control object's optional group and message: the base of every
+  // control object below, so that each can be written
+  //   C("lib.io"group, "x must be positive"), C("lib.io"group),
+  //   C("x must be positive"), or C().
   // groups() gives the group, if any, for a configuration's "group" rules
-  // to match; a violation reports the message, if any, to the violation
-  // handler alongside the comment.
-  class annotated
+  // to match; __semantic gives the semantic its
+  // -fcontracts-group-evaluation-semantic= rules give.
+  struct __annotation
   {
     const char* _M_group = nullptr;
     const char* _M_message = nullptr;
 
-  public:
+    // Conveyor, so that conveyor code (e.g. __container_assert) can make
+    // control objects.
+    constexpr __annotation() noexcept _GLIBCXX_CONVEYOR = default;
+
     constexpr explicit
-    annotated(group_name __g) noexcept
+    __annotation(group_name __g) noexcept _GLIBCXX_CONVEYOR
     : _M_group(__g._M_name) { }
 
     constexpr
-    annotated(group_name __g, const char* __message) noexcept
+    __annotation(group_name __g, const char* __message) noexcept
+      _GLIBCXX_CONVEYOR
     : _M_group(__g._M_name), _M_message(__message) { }
 
     constexpr explicit
-    annotated(const char* __message) noexcept
+    __annotation(const char* __message) noexcept _GLIBCXX_CONVEYOR
     : _M_message(__message) { }
 
     constexpr const char* group() const noexcept { return _M_group; }
@@ -1077,25 +1037,46 @@ namespace contracts
     groups() const noexcept
     { return { &_M_group }; }
 
+    constexpr evaluation_semantic
+    __semantic(assertion_static_info __info) const noexcept
+    { return __group_semantic(_M_group, __info); }
+  };
+
+  struct default_control : __annotation {
+    using __annotation::__annotation;
+
     constexpr bool
     is_ignored(assertion_static_info __info) const noexcept
-    { return __group_semantic(_M_group, __info) == evaluation_semantic::ignore; }
+    { return __semantic(__info) == evaluation_semantic::ignore; }
 
     static constexpr bool
     constify(assertion_static_info) noexcept { return false; }
     static constexpr bool
     assumable(assertion_static_info) noexcept { return false; }
 
+    // Not noexcept: an exception thrown by the predicate propagates to
+    // the caller, neither terminating nor reported as a violation.
+    // quick_enforce terminates at once, as a plain contract does under
+    // -fcontract-evaluation-semantic=quick_enforce; otherwise the
+    // replaceable violation handler is called, and an exception it throws
+    // propagates.
     constexpr void
     operator()(const assertion_context& __ctx) const
-    { __default_check(__ctx, __group_semantic(_M_group, __ctx.static_info()),
-		      _M_message); }
+    { __default_check(__ctx, __semantic(__ctx.static_info()), _M_message); }
   };
 
-  struct review {
-    static constexpr bool
-    is_ignored(assertion_static_info __info) noexcept
-    { return __info.semantic() == evaluation_semantic::ignore; }
+  inline constexpr default_control default_v{};
+
+  // default_control by the name it was first given.
+  using annotated = default_control;
+
+
+  struct review : __annotation {
+    using __annotation::__annotation;
+
+    constexpr bool
+    is_ignored(assertion_static_info __info) const noexcept
+    { return __semantic(__info) == evaluation_semantic::ignore; }
 
     static constexpr bool
     constify(assertion_static_info) noexcept { return true; }
@@ -1112,14 +1093,15 @@ namespace contracts
       if consteval
 	{
 	  // Never terminates at runtime, so never a compile-time error either.
-	  constexpr_warning_str ("contract", __ctx.comment());
+	  constexpr_warning_str ("contract",
+				 _M_message ? _M_message : __ctx.comment());
 	}
       else
 	{
-	  invoke_violation_handler
-	    ({__ctx.comment(), __ctx.location(), evaluation_semantic::observe,
-	      __ctx.kind()},
-	     detection_mode::predicate_false);
+	  assertion_info __info{__ctx.comment(), __ctx.location(),
+				evaluation_semantic::observe, __ctx.kind()};
+	  __info.set_message(_M_message);
+	  invoke_violation_handler(__info, detection_mode::predicate_false);
 	}
     }
   };
@@ -1141,7 +1123,9 @@ namespace contracts
   // (which already unconditionally terminates on failure, "regardless of
   // semantic," independent of is_ignored/assumable). Every evaluation
   // semantic now gets the identical, real, enforced check below.
-  struct mandatory {
+  struct mandatory : __annotation {
+    using __annotation::__annotation;
+
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
 
@@ -1161,14 +1145,15 @@ namespace contracts
 	{
 	  // Always terminates at runtime, regardless of semantic, so always a
 	  // compile-time error too.
-	  constexpr_error_str ("contract", __ctx.comment());
+	  constexpr_error_str ("contract",
+			       _M_message ? _M_message : __ctx.comment());
 	}
       else
 	{
-	  invoke_violation_handler
-	    ({__ctx.comment(), __ctx.location(), evaluation_semantic::enforce,
-	      __ctx.kind()},
-	     detection_mode::predicate_false);
+	  assertion_info __info{__ctx.comment(), __ctx.location(),
+				evaluation_semantic::enforce, __ctx.kind()};
+	  __info.set_message(_M_message);
+	  invoke_violation_handler(__info, detection_mode::predicate_false);
 	  __d4324_terminate_wrapper();
 	}
     }
@@ -1208,16 +1193,14 @@ namespace contracts
   //   unmodified 4-argument std::__glibcxx_assert_fail can be reused
   //   as-is -- no new overload, no new exported symbol.
   //
-  // Like every other control type here, this is a plain aggregate (no
-  // user-declared constructor): std::contracts::noexcept_assert_v below
-  // is the shared, message-less instance for the ordinary case, and
-  // noexcept_assert("some message") -- a fresh temporary, one per
-  // distinct message, aggregate-paren-initialized exactly like
-  // d4324-control-object-state.C's labeled("temp diagnostic") -- lets one
-  // call site splice its own diagnostic text in place of the predicate's
-  // own stringified condition.
-  struct noexcept_assert {
-    const char* message = nullptr;
+  // Like every other control type here, it takes an optional group and
+  // message (__annotation): std::contracts::noexcept_assert_v below is
+  // the shared, message-less instance for the ordinary case, and
+  // noexcept_assert("some message") -- one per distinct message -- lets
+  // one call site splice its own diagnostic text in place of the
+  // predicate's own stringified condition.
+  struct noexcept_assert : __annotation {
+    using __annotation::__annotation;
 
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
@@ -1233,7 +1216,7 @@ namespace contracts
       if (__ctx.check())
 	return;
 
-      const char* __text = message ? message : __ctx.comment();
+      const char* __text = _M_message ? _M_message : __ctx.comment();
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval
@@ -1248,7 +1231,7 @@ namespace contracts
 	      // object's message alongside it.
 	      assertion_info __info(__ctx.comment(), __ctx.location(),
 				    evaluation_semantic::enforce, __ctx.kind());
-	      __info.set_message(message);
+	      __info.set_message(_M_message);
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -1290,8 +1273,8 @@ namespace contracts
   // to the existing, already-shipped type would retroactively impose
   // these new mandatory restrictions on every current
   // _GLIBCXX_ASSERTIONS build -- this must be strictly opt-in.
-  struct conveyor_assert {
-    const char* message = nullptr;
+  struct conveyor_assert : __annotation {
+    using __annotation::__annotation;
 
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
@@ -1310,7 +1293,7 @@ namespace contracts
       if (__ctx.check())
 	return;
 
-      const char* __text = message ? message : __ctx.comment();
+      const char* __text = _M_message ? _M_message : __ctx.comment();
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval
@@ -1325,7 +1308,7 @@ namespace contracts
 	      // object's message alongside it.
 	      assertion_info __info(__ctx.comment(), __ctx.location(),
 				    evaluation_semantic::enforce, __ctx.kind());
-	      __info.set_message(message);
+	      __info.set_message(_M_message);
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -1364,8 +1347,8 @@ namespace contracts
   // context where they are essentially never provable and were never
   // meant to be -- conveyor_assert_v itself stays untouched for anyone
   // relying on its own, already-shipped behavior.
-  struct never_proven_conveyor {
-    const char* message = nullptr;
+  struct never_proven_conveyor : __annotation {
+    using __annotation::__annotation;
 
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
@@ -1386,7 +1369,7 @@ namespace contracts
       if (__ctx.check())
 	return;
 
-      const char* __text = message ? message : __ctx.comment();
+      const char* __text = _M_message ? _M_message : __ctx.comment();
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval
@@ -1401,7 +1384,7 @@ namespace contracts
 	      // object's message alongside it.
 	      assertion_info __info(__ctx.comment(), __ctx.location(),
 				    evaluation_semantic::enforce, __ctx.kind());
-	      __info.set_message(message);
+	      __info.set_message(_M_message);
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -1522,8 +1505,8 @@ namespace contracts
   // naming this, regardless of the command-line flag, with a lenient
   // outcome on an unprovable conjunct (a warning, not an error) -- see
   // this header's own analyzed_conveyor documentation above.
-  struct analyzed_conveyor_t {
-    const char* message = nullptr;
+  struct analyzed_conveyor_t : __annotation {
+    using __annotation::__annotation;
 
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
@@ -1542,7 +1525,7 @@ namespace contracts
       if (__ctx.check())
 	return;
 
-      const char* __text = message ? message : __ctx.comment();
+      const char* __text = _M_message ? _M_message : __ctx.comment();
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval
@@ -1557,7 +1540,7 @@ namespace contracts
 	      // object's message alongside it.
 	      assertion_info __info(__ctx.comment(), __ctx.location(),
 				    evaluation_semantic::enforce, __ctx.kind());
-	      __info.set_message(message);
+	      __info.set_message(_M_message);
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -1589,8 +1572,8 @@ namespace contracts
   // conveyor() true instead: same forced-on analysis, but strict --
   // an unprovable conjunct is also an error, not just a warning. See
   // this header's own proven_conveyor documentation above.
-  struct proven_conveyor_t {
-    const char* message = nullptr;
+  struct proven_conveyor_t : __annotation {
+    using __annotation::__annotation;
 
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
@@ -1609,7 +1592,7 @@ namespace contracts
       if (__ctx.check())
 	return;
 
-      const char* __text = message ? message : __ctx.comment();
+      const char* __text = _M_message ? _M_message : __ctx.comment();
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval
@@ -1624,7 +1607,7 @@ namespace contracts
 	      // object's message alongside it.
 	      assertion_info __info(__ctx.comment(), __ctx.location(),
 				    evaluation_semantic::enforce, __ctx.kind());
-	      __info.set_message(message);
+	      __info.set_message(_M_message);
 	      invoke_violation_handler(__info, detection_mode::predicate_false);
 	    }
 	  catch (...) { }
@@ -1659,12 +1642,12 @@ namespace contracts
   // exception it throws propagates), then terminate unless the semantic
   // is observe.  Quick-enforce terminates at once; ignore reports nothing.
   constexpr void
-  __symbolic_violation(const assertion_context& __ctx, const char* __message)
+  __symbolic_violation(const assertion_context& __ctx, evaluation_semantic __sem,
+		       const char* __message)
   {
     if (__ctx.check())
       return;
     const char* __text = __message ? __message : __ctx.comment();
-    const evaluation_semantic __sem = __ctx.semantic();
     if (__sem == evaluation_semantic::ignore)
       return;
     if consteval
@@ -1694,8 +1677,8 @@ namespace contracts
   // this is checked under -fcontract-symbolic-proofs the ordinary way
   // (only when that flag is actually given -- unlike analyzed_symbolic_t/
   // proven_symbolic_t below, which force the analysis on regardless).
-  struct symbolic_assert {
-    const char* message = nullptr;
+  struct symbolic_assert : __annotation {
+    using __annotation::__annotation;
 
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
@@ -1712,7 +1695,7 @@ namespace contracts
     // propagates to the caller.
     constexpr void
     operator()(const assertion_context& __ctx) const
-    { __symbolic_violation(__ctx, message); }
+    { __symbolic_violation(__ctx, __semantic(__ctx.static_info()), _M_message); }
   };
 
   inline constexpr symbolic_assert symbolic_assert_v{};
@@ -1721,8 +1704,8 @@ namespace contracts
   // additionally declares never_proven() true, exactly mirroring
   // never_proven_conveyor above (is_symbolic instead of is_conveyor) --
   // see its own documentation for the full rationale.
-  struct never_proven_symbolic {
-    const char* message = nullptr;
+  struct never_proven_symbolic : __annotation {
+    using __annotation::__annotation;
 
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
@@ -1741,7 +1724,7 @@ namespace contracts
     // propagates to the caller.
     constexpr void
     operator()(const assertion_context& __ctx) const
-    { __symbolic_violation(__ctx, message); }
+    { __symbolic_violation(__ctx, __semantic(__ctx.static_info()), _M_message); }
   };
 
   inline constexpr never_proven_symbolic never_proven_symbolic_v{};
@@ -1753,8 +1736,8 @@ namespace contracts
   // base's own dispatch, exactly like conveyor_assert/never_proven_
   // conveyor/analyzed_conveyor_t/proven_conveyor_t above, and exactly
   // like this file's own pre-existing is_symbolic precedent).
-  struct analyzed_symbolic_t {
-    const char* message = nullptr;
+  struct analyzed_symbolic_t : __annotation {
+    using __annotation::__annotation;
 
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
@@ -1771,15 +1754,15 @@ namespace contracts
     // propagates to the caller.
     constexpr void
     operator()(const assertion_context& __ctx) const
-    { __symbolic_violation(__ctx, message); }
+    { __symbolic_violation(__ctx, __semantic(__ctx.static_info()), _M_message); }
   };
 
   inline constexpr analyzed_symbolic_t analyzed_symbolic_v{};
 
   // Identical to analyzed_symbolic_t above, but declares proven_
   // symbolic() true instead: same forced-on analysis, but strict.
-  struct proven_symbolic_t {
-    const char* message = nullptr;
+  struct proven_symbolic_t : __annotation {
+    using __annotation::__annotation;
 
     static constexpr bool
     is_ignored(assertion_static_info) noexcept { return false; }
@@ -1796,12 +1779,14 @@ namespace contracts
     // propagates to the caller.
     constexpr void
     operator()(const assertion_context& __ctx) const
-    { __symbolic_violation(__ctx, message); }
+    { __symbolic_violation(__ctx, __semantic(__ctx.static_info()), _M_message); }
   };
 
   inline constexpr proven_symbolic_t proven_symbolic_v{};
 
-  struct ignore {
+  struct ignore : __annotation {
+    using __annotation::__annotation;
+
     static constexpr bool
     is_ignored(assertion_static_info) noexcept
     { return true; }
@@ -1821,7 +1806,9 @@ namespace contracts
 
   inline constexpr ignore ignore_v{};
 
-  struct assume {
+  struct assume : __annotation {
+    using __annotation::__annotation;
+
     static constexpr bool
     is_ignored(assertion_static_info) noexcept
     { return true; }

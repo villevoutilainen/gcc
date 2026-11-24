@@ -459,18 +459,18 @@ _GLIBCXX_BEGIN_NAMESPACE_VERSION
 namespace contracts
 {
   // A control type used for pre<>/post<>/contract_assert<> must satisfy
-  // this: the three mandatory static traits (is_ignored/constify/
-  // assumable), and a callable operator(). See <contracts>'s own,
+  // this: the three mandatory traits (is_ignored/constify/assumable),
+  // static or not, and a callable operator(). See <contracts>'s own,
   // adjacent comments on default_control/assertion_control's use for
   // the full contract each of these traits has to uphold -- this
   // concept only checks their signatures, not their semantics.
   template <class _Tp>
   concept assertion_control =
-    requires (_Tp __c, assertion_static_info __info,
+    requires (const _Tp __c, assertion_static_info __info,
 	      const assertion_context& __ctx) {
-      { _Tp::is_ignored(__info) } -> same_as<bool>;
-      { _Tp::constify(__info) } -> same_as<bool>;
-      { _Tp::assumable(__info) } -> same_as<bool>;
+      { __c.is_ignored(__info) } -> same_as<bool>;
+      { __c.constify(__info) } -> same_as<bool>;
+      { __c.assumable(__info) } -> same_as<bool>;
       { __c(__ctx) } -> same_as<void>;
     };
 } // namespace contracts
