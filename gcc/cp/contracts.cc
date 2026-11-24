@@ -32666,6 +32666,21 @@ get_or_build_scalar_precondition_thunk (tree contract, tree callee,
   return fn;
 }
 
+/* The value of CTRL, a control object's constant expression, as a
+   variable's initializer: cxx_constant_value's, without the TARGET_EXPR
+   it wraps a value of a class with a nontrivial copy constructor in --
+   initializing from that would copy the object, through a temporary the
+   gimplifier rejects.  */
+
+static tree
+contract_control_constant_init (tree ctrl)
+{
+  tree init = cxx_constant_value (ctrl);
+  if (TREE_CODE (init) == TARGET_EXPR)
+    init = TARGET_EXPR_INITIAL (init);
+  return init;
+}
+
 /* -fcontract-symbolic-runtime-checks (Mechanism B): build a self-
    contained BIND_EXPR dispatching CONTRACT's own control object CTRL/OP
    with THUNK_FN/ARGS_PTR -- mirrors build_contract_control_constexpr_
@@ -32735,7 +32750,7 @@ oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
   layout_decl (ctx_var, 0);
 
   tree ctrl_type = TREE_TYPE (ctrl);
-  tree ctrl_init = cxx_constant_value (ctrl);
+  tree ctrl_init = contract_control_constant_init (ctrl);
 
   tree ctrl_var = build_decl (loc, VAR_DECL, NULL_TREE, ctrl_type);
   DECL_ARTIFICIAL (ctrl_var) = true;
@@ -45883,7 +45898,7 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
      type (e.g. carrying different diagnostic data) are preserved instead of
      collapsing to zero.  */
   tree ctrl_type = TREE_TYPE (ctrl);
-  tree ctrl_init = cxx_constant_value (ctrl);
+  tree ctrl_init = contract_control_constant_init (ctrl);
 
   /* Build the control object on the stack; register it.  */
   tree ctrl_var = build_decl (loc, VAR_DECL, NULL_TREE, ctrl_type);
@@ -46212,7 +46227,7 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
      constant-evaluate it and use that value, exactly like
      build_contract_control_call's runtime path.  */
   tree ctrl_type = TREE_TYPE (ctrl);
-  tree ctrl_init = cxx_constant_value (ctrl);
+  tree ctrl_init = contract_control_constant_init (ctrl);
 
   tree ctrl_var = build_decl (loc, VAR_DECL, NULL_TREE, ctrl_type);
   DECL_ARTIFICIAL (ctrl_var) = true;
