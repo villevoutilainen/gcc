@@ -9292,6 +9292,138 @@ contract_config_ns_of (tree fn)
   return xstrdup (decl_as_string (scope, TFF_PLAIN_IDENTIFIER));
 }
 
+/* The qualified name of SCOPE, a namespace or a class, for a
+   configuration's "function" key: its enclosing scopes' names and its
+   own, '::'-separated, without template arguments; NULL for the global
+   namespace.  */
+
+static char *
+contract_config_scope_name (tree scope)
+{
+  if (!scope || scope == global_namespace)
+    return NULL;
+  if (TREE_CODE (scope) == NAMESPACE_DECL)
+    return xstrdup (decl_as_string (scope, TFF_PLAIN_IDENTIFIER));
+  if (TREE_CODE (scope) == TYPE_DECL)
+    scope = TREE_TYPE (scope);
+  if (!TYPE_P (scope) || !TYPE_IDENTIFIER (scope))
+    return NULL;
+  char *outer = contract_config_scope_name (CP_TYPE_CONTEXT (scope));
+  const char *name = IDENTIFIER_POINTER (TYPE_IDENTIFIER (scope));
+  char *r = outer ? concat (outer, "::", name, NULL) : xstrdup (name);
+  free (outer);
+  return r;
+}
+
+/* NAME (the name of a function, unqualified) qualified by SCOPE.  */
+
+static char *
+contract_config_qualified (tree scope, const char *name)
+{
+  char *outer = contract_config_scope_name (scope);
+  char *r = outer ? concat (outer, "::", name, NULL) : xstrdup (name);
+  free (outer);
+  return r;
+}
+
+/* The name a configuration's "function" key matches for the function
+   being declared, while its contracts are parsed before the declaration
+   exists (a non-member function's, or an in-class member's control
+   objects): set around their parsing, see contract_config_declarator_name.
+   NULL otherwise.  */
+
+const char *contract_config_declarator_function;
+
+/* The name of the function a declarator-id ID declares, qualified by
+   SCOPE (its qualifying scope, if any, else the current class or
+   namespace), as contract_config_function_name names a declaration.  NULL
+   if it isn't a function's name a configuration can match.  */
+
+char *
+contract_config_declarator_name (tree scope, tree id)
+{
+  if (!scope)
+    scope = current_class_type ? current_class_type : current_namespace;
+  if (TREE_CODE (id) == TEMPLATE_ID_EXPR)
+    {
+      id = TREE_OPERAND (id, 0);
+      if (TREE_CODE (id) != IDENTIFIER_NODE)
+	id = OVL_NAME (id);
+    }
+  if (TREE_CODE (id) == BIT_NOT_EXPR)
+    {
+      tree n = TREE_OPERAND (id, 0);
+      if (TYPE_P (n))
+	n = TYPE_IDENTIFIER (n);
+      if (!n || TREE_CODE (n) != IDENTIFIER_NODE)
+	return NULL;
+      char *dtor = concat ("~", IDENTIFIER_POINTER (n), NULL);
+      char *r = contract_config_qualified (scope, dtor);
+      free (dtor);
+      return r;
+    }
+  if (TREE_CODE (id) != IDENTIFIER_NODE)
+    return NULL;
+  return contract_config_qualified (scope, IDENTIFIER_POINTER (id));
+}
+
+/* The name a configuration's "function" key matches for FN: fully
+   qualified, without template arguments (so all overloads and
+   specializations of a function share it), a constructor named after its
+   class ('ns::C::C'), a destructor '~' and its class.  For FN NULL_TREE,
+   the function whose contracts are being parsed, if known.  */
+
+static char *
+contract_config_function_name (tree fn)
+{
+  if (!fn || fn == error_mark_node)
+    return (contract_config_declarator_function
+	    ? xstrdup (contract_config_declarator_function) : NULL);
+  fn = DECL_ORIGIN (fn);
+  if (DECL_LANG_SPECIFIC (fn) && DECL_CONTRACT_WRAPPER (fn))
+    fn = get_orig_func_for_wrapper (fn);
+  tree scope = CP_DECL_CONTEXT (fn);
+  if (DECL_CONSTRUCTOR_P (fn) || DECL_DESTRUCTOR_P (fn))
+    {
+      tree cls = DECL_CONTEXT (fn);
+      if (!TYPE_P (cls) || !TYPE_IDENTIFIER (cls))
+	return NULL;
+      const char *c = IDENTIFIER_POINTER (TYPE_IDENTIFIER (cls));
+      char *n = DECL_DESTRUCTOR_P (fn) ? concat ("~", c, NULL) : xstrdup (c);
+      char *r = contract_config_qualified (scope, n);
+      free (n);
+      return r;
+    }
+  if (!DECL_NAME (fn))
+    return NULL;
+  return contract_config_qualified (scope, IDENTIFIER_POINTER (DECL_NAME (fn)));
+}
+
+/* The name of the module FN is attached to, for a configuration's
+   "module" key; for FN NULL_TREE, the current translation unit's, in its
+   purview.  NULL for the global module.  */
+
+static const char *
+contract_config_module_of (tree fn)
+{
+  if (!modules_p ())
+    return NULL;
+  if (!fn || fn == error_mark_node)
+    return module_purview_p () ? module_name (0, false) : NULL;
+  int m = get_originating_module (fn, /*global_m1=*/true);
+  return m < 0 ? NULL : module_name (m, false);
+}
+
+/* Whether the configuration's module ENTRY covers MOD: MOD itself or a
+   module whose name extends it by a '.'-delimited suffix.  */
+
+static bool
+contract_config_module_matches (const char *entry, const char *mod)
+{
+  size_t n = strlen (entry);
+  return mod && !strncmp (entry, mod, n) && (mod[n] == '\0' || mod[n] == '.');
+}
+
 /* Whether some configuration entry has a "caller" object.  */
 
 static bool
@@ -9334,6 +9466,16 @@ contract_config_caller_mask_for (tree caller, location_t loc)
 	match = contract_config_loc_matches (e.caller_file, e.caller_lines,
 					     e.caller_lines_len,
 					     e.caller_column, xloc);
+      if (match && e.caller_module)
+	match = (caller
+		 && contract_config_module_matches
+		      (e.caller_module, contract_config_module_of (caller)));
+      if (match && e.caller_function)
+	{
+	  char *name = caller ? contract_config_function_name (caller) : NULL;
+	  match = name && !strcmp (e.caller_function, name);
+	  free (name);
+	}
       mask[i] = match ? '1' : '0';
     }
   mask[n] = '\0';
@@ -9368,6 +9510,8 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
 		      : NULL);
   auto_vec<char *> groups;
   bool groups_known = false;
+  char *fn_name = NULL;
+  bool fn_name_known = false;
   unsigned result = 0;
   for (unsigned i = 0; i < contract_config_table.length (); ++i)
     {
@@ -9386,6 +9530,20 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
 	  && !contract_config_loc_matches (e.file, e.lines, e.lines_len,
 					   e.column, xloc))
 	continue;
+      if (e.module
+	  && !contract_config_module_matches (e.module,
+					      contract_config_module_of (fn)))
+	continue;
+      if (e.function)
+	{
+	  if (!fn_name_known)
+	    {
+	      fn_name = contract_config_function_name (fn);
+	      fn_name_known = true;
+	    }
+	  if (!fn_name || strcmp (e.function, fn_name))
+	    continue;
+	}
       if (e.group)
 	{
 	  if (!groups_known)
@@ -9410,7 +9568,163 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
   for (char *g : groups)
     XDELETEVEC (g);
   free (ns);
+  free (fn_name);
   return result;
+}
+
+/* The control object the configuration names ("output": "control") for a
+   contract assertion of KIND at LOC, naming control object CTRL, of
+   function FN (NULL_TREE: the one being declared, or of the current
+   scope): the first entry matching the assertion as declared -- its kind,
+   location, namespace, module, function and CTRL's groups -- decides;
+   entries matching one evaluation ("constexpr", "caller") don't take part.
+   NULL if that entry names none, or none matches.  */
+
+static const char *
+contract_config_control_for (unsigned kind, location_t loc, tree ctrl,
+			     tree fn)
+{
+  char *ns = contract_config_ns_of (fn);
+  expanded_location xloc = expand_location (loc);
+  auto_vec<char *> groups;
+  bool groups_known = false;
+  char *fn_name = NULL;
+  bool fn_name_known = false;
+  const char *result = NULL;
+  for (const contract_config_entry &e : contract_config_table)
+    {
+      if (e.caller != 0 || e.constexpr_eval != -1)
+	continue;
+      if (e.kind && e.kind != kind)
+	continue;
+      if (e.ns && (!ns || !contract_config_ns_matches (e.ns, ns)))
+	continue;
+      if (e.file
+	  && !contract_config_loc_matches (e.file, e.lines, e.lines_len,
+					   e.column, xloc))
+	continue;
+      if (e.module
+	  && !contract_config_module_matches (e.module,
+					      contract_config_module_of (fn)))
+	continue;
+      if (e.function)
+	{
+	  if (!fn_name_known)
+	    {
+	      fn_name = contract_config_function_name (fn);
+	      fn_name_known = true;
+	    }
+	  if (!fn_name || strcmp (e.function, fn_name))
+	    continue;
+	}
+      if (e.group)
+	{
+	  if (!groups_known)
+	    {
+	      if (ctrl)
+		contract_control_group_names (ctrl, loc, groups);
+	      groups_known = true;
+	    }
+	  size_t n = strlen (e.group);
+	  bool covered = false;
+	  for (const char *g : groups)
+	    if (!strncmp (e.group, g, n) && (g[n] == '\0' || g[n] == '.'))
+	      covered = true;
+	  if (!covered)
+	    continue;
+	}
+      result = e.control;
+      break;
+    }
+  for (char *g : groups)
+    XDELETEVEC (g);
+  free (ns);
+  free (fn_name);
+  return result;
+}
+
+static tree contract_control_operator (tree);
+
+/* The control object NAME, a fully qualified name from the configuration,
+   names: a constexpr variable whose type has the dispatch operator().
+   Diagnosed at LOC (once per name) and error_mark_node if it doesn't.  */
+
+static tree
+contract_config_lookup_control (const char *name, location_t loc)
+{
+  tree scope = global_namespace;
+  tree found = NULL_TREE;
+  for (const char *p = name; ; )
+    {
+      const char *sep = strstr (p, "::");
+      tree id = get_identifier_with_length (p, sep ? sep - p : strlen (p));
+      found = lookup_qualified_name (scope, id, LOOK_want::NORMAL, false);
+      if (!sep)
+	break;
+      if (TREE_CODE (found) == TYPE_DECL)
+	found = TREE_TYPE (found);
+      if (TREE_CODE (found) != NAMESPACE_DECL && !CLASS_TYPE_P (found))
+	{
+	  found = error_mark_node;
+	  break;
+	}
+      scope = found;
+      p = sep + 2;
+    }
+  if (found && found != error_mark_node && VAR_P (found)
+      && DECL_DECLARED_CONSTEXPR_P (found)
+      && CLASS_TYPE_P (TREE_TYPE (found))
+      && contract_control_operator (found))
+    return found;
+  static hash_set<nofree_string_hash> *reported;
+  if (!reported)
+    reported = new hash_set<nofree_string_hash>;
+  if (!reported->add (name))
+    error_at (loc, "%qs, the %<control%> of a matching contract "
+	      "configuration entry, does not name a %<constexpr%> control "
+	      "object", name);
+  return error_mark_node;
+}
+
+/* The control object of a contract assertion of KIND at LOC, of function
+   FN (NULL_TREE: the one being declared), checked on SIDE, whose code
+   names control object CTRL -- CODE_CHOSEN if the code chose it, false
+   for a bare assertion's or an empty '<>''s std::contracts::default_v:
+   the configuration's choice ("output": "control") if it makes one and
+   either the code chose none or CTRL's config_replaceable query says the
+   configuration may replace it (false without the query); else CTRL.
+   error_mark_node if the configuration's name names no control object.  */
+
+tree
+contract_configured_control (tree ctrl, bool code_chosen, unsigned kind,
+			     location_t loc, tree fn, contract_check_side side)
+{
+  if (contract_config_table.is_empty () || !flag_contract_control_objects
+      || !ctrl || ctrl == error_mark_node)
+    return ctrl;
+  bool has_control = false;
+  for (const contract_config_entry &e : contract_config_table)
+    if (e.control)
+      has_control = true;
+  if (!has_control)
+    return ctrl;
+  if (code_chosen)
+    {
+      if (processing_template_decl
+	  && (type_dependent_expression_p (ctrl)
+	      || value_dependent_expression_p (ctrl)))
+	return ctrl;
+      tree type = contract_control_naming_type (ctrl);
+      if (!type || !CLASS_TYPE_P (type)
+	  || !contract_control_query_member (type, "config_replaceable")
+	  || contract_control_bool_member (ctrl, "config_replaceable", side,
+					   fn) != 1)
+	return ctrl;
+    }
+  const char *name = contract_config_control_for (kind, loc, ctrl, fn);
+  if (!name)
+    return ctrl;
+  return contract_config_lookup_control (name, loc);
 }
 
 /* Whether a check of CONTRACT on SIDE, of FN or of the caller-side

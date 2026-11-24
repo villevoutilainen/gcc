@@ -1783,6 +1783,18 @@ struct contract_config_entry
   int *caller_lines;
   unsigned caller_lines_len;
   int caller_column;
+  /* P3595 "function" and "module", of the assertion's function and, for a
+     "caller" object, of the calling function: a fully qualified name
+     (without template arguments, naming all overloads), a module name
+     matched by '.'-delimited prefix.  */
+  const char *function;
+  const char *module;
+  const char *caller_function;
+  const char *caller_module;
+  /* "output": "control": the fully qualified name of the control object
+     the compiler creates for a matching assertion whose code chose none
+     (or whose control object is config_replaceable); NULL if none.  */
+  const char *control;
 };
 extern vec<contract_config_entry> contract_config_table;
 

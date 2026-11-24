@@ -5,7 +5,7 @@
 // { dg-additional-options "-fcontract-configuration=nope" }
 // { dg-additional-options "-fcontract-configuration-file=does-not-exist.json" }
 // { dg-error "unknown key 'knd'" "" { target *-*-* } 0 }
-// { dg-error "'output' needs a 'semantic'" "" { target *-*-* } 0 }
+// { dg-error "'semantic' must be one of 'ignore', 'observe', 'enforce' and 'quick-enforce'" "" { target *-*-* } 0 }
 // { dg-error "an entry needs an 'output' object" "" { target *-*-* } 0 }
 // { dg-error "'constexpr' must be a boolean" "" { target *-*-* } 0 }
 // { dg-error "invalid JSON in contract configuration" "" { target *-*-* } 0 }

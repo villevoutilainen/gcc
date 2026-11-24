@@ -309,6 +309,11 @@ extern bool contract_call_may_return_arg_p	(tree, unsigned);
 extern void contract_drop_synthesized_preconditions (tree);
 extern bool contract_control_symbolic_like		(tree, contract_check_side, tree, bool = false);
 extern tree contract_default_control_object		(location_t);
+/* P3595 "output": "control" (contracts.cc).  */
+extern tree contract_configured_control (tree, bool, unsigned, location_t,
+					 tree, contract_check_side);
+extern const char *contract_config_declarator_function;
+extern char *contract_config_declarator_name (tree, tree);
 extern void maybe_inherit_virtual_contract		(tree, tree);
 extern void resolve_object_address_in_function		(tree);
 extern void oa_synthesize_implicit_reference_safety_preconditions (tree);

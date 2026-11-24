@@ -27312,9 +27312,29 @@ cp_parser_direct_declarator (cp_parser* parser,
 
 		  tree contract_specifiers = NULL_TREE;
 		  if (flag_contracts)
-		    contract_specifiers
-		      = cp_parser_function_contract_specifier_seq (parser,
-								    params);
+		    {
+		      /* The function a configuration's "function" key
+			 matches while its contracts are parsed, before its
+			 declaration exists.  */
+		      char *config_fn = NULL;
+		      if (!contract_config_table.is_empty ())
+			for (const cp_declarator *d = declarator; d;
+			     d = d->declarator)
+			  if (d->kind == cdk_id)
+			    {
+			      config_fn = contract_config_declarator_name
+				(d->u.id.qualifying_scope,
+				 d->u.id.unqualified_name);
+			      break;
+			    }
+		      auto config_fn_ovr
+			= make_temp_override (contract_config_declarator_function,
+					      config_fn);
+		      contract_specifiers
+			= cp_parser_function_contract_specifier_seq (parser,
+								      params);
+		      free (config_fn);
+		    }
 
 		  /* D4324: PTRMEM_THIS_PARM (if any 'this' reference in
 		     the condition resolved to it above) isn't one of
@@ -35255,8 +35275,12 @@ cp_parser_late_object_contracts (cp_parser *parser, tree decl)
    an ordinary function contract).  */
 
 static tree
-cp_parser_contract_control_object (cp_parser *parser)
+cp_parser_contract_control_object (cp_parser *parser, bool *chosen = nullptr)
 {
+  /* Whether the code chooses the control object: not for a bare
+     assertion or an empty '<>' (see contract_configured_control).  */
+  if (chosen)
+    *chosen = false;
   if (!cp_lexer_next_token_is (parser->lexer, CPP_LESS))
     {
       if (!flag_contract_control_objects)
@@ -35295,6 +35319,8 @@ cp_parser_contract_control_object (cp_parser *parser)
   parser->greater_than_is_operator_p = false;
 
   tree control = cp_parser_constant_expression (parser);
+  if (chosen)
+    *chosen = true;
 
   parser->greater_than_is_operator_p = saved_gtio;
 
@@ -35370,8 +35396,15 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
   token = cp_lexer_consume_token (parser->lexer);
   location_t loc = token->location;
 
-  /* Parse the optional control object: contract_assert<obj>(cond).  */
-  tree control_object = cp_parser_contract_control_object (parser);
+  /* Parse the optional control object: contract_assert<obj>(cond).  The
+     configuration may choose another (contract_configured_control).  */
+  bool control_chosen;
+  tree control_object = cp_parser_contract_control_object (parser,
+							   &control_chosen);
+  control_object
+    = contract_configured_control (control_object, control_chosen,
+				   CAK_ASSERT, loc, current_function_decl,
+				   ccs_not_applicable);
   if (control_object == error_mark_node)
     {
       cp_parser_skip_to_end_of_statement (parser);
@@ -35613,8 +35646,15 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
   location_t loc = token->location;
   bool postcondition_p = id_equal (contract_name, "post");
 
-  /* Parse the optional control object: pre<obj>(cond) / post<obj>(r: cond).  */
-  tree control_object = cp_parser_contract_control_object (parser);
+  /* Parse the optional control object: pre<obj>(cond) / post<obj>(r: cond).
+     The configuration may choose another (contract_configured_control).  */
+  bool control_chosen;
+  tree control_object = cp_parser_contract_control_object (parser,
+							   &control_chosen);
+  control_object
+    = contract_configured_control (control_object, control_chosen,
+				   postcondition_p ? CAK_POST : CAK_PRE, loc,
+				   NULL_TREE, ccs_definition);
   if (control_object == error_mark_node)
     {
       while (true)

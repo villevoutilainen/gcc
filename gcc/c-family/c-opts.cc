@@ -1760,7 +1760,9 @@ contract_config_semantic (const char *name)
     return 2;
   if (!strcmp (name, "enforce"))
     return 3;
-  if (!strcmp (name, "quick_enforce"))
+  /* P3595 spells it "quick-enforce"; -fcontract-evaluation-semantic's
+     spelling is accepted too.  */
+  if (!strcmp (name, "quick-enforce") || !strcmp (name, "quick_enforce"))
     return 4;
   return 0;
 }
@@ -1898,15 +1900,19 @@ contract_config_location (const char *loc, contract_config_entry &e,
 /* Parse the P3595 contract configuration JSON TEXT (SOURCE names it for
    diagnostics: the option, or the file), appending its entries to
    contract_config_table.  A configuration is an array of entries
-   {"match": {...}, "output": {"semantic": NAME}}; "match" may have "kind"
-   ("pre", "post", "contract_assert"), "constexpr" (true for constant
-   evaluation, false for run time), "namespace", "location", "group"
-   (matched against a control object's group_names) and "caller", each
-   optional.  "caller" is true, false, or an object with "namespace" and
-   "location" describing the calling code: an entry with "caller" true or
-   an object matches only the redundant caller-side checks (those with
-   assertion_check_side::client of a non-virtual function), and an entry
-   without it, or with it false, only the other checks.  */
+   {"match": {...}, "output": {...}}; "match" may have "kind" ("pre",
+   "post", "contract_assert"), "constexpr" (true for constant evaluation,
+   false for run time), "namespace", "location", "module", "function", "group"
+   (matched against a control object's groups ()) and "caller", each
+   optional.  "caller" is true, false, or an object with "namespace",
+   "location", "module" and "function" describing the calling code: an entry
+   with "caller" true or an object matches only the redundant caller-side
+   checks (those with assertion_check_side::client of a non-virtual
+   function), and an entry without it, or with it false, only the other
+   checks.  "output" has "semantic" (NAME), "control" (the fully qualified
+   name of a control object), or both.  A "control" is chosen once for an
+   assertion, not per evaluation, so an entry with one has no "constexpr" or
+   "caller".  */
 static void
 parse_contract_configuration (const char *text, const char *source)
 {
@@ -1925,10 +1931,11 @@ parse_contract_configuration (const char *text, const char *source)
     }
   static const char *const entry_keys[] = { "match", "output", NULL };
   static const char *const match_keys[]
-    = { "kind", "constexpr", "namespace", "location", "group", "caller",
-	NULL };
-  static const char *const caller_keys[] = { "namespace", "location", NULL };
-  static const char *const output_keys[] = { "semantic", NULL };
+    = { "kind", "constexpr", "namespace", "location", "module", "function",
+	"group", "caller", NULL };
+  static const char *const caller_keys[]
+    = { "namespace", "location", "module", "function", NULL };
+  static const char *const output_keys[] = { "semantic", "control", NULL };
   for (size_t i = 0; i < arr->size (); ++i)
     {
       json::object *obj = arr->get (i)->dyn_cast_object ();
@@ -1948,20 +1955,29 @@ parse_contract_configuration (const char *text, const char *source)
       const char *sem = NULL;
       if (!out
 	  || !contract_config_known_keys (out, "output", output_keys, source)
-	  || !contract_config_string (out, "semantic", &sem, source))
+	  || !contract_config_string (out, "semantic", &sem, source)
+	  || !contract_config_string (out, "control", &e.control, source))
 	{
 	  if (!out)
 	    error ("contract configuration %qs: an entry needs an %<output%> "
 		   "object", source);
 	  continue;
 	}
-      if (!sem || !(e.semantic = contract_config_semantic (sem)))
+      if (!sem && !e.control)
 	{
 	  error ("contract configuration %qs: %<output%> needs a "
-		 "%<semantic%>, one of %<ignore%>, %<observe%>, %<enforce%> "
-		 "and %<quick_enforce%>", source);
+		 "%<semantic%> or a %<control%>", source);
 	  continue;
 	}
+      if (sem && !(e.semantic = contract_config_semantic (sem)))
+	{
+	  error ("contract configuration %qs: %<semantic%> must be one of "
+		 "%<ignore%>, %<observe%>, %<enforce%> and %<quick-enforce%>",
+		 source);
+	  continue;
+	}
+      if (e.control && !strncmp (e.control, "::", 2))
+	e.control += 2;
 
       if (json::value *match_v = obj->get ("match"))
 	{
@@ -1978,7 +1994,10 @@ parse_contract_configuration (const char *text, const char *source)
 	  if (!contract_config_string (match, "kind", &kind, source)
 	      || !contract_config_string (match, "namespace", &e.ns, source)
 	      || !contract_config_string (match, "group", &e.group, source)
-	      || !contract_config_string (match, "location", &loc, source))
+	      || !contract_config_string (match, "location", &loc, source)
+	      || !contract_config_string (match, "module", &e.module, source)
+	      || !contract_config_string (match, "function", &e.function,
+					  source))
 	    continue;
 	  if (kind)
 	    {
@@ -2022,8 +2041,14 @@ parse_contract_configuration (const char *text, const char *source)
 		      || !contract_config_string (co, "namespace", &e.caller_ns,
 						  source)
 		      || !contract_config_string (co, "location", &cloc,
-						  source))
+						  source)
+		      || !contract_config_string (co, "module", &e.caller_module,
+						  source)
+		      || !contract_config_string (co, "function",
+						  &e.caller_function, source))
 		    continue;
+		  if (e.caller_function && !strncmp (e.caller_function, "::", 2))
+		    e.caller_function += 2;
 		  if (e.caller_ns && !strncmp (e.caller_ns, "::", 2))
 		    e.caller_ns += 2;
 		  if (cloc)
@@ -2047,8 +2072,18 @@ parse_contract_configuration (const char *text, const char *source)
 	    }
 	  if (e.ns && !strncmp (e.ns, "::", 2))
 	    e.ns += 2;
+	  if (e.function && !strncmp (e.function, "::", 2))
+	    e.function += 2;
 	  if (loc && !contract_config_location (loc, e, source))
 	    continue;
+	  if (e.control && (e.constexpr_eval != -1 || match->get ("caller")))
+	    {
+	      error ("contract configuration %qs: an entry with a "
+		     "%<control%> can't match %<constexpr%> or %<caller%>: the "
+		     "control object is chosen once for an assertion, not for "
+		     "each evaluation", source);
+	      continue;
+	    }
 	}
       contract_config_table.safe_push (e);
     }
