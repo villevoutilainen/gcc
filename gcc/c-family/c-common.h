@@ -1795,6 +1795,15 @@ struct contract_config_entry
      the compiler creates for a matching assertion whose code chose none
      (or whose control object is config_replaceable); NULL if none.  */
   const char *control;
+  /* "output": "dynamic": the selection function's name (fully qualified,
+     or with "linkage": "C" the symbol), whether its linkage is C, and
+     whether to emit a weak definition returning the semantic ("semantic",
+     else the control object's default) in a translation unit that doesn't
+     define it.  The compiler expands it to the control object
+     std::contracts::dynamic_v<&name, ...>.  */
+  const char *dynamic_name;
+  bool dynamic_c_linkage;
+  bool dynamic_provideweak;
 };
 extern vec<contract_config_entry> contract_config_table;
 

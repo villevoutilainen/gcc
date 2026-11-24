@@ -104,6 +104,88 @@ namespace contracts
   // default_control by the name it was first given.
   using annotated = default_control;
 
+  // A P3595 contract configuration's "dynamic": the compiler expands it
+  // to dynamic_v<&_Fn, _Constify> (or, with a "semantic", dynamic_v<&_Fn,
+  // _Constify, _Sem>), _Fn the configuration's selection function and
+  // _Constify what the control object it replaces said.  Each evaluation
+  // calls _Fn once, and the semantic it returns decides; a violation
+  // reports it.  A constant evaluation can't call _Fn, so it uses _Sem,
+  // which is also what the compiler's weak default of _Fn returns:
+  // enforce unless the configuration says otherwise.  Never ignored
+  // ahead of time, and never assumed: _Fn may choose to check.
+  template<evaluation_semantic (*_Fn)(), bool _Constify,
+	   evaluation_semantic _Sem = evaluation_semantic::enforce>
+    struct dynamic_control : __annotation {
+      using __annotation::__annotation;
+
+      static constexpr evaluation_semantic default_semantic = _Sem;
+
+      static constexpr bool
+      is_ignored(assertion_static_info) noexcept { return false; }
+      static constexpr bool
+      constify(assertion_static_info) noexcept { return _Constify; }
+      static constexpr bool
+      assumable(assertion_static_info) noexcept { return false; }
+
+      // Not noexcept: an exception thrown by the selection function, the
+      // predicate or the violation handler propagates to the caller.
+      constexpr void
+      operator()(const assertion_context& __ctx) const
+      {
+	// Not const: a const integral variable's initializer would be
+	// manifestly constant-evaluated, choosing _Sem at run time too.
+	evaluation_semantic __sem = _S_select();
+	if (__sem == evaluation_semantic::ignore)
+	  return;
+	__default_check(__ctx, __sem, _M_message);
+      }
+
+      // With the condition's operands: the message gives their values.
+      template<typename... _Ops>
+	constexpr void
+	operator()(const assertion_context& __ctx, const _Ops&... __ops) const
+	{
+	  evaluation_semantic __sem = _S_select();	// not const: as above
+	  if (__sem == evaluation_semantic::ignore || __ctx.check())
+	    return;
+	  if consteval
+	    {
+	      __default_fail(__ctx, __sem, _M_message);
+	    }
+	  else
+	    {
+	      if (__sem == evaluation_semantic::quick_enforce)
+		__default_fail(__ctx, __sem, _M_message);
+	      else
+		{
+		  char __buf[__contract_message_size];
+		  __default_fail(__ctx, __sem,
+				 __simple_operand_message(__buf, __ctx,
+							  _M_message,
+							  __ops...));
+		}
+	    }
+	}
+
+    private:
+      static constexpr evaluation_semantic
+      _S_select()
+      {
+	if consteval
+	  {
+	    return _Sem;
+	  }
+	else
+	  {
+	    return _Fn();
+	  }
+      }
+    };
+
+  template<evaluation_semantic (*_Fn)(), bool _Constify,
+	   evaluation_semantic _Sem = evaluation_semantic::enforce>
+    inline constexpr dynamic_control<_Fn, _Constify, _Sem> dynamic_v{};
+
   struct review : __annotation {
     using __annotation::__annotation;
 

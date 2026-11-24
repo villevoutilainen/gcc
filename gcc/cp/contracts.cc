@@ -41,6 +41,7 @@ along with GCC; see the file COPYING3.  If not see
 #include "stor-layout.h"
 #include "intl.h"
 #include "cgraph.h"
+#include "varasm.h"
 #include "opts.h"
 #include "calls.h"
 #include "output.h"
@@ -3930,6 +3931,7 @@ static unsigned contract_wrappers_defined;
 
 static bool contract_redundant_caller_check_p (tree, int, tree);
 static void contract_configure_caller_control (tree, tree);
+static bool contract_emit_dynamic_defaults ();
 
 /* Map traversal callback to define a wrapper function.
    This generates code for client-side contract check wrappers and the
@@ -4065,6 +4067,9 @@ emit_contract_wrapper_func (bool done)
       if (done)
 	decl_masked_wrapper_fn->empty ();
     }
+  /* The weak defaults of the "dynamic" selection functions.  */
+  if (contract_emit_dynamic_defaults () && !done)
+    more = true;
   gcc_checking_assert (!done || !more);
   /* A wrapper built: what its checks use may need instantiating.  */
   if (!done && contract_wrappers_defined != defined_before)
@@ -9602,10 +9607,10 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
    For CALLER, the redundant caller-side check of a call whose caller
    matches the "caller" objects contract_config_caller_mask says, only
    entries with a "caller" take part, else only the others; entries with a
-   "constexpr" never do.  NULL if that entry names none, or none
-   matches.  */
+   "constexpr" never do.  NULL if that entry chooses none (it has neither
+   a "control" nor a "dynamic"), or none matches.  */
 
-static const char *
+static const contract_config_entry *
 contract_config_control_for (unsigned kind, location_t loc, tree ctrl,
 			     tree fn, bool caller)
 {
@@ -9618,7 +9623,7 @@ contract_config_control_for (unsigned kind, location_t loc, tree ctrl,
   bool groups_known = false;
   char *fn_name = NULL;
   bool fn_name_known = false;
-  const char *result = NULL;
+  const contract_config_entry *result = NULL;
   for (unsigned i = 0; i < contract_config_table.length (); ++i)
     {
       const contract_config_entry &e = contract_config_table[i];
@@ -9664,7 +9669,8 @@ contract_config_control_for (unsigned kind, location_t loc, tree ctrl,
 	  if (!covered)
 	    continue;
 	}
-      result = e.control;
+      if (e.control || e.dynamic_name)
+	result = &e;
       break;
     }
   for (char *g : groups)
@@ -9717,6 +9723,221 @@ contract_config_lookup_control (const char *name, location_t loc)
   return error_mark_node;
 }
 
+/* The "dynamic" selection functions this translation unit uses: a
+   TREE_LIST, TREE_PURPOSE the configuration's name (an identifier),
+   TREE_VALUE the FUNCTION_DECL, TREE_TYPE the semantic its weak default
+   returns (NULL_TREE: none is emitted) and TREE_ADDRESSABLE once
+   contract_emit_dynamic_defaults has dealt with it.  */
+
+static GTY(()) tree contract_dynamic_functions;
+
+/* Whether FN is a function std::contracts::evaluation_semantic () (of
+   SEM_TYPE), noexcept or not, at namespace scope.  */
+
+static bool
+contract_dynamic_function_p (tree fn, tree sem_type)
+{
+  return (TREE_CODE (fn) == FUNCTION_DECL
+	  && DECL_NAMESPACE_SCOPE_P (fn)
+	  && same_type_p (TREE_TYPE (TREE_TYPE (fn)), sem_type)
+	  && TYPE_ARG_TYPES (TREE_TYPE (fn)) == void_list_node);
+}
+
+/* The selection function of E, a configuration entry with a "dynamic":
+   the function declared with E's name (it must be an
+   std::contracts::evaluation_semantic (), else an error at LOC), or else
+   one the compiler declares, hidden from name lookup until the program
+   declares it, creating the namespaces its name needs.  With "linkage":
+   "C", a name that isn't an identifier is the symbol of a declaration no
+   name lookup finds.  error_mark_node on an error.  */
+
+static tree
+contract_config_dynamic_function (const contract_config_entry &e,
+				  tree sem_type, location_t loc)
+{
+  tree name = get_identifier (e.dynamic_name);
+  for (tree l = contract_dynamic_functions; l; l = TREE_CHAIN (l))
+    if (TREE_PURPOSE (l) == name)
+      return TREE_VALUE (l);
+
+  tree fntype = build_function_type (sem_type, void_list_node);
+  bool identifier_p = true;
+  for (const char *p = e.dynamic_name; *p; ++p)
+    if (!ISIDNUM (*p))
+      identifier_p = false;
+  tree decl = NULL_TREE;
+  bool bad = false;
+  push_to_top_level ();
+  int depth = 0;
+  if (e.dynamic_c_linkage && !identifier_p)
+    {
+      /* A symbol, perhaps one mangled elsewhere.  */
+      decl = build_lang_decl_loc (loc, FUNCTION_DECL,
+				  get_identifier (e.dynamic_name), fntype);
+      SET_DECL_LANGUAGE (decl, lang_c);
+      SET_DECL_ASSEMBLER_NAME (decl, name);
+      DECL_CONTEXT (decl) = FROB_CONTEXT (global_namespace);
+      DECL_EXTERNAL (decl) = true;
+      TREE_PUBLIC (decl) = true;
+      DECL_ARTIFICIAL (decl) = true;
+    }
+  else
+    {
+      const char *p = e.dynamic_name;
+      for (const char *sep; !e.dynamic_c_linkage
+			    && (sep = strstr (p, "::")); p = sep + 2)
+	{
+	  tree id = get_identifier_with_length (p, sep - p);
+	  tree ns = lookup_qualified_name (current_namespace, id,
+					   LOOK_want::NORMAL, false);
+	  if (ns && ns != error_mark_node
+	      && (TREE_CODE (ns) != NAMESPACE_DECL || DECL_NAMESPACE_ALIAS (ns)))
+	    {
+	      bad = true;
+	      break;
+	    }
+	  depth += push_namespace (id);
+	}
+      if (!bad)
+	{
+	  tree id = get_identifier (p);
+	  tree found = lookup_qualified_name (current_namespace, id,
+					      LOOK_want::NORMAL, false);
+	  if (found && found != error_mark_node)
+	    {
+	      for (tree f : lkp_range (found))
+		if (contract_dynamic_function_p (f, sem_type)
+		    && (DECL_EXTERN_C_P (f) == e.dynamic_c_linkage))
+		  decl = f;
+	      if (!decl)
+		bad = true;
+	    }
+	  else
+	    {
+	      decl = build_lang_decl_loc (loc, FUNCTION_DECL, id, fntype);
+	      SET_DECL_LANGUAGE (decl, e.dynamic_c_linkage ? lang_c
+				 : lang_cplusplus);
+	      DECL_CONTEXT (decl) = FROB_CONTEXT (current_namespace);
+	      DECL_EXTERNAL (decl) = true;
+	      TREE_PUBLIC (decl) = true;
+	      decl = pushdecl (decl, /*hiding=*/true);
+	    }
+	}
+    }
+  while (depth--)
+    pop_namespace ();
+  pop_from_top_level ();
+  if (bad)
+    {
+      error_at (loc, "%qs, the %<dynamic%> function of a matching contract "
+		"configuration entry, names something other than a "
+		"function %<std::contracts::evaluation_semantic ()%> with "
+		"%s linkage at namespace scope", e.dynamic_name,
+		e.dynamic_c_linkage ? "C" : "C++");
+      decl = error_mark_node;
+    }
+  contract_dynamic_functions
+    = tree_cons (name, decl, contract_dynamic_functions);
+  return decl;
+}
+
+/* The control object a configuration entry E with a "dynamic" chooses,
+   for an assertion whose code names control object CTRL (on SIDE, of
+   FN): std::contracts::dynamic_v<&F, C>, F the selection function and C
+   whether CTRL constifies (the condition was parsed as CTRL said), or
+   dynamic_v<&F, C, S> with E's "semantic" S; else dynamic_control's
+   default decides.  error_mark_node on an error, diagnosed at LOC.  */
+
+static tree
+contract_config_dynamic_control (const contract_config_entry &e, tree ctrl,
+				 contract_check_side side, tree fn,
+				 location_t loc)
+{
+  tree id_ns = get_identifier ("contracts");
+  tree ns = lookup_qualified_name (std_node, id_ns);
+  tree tmpl = NULL_TREE;
+  if (TREE_CODE (ns) == NAMESPACE_DECL)
+    tmpl = lookup_qualified_name (ns, get_identifier ("dynamic_v"));
+  tree sem_type = NULL_TREE;
+  if (TREE_CODE (ns) == NAMESPACE_DECL)
+    sem_type = lookup_qualified_name (ns,
+				      get_identifier ("evaluation_semantic"),
+				      LOOK_want::TYPE);
+  if (!tmpl || !variable_template_p (tmpl) || !sem_type
+      || TREE_CODE (sem_type) != TYPE_DECL
+      || TREE_CODE (TREE_TYPE (sem_type)) != ENUMERAL_TYPE)
+    {
+      static bool reported;
+      if (!reported)
+	error_at (loc, "%<std::contracts::dynamic_v%> has not been declared; "
+		  "include %<<contracts>%> for the %<dynamic%> of a contract "
+		  "configuration");
+      reported = true;
+      return error_mark_node;
+    }
+  sem_type = TREE_TYPE (sem_type);
+  tree f = contract_config_dynamic_function (e, sem_type, loc);
+  if (f == error_mark_node)
+    return error_mark_node;
+  bool constify = contract_control_constifies (ctrl, side, fn, true);
+  tree args = make_tree_vec (e.semantic ? 3 : 2);
+  mark_used (f);
+  TREE_VEC_ELT (args, 0) = build_address (f);
+  TREE_VEC_ELT (args, 1) = constify ? boolean_true_node : boolean_false_node;
+  if (e.semantic)
+    TREE_VEC_ELT (args, 2) = build_int_cst (sem_type, e.semantic);
+  tree var;
+  {
+    processing_template_decl_sentinel ptds;
+    var = lookup_and_finish_template_variable (tmpl, args,
+					       tf_warning_or_error);
+  }
+  if (!var || var == error_mark_node || !VAR_P (var))
+    return error_mark_node;
+  /* What the weak default returns: the control object's default.  */
+  for (tree l = contract_dynamic_functions; l; l = TREE_CHAIN (l))
+    if (TREE_VALUE (l) == f && !TREE_TYPE (l) && e.dynamic_provideweak)
+      {
+	tree sem = lookup_qualified_name (TREE_TYPE (var),
+					  get_identifier ("default_semantic"));
+	if (sem && sem != error_mark_node)
+	  sem = maybe_constant_value (sem);
+	if (sem && TREE_CODE (sem) == INTEGER_CST)
+	  TREE_TYPE (l) = fold_convert (sem_type, sem);
+      }
+  return var;
+}
+
+/* Define the weak default of each "dynamic" selection function used and
+   not defined in this translation unit ("provideweak", true unless the
+   configuration says false).  True if it defined any.  */
+
+static bool
+contract_emit_dynamic_defaults ()
+{
+  bool any = false;
+  for (tree l = contract_dynamic_functions; l; l = TREE_CHAIN (l))
+    {
+      tree decl = TREE_VALUE (l);
+      if (TREE_ADDRESSABLE (l) || decl == error_mark_node || !TREE_TYPE (l))
+	continue;
+      TREE_ADDRESSABLE (l) = true;
+      if (DECL_INITIAL (decl) && DECL_INITIAL (decl) != error_mark_node)
+	continue;
+      DECL_EXTERNAL (decl) = false;
+      declare_weak (decl);
+      start_preparsed_function (decl, NULL_TREE, SF_DEFAULT | SF_PRE_PARSED);
+      tree body = begin_function_body ();
+      tree compound_stmt = begin_compound_stmt (BCS_FN_BODY);
+      finish_return_stmt (TREE_TYPE (l));
+      finish_compound_stmt (compound_stmt);
+      finish_function_body (body);
+      expand_or_defer_fn (finish_function (/*inline_p=*/false));
+      any = true;
+    }
+  return any;
+}
+
 /* The control object of a contract assertion of KIND at LOC, of function
    FN (NULL_TREE: the one being declared), checked on SIDE, whose code
    names control object CTRL -- CODE_CHOSEN if the code chose it, false
@@ -9736,7 +9957,7 @@ contract_configured_control (tree ctrl, bool code_chosen, unsigned kind,
     return ctrl;
   bool has_control = false;
   for (const contract_config_entry &e : contract_config_table)
-    if (e.control)
+    if (e.control || e.dynamic_name)
       has_control = true;
   if (!has_control)
     return ctrl;
@@ -9753,11 +9974,13 @@ contract_configured_control (tree ctrl, bool code_chosen, unsigned kind,
 					   fn) != 1)
 	return ctrl;
     }
-  const char *name = contract_config_control_for (kind, loc, ctrl, fn,
-						  caller);
-  if (!name)
+  const contract_config_entry *e
+    = contract_config_control_for (kind, loc, ctrl, fn, caller);
+  if (!e)
     return ctrl;
-  return contract_config_lookup_control (name, loc);
+  if (e->dynamic_name)
+    return contract_config_dynamic_control (*e, ctrl, side, fn, loc);
+  return contract_config_lookup_control (e->control, loc);
 }
 
 /* The control object of CONTRACT's redundant caller-side check, of FN or

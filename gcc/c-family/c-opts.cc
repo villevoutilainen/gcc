@@ -1935,7 +1935,10 @@ parse_contract_configuration (const char *text, const char *source)
 	"group", "caller", NULL };
   static const char *const caller_keys[]
     = { "namespace", "location", "module", "function", NULL };
-  static const char *const output_keys[] = { "semantic", "control", NULL };
+  static const char *const output_keys[]
+    = { "semantic", "control", "dynamic", NULL };
+  static const char *const dynamic_keys[]
+    = { "linkage", "name", "provideweak", NULL };
   for (size_t i = 0; i < arr->size (); ++i)
     {
       json::object *obj = arr->get (i)->dyn_cast_object ();
@@ -1963,10 +1966,85 @@ parse_contract_configuration (const char *text, const char *source)
 		   "object", source);
 	  continue;
 	}
-      if (!sem && !e.control)
+      e.dynamic_provideweak = true;
+      if (json::value *dv = out->get ("dynamic"))
+	{
+	  json::object *dyn = dv->dyn_cast_object ();
+	  const char *linkage = NULL;
+	  if (!dyn)
+	    {
+	      error ("contract configuration %qs: %<dynamic%> must be a JSON "
+		     "object", source);
+	      continue;
+	    }
+	  if (!contract_config_known_keys (dyn, "dynamic", dynamic_keys,
+					   source)
+	      || !contract_config_string (dyn, "name", &e.dynamic_name, source)
+	      || !contract_config_string (dyn, "linkage", &linkage, source))
+	    continue;
+	  if (!e.dynamic_name)
+	    {
+	      error ("contract configuration %qs: %<dynamic%> needs a "
+		     "%<name%>", source);
+	      continue;
+	    }
+	  if (linkage && !strcmp (linkage, "C"))
+	    e.dynamic_c_linkage = true;
+	  else if (linkage && strcmp (linkage, "C++"))
+	    {
+	      error ("contract configuration %qs: %<linkage%> must be %<C%> "
+		     "or %<C++%>", source);
+	      continue;
+	    }
+	  if (json::value *pw = dyn->get ("provideweak"))
+	    {
+	      if (pw->get_kind () == json::JSON_TRUE)
+		e.dynamic_provideweak = true;
+	      else if (pw->get_kind () == json::JSON_FALSE)
+		e.dynamic_provideweak = false;
+	      else
+		{
+		  error ("contract configuration %qs: %<provideweak%> must be "
+			 "a boolean", source);
+		  continue;
+		}
+	    }
+	  if (!e.dynamic_c_linkage && !strncmp (e.dynamic_name, "::", 2))
+	    e.dynamic_name += 2;
+	  if (e.control)
+	    {
+	      error ("contract configuration %qs: an %<output%> can't have "
+		     "both a %<control%> and a %<dynamic%>: %<dynamic%> "
+		     "chooses the control object", source);
+	      continue;
+	    }
+	  if (!flag_contract_control_objects)
+	    {
+	      error ("contract configuration %qs: %<dynamic%> needs "
+		     "%<-fcontract-control-objects%>", source);
+	      continue;
+	    }
+	  /* One selection function, one weak default: its semantic.  */
+	  bool clash = false;
+	  for (const contract_config_entry &o : contract_config_table)
+	    if (o.dynamic_name && !strcmp (o.dynamic_name, e.dynamic_name)
+		&& (o.dynamic_c_linkage != e.dynamic_c_linkage
+		    || o.semantic != contract_config_semantic (sem ? sem : "")
+		    || o.dynamic_provideweak != e.dynamic_provideweak))
+	      clash = true;
+	  if (clash)
+	    {
+	      error ("contract configuration %qs: the entries naming the "
+		     "%<dynamic%> function %qs must give it the same "
+		     "%<linkage%>, %<semantic%> and %<provideweak%>", source,
+		     e.dynamic_name);
+	      continue;
+	    }
+	}
+      if (!sem && !e.control && !e.dynamic_name)
 	{
 	  error ("contract configuration %qs: %<output%> needs a "
-		 "%<semantic%> or a %<control%>", source);
+		 "%<semantic%>, a %<control%> or a %<dynamic%>", source);
 	  continue;
 	}
       if (sem && !(e.semantic = contract_config_semantic (sem)))
@@ -2076,12 +2154,12 @@ parse_contract_configuration (const char *text, const char *source)
 	    e.function += 2;
 	  if (loc && !contract_config_location (loc, e, source))
 	    continue;
-	  if (e.control && e.constexpr_eval != -1)
+	  if ((e.control || e.dynamic_name) && e.constexpr_eval != -1)
 	    {
-	      error ("contract configuration %qs: an entry with a "
-		     "%<control%> can't match %<constexpr%>: the control "
-		     "object is chosen for an assertion, not for each "
-		     "evaluation", source);
+	      error ("contract configuration %qs: an entry with a %qs can't "
+		     "match %<constexpr%>: the control object is chosen for an "
+		     "assertion, not for each evaluation", source,
+		     e.control ? "control" : "dynamic");
 	      continue;
 	    }
 	}

@@ -1086,6 +1086,8 @@ export namespace std::contracts::inline controls
   using std::contracts::controls::conveyor_assert_v;
   using std::contracts::controls::default_control;
   using std::contracts::controls::default_v;
+  using std::contracts::controls::dynamic_control;
+  using std::contracts::controls::dynamic_v;
   using std::contracts::controls::group_name;
   using std::contracts::controls::ignore;
   using std::contracts::controls::ignore_v;
