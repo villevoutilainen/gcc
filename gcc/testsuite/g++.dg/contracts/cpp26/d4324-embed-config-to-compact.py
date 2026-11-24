@@ -18,11 +18,12 @@ def lstr(s):
 
 def main(src, dst):
     entries = json.load(open(src))
-    out = bytearray(b"P3595c\x01")
+    out = bytearray(b"P3595c\x02")
     out.append(len(entries))
     for e in entries:
         m = e.get("match", {})
-        unknown = set(m) - {"kind", "namespace", "function", "location", "caller"}
+        unknown = set(m) - {"kind", "namespace", "function", "location",
+                            "caller", "group"}
         if unknown:
             sys.exit(f"unsupported match keys: {sorted(unknown)}")
         file, lines = "", []
@@ -37,11 +38,12 @@ def main(src, dst):
         fn = m.get("function", "").removeprefix("::")
         out += bytes([KINDS[m["kind"]] if "kind" in m else 0,
                       1 if m.get("caller") is True else 0,
-                      SEMANTICS[e["output"]["semantic"]],
+                      SEMANTICS.get(e["output"].get("semantic"), 0),
                       len(lines)])
         for lo, hi in lines:
             out += struct.pack("<II", lo, hi)
         out += lstr(ns) + lstr(fn) + lstr(file)
+        out += lstr(m.get("group", "")) + lstr(e["output"].get("group", ""))
     open(dst, "wb").write(out)
 
 

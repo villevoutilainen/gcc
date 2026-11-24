@@ -1,0 +1,7 @@
+[
+  {"match": {"namespace": "vendor"}, "output": {"group": "vendor.io"}},
+  {"match": {"function": "app::special"}, "output": {"group": "special", "semantic": "ignore"}},
+  {"match": {"group": "vendor"}, "output": {"semantic": "observe"}},
+  {"match": {"group": "lib"}, "output": {"semantic": "observe"}},
+  {"match": {"group": "special"}, "output": {"semantic": "enforce"}}
+]

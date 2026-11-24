@@ -178,6 +178,8 @@ namespace contracts
     const char* _M_operand_names;
     __SIZE_TYPE__ _M_operand_count;
     const char* _M_operand_format;
+    // The group a contract configuration assigns the assertion.
+    const char* _M_configured_group;
 
     friend struct __evaluate_with_access;
 
@@ -237,6 +239,12 @@ namespace contracts
     // (-fcontract-violation-information=none).
     constexpr const char* operand_format() const noexcept
     { return _M_operand_format ? _M_operand_format : ""; }
+
+    // The group a contract configuration ("output": "group") assigns the
+    // assertion, for the control object to use: the library's own use it
+    // when the code gives them no group.  Never null: empty if none.
+    constexpr const char* configured_group() const noexcept
+    { return _M_configured_group ? _M_configured_group : ""; }
   };
 
 #if __cpp_impl_reflection
@@ -1525,9 +1533,14 @@ namespace contracts
     groups() const noexcept
     { return { &_M_group }; }
 
+    // The group the code gives, else the one a configuration assigns.
+    constexpr const char*
+    __group(assertion_static_info __info) const noexcept
+    { return _M_group && *_M_group ? _M_group : __info.configured_group(); }
+
     constexpr evaluation_semantic
     __semantic(assertion_static_info __info) const noexcept
-    { return __group_semantic(_M_group, __info); }
+    { return __group_semantic(__group(__info), __info); }
   };
 
 

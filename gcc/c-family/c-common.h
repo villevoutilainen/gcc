@@ -1804,6 +1804,13 @@ struct contract_config_entry
   const char *dynamic_name;
   bool dynamic_c_linkage;
   bool dynamic_provideweak;
+  /* "output": "group": the group the configuration assigns a matching
+     assertion (a '.'-separated name), or NULL.  Assigned in a first pass
+     over the entries with one, matched by their "group" against the
+     control object's own groups; the other outputs' "group" matches see
+     it too.  A control object reads it as
+     assertion_static_info::configured_group ().  */
+  const char *out_group;
 };
 extern vec<contract_config_entry> contract_config_table;
 

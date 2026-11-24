@@ -10,6 +10,14 @@
 // "namespace" and "function") and its static info (kind(), side(),
 // location()) -- and the compiler makes the result the semantic the rest
 // of the control object (is_ignored, operator()) sees.
+//
+// A rule may assign a group ("output": "group") instead of, or as well
+// as, a semantic: the first such rule matching the assertion assigns it,
+// and the rules naming a group then match it, as if the code had given
+// it; without one, they match the group the compiler's own configuration
+// assigned (assertion_static_info::configured_group()).  A rule naming
+// only a group, and a semantic, is also for the labels
+// (semantic_for_group).
 #ifndef D4324_EMBED_CONFIG_COMMON_H
 #define D4324_EMBED_CONFIG_COMMON_H
 
@@ -73,6 +81,7 @@ struct rule
   std::array<std::uint32_t, 16> lines{};	// lo/hi pairs
   fstr ns, function, file;
   fstr group;			// "a.b": matched by a control object's own group
+  fstr out_group;		// "output": "group": the group it assigns
 };
 
 struct rules_t
@@ -93,7 +102,8 @@ struct rules_t
     for (unsigned i = 0; i < n; ++i)
       {
 	const rule& g = r[i];
-	if (g.group.empty () || g.kind || g.caller || !g.ns.empty ()
+	if (g.group.empty () || !g.semantic || g.kind || g.caller
+	    || !g.ns.empty ()
 	    || !g.function.empty () || !g.file.empty ())
 	  continue;
 	std::string_view grp = g.group.view ();
@@ -114,6 +124,14 @@ struct rules_t
 	    cand[c][k][ncand[c][k]++] = i;
   }
 };
+
+// Whether group G covers NAME: NAME is G, or nested in it ("G.x").
+constexpr bool
+group_covers (std::string_view g, std::string_view name)
+{
+  return name == g || (name.size () > g.size () && name.starts_with (g)
+		       && name[g.size ()] == '.');
+}
 
 // A file name matches an entry naming it, or naming a trailing part of
 // its path.
@@ -187,46 +205,69 @@ struct configured
     return scope == ^^::;
   }
 
-  // The semantic of the first rule matching the assertion D describes,
-  // else the one it already has.  The compiler then gives this assertion
-  // that semantic: in the static info of the other queries and in the
-  // assertion_context of operator().
+  // Whether rule R matches the assertion D describes (CHAIN its
+  // namespaces), its group being GROUP (empty: none).
+  static consteval bool
+  matches (const rule& r, const std::contracts::assertion_declaration_info& d,
+	   const ns_chain& chain, std::string_view group)
+  {
+    const assertion_static_info& info = d.info;
+    bool in_fn = d.function != std::meta::info{};
+    auto loc = info.location ();
+    if (!r.group.empty ()
+	&& (group.empty () || !group_covers (r.group.view (), group)))
+      return false;
+    if (!r.ns.empty () && !ns_chain_matches (r.ns, chain))
+      return false;
+    if (!r.function.empty ()
+	&& !(in_fn && function_matches (r.function, d.function)))
+      return false;
+    if (!r.file.empty ())
+      {
+	if (!file_matches (r.file.view (), loc.file_name ()))
+	  return false;
+	bool in = r.nlines == 0;
+	for (unsigned j = 0; j < r.nlines; ++j)
+	  if (loc.line () >= r.lines[2 * j]
+	      && loc.line () <= r.lines[2 * j + 1])
+	    in = true;
+	if (!in)
+	  return false;
+      }
+    return true;
+  }
+
+  // The semantic of the first rule with one matching the assertion D
+  // describes, else the one it already has.  The group the rules naming
+  // one match is the one the first matching rule with a "group" output
+  // assigns, else the compiler's configuration's.  The compiler then
+  // gives this assertion that semantic: in the static info of the other
+  // queries and in the assertion_context of operator().
   static consteval evaluation_semantic
   compute_semantic (std::contracts::assertion_declaration_info d)
   {
     const assertion_static_info& info = d.info;
-    bool in_fn = d.function != std::meta::info{};
     // The namespaces enclosing the assertion, from the one the compiler
     // gives (that of its function, or where it is).
     ns_chain chain = namespaces_of (d.enclosing_namespace);
     bool caller = (info.side () == assertion_check_side::client
 		   && !info.is_virtual ());
-    auto loc = info.location ();
     unsigned kind = unsigned (info.kind ());
+    std::string_view group = info.configured_group ();
     for (unsigned j = 0; j < Rules.ncand[caller][kind]; ++j)
       {
 	const rule& r = Rules.r[Rules.cand[caller][kind][j]];
-	// Groups are the labels' business (semantic_for_group).
-	if (!r.group.empty ())
-	  continue;
-	if (!r.ns.empty () && !ns_chain_matches (r.ns, chain))
-	  continue;
-	if (!r.function.empty ()
-	    && !(in_fn && function_matches (r.function, d.function)))
-	  continue;
-	if (!r.file.empty ())
+	if (!r.out_group.empty () && matches (r, d, chain, group))
 	  {
-	    if (!file_matches (r.file.view (), loc.file_name ()))
-	      continue;
-	    bool in = r.nlines == 0;
-	    for (unsigned j = 0; j < r.nlines; ++j)
-	      if (loc.line () >= r.lines[2 * j]
-		  && loc.line () <= r.lines[2 * j + 1])
-		in = true;
-	    if (!in)
-	      continue;
+	    group = r.out_group.view ();
+	    break;
 	  }
-	return evaluation_semantic (r.semantic);
+      }
+    for (unsigned j = 0; j < Rules.ncand[caller][kind]; ++j)
+      {
+	const rule& r = Rules.r[Rules.cand[caller][kind][j]];
+	if (r.semantic && matches (r, d, chain, group))
+	  return evaluation_semantic (r.semantic);
       }
     return info.semantic ();
   }

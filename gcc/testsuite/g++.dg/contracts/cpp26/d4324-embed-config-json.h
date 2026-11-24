@@ -1,6 +1,6 @@
 // Parse a P3595 contract configuration (JSON) into cfg::rules_t at compile
-// time.  Supported: an array of {"match": {...}, "output": {"semantic": S}}
-// with match keys "kind", "namespace", "function", "location" ("file" or
+// time.  Supported: an array of {"match": {...}, "output": {"semantic": S,
+// "group": G}} (one of the two at least) with match keys "kind", "namespace", "function", "location" ("file" or
 // "file:N-M,K"), "caller" (boolean), "group".  Strings have no escapes.
 #ifndef D4324_EMBED_CONFIG_JSON_H
 #define D4324_EMBED_CONFIG_JSON_H
@@ -148,11 +148,21 @@ struct json_parser
 	    else if (key == "output")
 	      {
 		expect ('{');
-		char sb[128], vb[128];
-		if (str (sb) != "semantic")
-		  throw "contract configuration: output needs a semantic";
-		expect (':');
-		r.semantic = semantic_of (str (vb));
+		while (!peek ('}'))
+		  {
+		    char ob[128], vb[128];
+		    std::string_view okey = str (ob);
+		    expect (':');
+		    std::string_view v = str (vb);
+		    if (okey == "semantic")
+		      r.semantic = semantic_of (v);
+		    else if (okey == "group" && !v.empty ())
+		      r.out_group.assign (v);
+		    else
+		      throw "contract configuration: unknown output key";
+		    if (!peek ('}'))
+		      expect (',');
+		  }
 		expect ('}');
 	      }
 	    else
@@ -161,7 +171,7 @@ struct json_parser
 	      expect (',');
 	  }
 	expect ('}');
-	if (!r.semantic)
+	if (!r.semantic && r.out_group.empty ())
 	  throw "contract configuration: entry without output";
 	if (!peek (']'))
 	  expect (',');

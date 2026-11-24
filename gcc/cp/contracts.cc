@@ -7562,6 +7562,7 @@ location_t contract_static_info_loc;
    and its namespace (CONTRACT_CONFIG_NS_OVERRIDE_P: given).  */
 
 static tree contract_static_info_location_override;
+const char *contract_static_info_group;
 static expanded_location *contract_config_xloc_override;
 static bool contract_config_ns_override_p;
 static tree contract_config_ns_override;
@@ -8103,6 +8104,17 @@ build_assertion_static_info_value (contract_check_side side, tree info_type,
       CONSTRUCTOR_APPEND_ELT (CONSTRUCTOR_ELTS (info), f10,
 			      format ? fold_convert (TREE_TYPE (f10), format)
 			      : build_zero_cst (TREE_TYPE (f10)));
+    }
+  /* The group the configuration assigns, where the library has it.  */
+  tree f11 = f10 ? next_aggregate_field (DECL_CHAIN (f10)) : NULL_TREE;
+  if (f11)
+    {
+      const char *g = contract_static_info_group;
+      CONSTRUCTOR_APPEND_ELT (CONSTRUCTOR_ELTS (info), f11,
+			      g ? fold_convert (TREE_TYPE (f11),
+						build_string_literal
+						  (strlen (g) + 1, g))
+			      : build_zero_cst (TREE_TYPE (f11)));
     }
   return info;
 }
@@ -9510,6 +9522,97 @@ contract_config_caller_mask_for (tree caller, location_t loc)
   return get_identifier (mask);
 }
 
+/* Whether E has only a "group" output: the semantic and control passes
+   skip it rather than stop at it.  */
+
+static bool
+contract_config_group_only_p (const contract_config_entry &e)
+{
+  return e.out_group && !e.semantic && !e.control && !e.dynamic_name;
+}
+
+/* The group the configuration assigns ("output": "group") a contract
+   assertion of KIND at LOC, naming control object CTRL, of function FN
+   (NULL_TREE: the one being declared, or of the current scope): that of
+   the first entry with a "group" output matching it -- its kind,
+   location, namespace, module, function and CTRL's own groups (the
+   assigned group is not among them: it is assigned here).  NULL if none
+   does.  */
+
+const char *
+contract_config_group_for (unsigned kind, location_t loc, tree ctrl, tree fn)
+{
+  static int any = -1;
+  if (any < 0)
+    {
+      any = 0;
+      for (const contract_config_entry &e : contract_config_table)
+	if (e.out_group)
+	  any = 1;
+    }
+  if (!any || !kind)
+    return NULL;
+  char *ns = contract_config_ns_of (fn);
+  expanded_location xloc = (contract_config_xloc_override
+			    ? *contract_config_xloc_override
+			    : expand_location (loc));
+  auto_vec<char *> groups;
+  bool groups_known = false;
+  char *fn_name = NULL;
+  bool fn_name_known = false;
+  const char *result = NULL;
+  for (const contract_config_entry &e : contract_config_table)
+    {
+      if (!e.out_group)
+	continue;
+      if (e.kind && e.kind != kind)
+	continue;
+      if (e.ns && (!ns || !contract_config_ns_matches (e.ns, ns)))
+	continue;
+      if (e.file
+	  && !contract_config_loc_matches (e.file, e.lines, e.lines_len,
+					   e.column, xloc))
+	continue;
+      if (e.module
+	  && !contract_config_module_matches (e.module,
+					      contract_config_module_of (fn)))
+	continue;
+      if (e.function)
+	{
+	  if (!fn_name_known)
+	    {
+	      fn_name = contract_config_function_name (fn);
+	      fn_name_known = true;
+	    }
+	  if (!fn_name || strcmp (e.function, fn_name))
+	    continue;
+	}
+      if (e.group)
+	{
+	  if (!groups_known)
+	    {
+	      if (ctrl && ctrl != error_mark_node)
+		contract_control_group_names (ctrl, loc, groups);
+	      groups_known = true;
+	    }
+	  size_t n = strlen (e.group);
+	  bool covered = false;
+	  for (const char *g : groups)
+	    if (!strncmp (e.group, g, n) && (g[n] == '\0' || g[n] == '.'))
+	      covered = true;
+	  if (!covered)
+	    continue;
+	}
+      result = e.out_group;
+      break;
+    }
+  for (char *g : groups)
+    XDELETEVEC (g);
+  free (ns);
+  free (fn_name);
+  return result;
+}
+
 /* The semantic the configuration gives a contract assertion of KIND at
    LOC, naming control object CTRL (NULL_TREE: none), of function FN
    (NULL_TREE: of the current scope); CONSTEVAL is 1 for its evaluation at
@@ -9543,6 +9646,8 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
   for (unsigned i = 0; i < contract_config_table.length (); ++i)
     {
       const contract_config_entry &e = contract_config_table[i];
+      if (contract_config_group_only_p (e))
+	continue;
       if ((e.caller != 0) != caller)
 	continue;
       if (e.caller == 2 && (!mask || mask[i] != '1'))
@@ -9577,6 +9682,10 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
 	    {
 	      if (ctrl)
 		contract_control_group_names (ctrl, loc, groups);
+	      /* The group the configuration assigns, too.  */
+	      if (const char *cg = contract_config_group_for (kind, loc, ctrl,
+							      fn))
+		groups.safe_push (xstrdup (cg));
 	      groups_known = true;
 	    }
 	  /* The entry's group covers one of the assertion's: the group itself
@@ -9627,6 +9736,8 @@ contract_config_control_for (unsigned kind, location_t loc, tree ctrl,
   for (unsigned i = 0; i < contract_config_table.length (); ++i)
     {
       const contract_config_entry &e = contract_config_table[i];
+      if (contract_config_group_only_p (e))
+	continue;
       if (e.constexpr_eval != -1 || (e.caller != 0) != caller)
 	continue;
       if (e.caller == 2 && (!mask || mask[i] != '1'))
@@ -9659,6 +9770,10 @@ contract_config_control_for (unsigned kind, location_t loc, tree ctrl,
 	    {
 	      if (ctrl)
 		contract_control_group_names (ctrl, loc, groups);
+	      /* The group the configuration assigns, too.  */
+	      if (const char *cg = contract_config_group_for (kind, loc, ctrl,
+							      fn))
+		groups.safe_push (xstrdup (cg));
 	      groups_known = true;
 	    }
 	  size_t n = strlen (e.group);
@@ -33397,9 +33512,16 @@ oa_build_symbolic_scalar_check_bind (tree contract, tree ctrl, tree op,
 	    resolve_fndecl_for_diagnostic_name (current_function_decl)));
   unsigned saved_kind = contract_static_info_kind;
   contract_static_info_kind = get_contract_assertion_kind (contract);
+  const char *saved_group = contract_static_info_group;
+  if (!contract_config_table.is_empty ())
+    contract_static_info_group
+      = contract_config_group_for (contract_static_info_kind,
+				   EXPR_LOCATION (contract), ctrl,
+				   current_function_decl);
   tree info = build_assertion_static_info_value (side, info_type,
 						 current_function_decl,
 						 comment, loc_value);
+  contract_static_info_group = saved_group;
   contract_static_info_kind = saved_kind;
   tree ctor = build_constructor_va
     (ctx_type, 3,
@@ -46715,9 +46837,16 @@ build_contract_control_call (tree contract, tree ctrl, tree op, tree cc_bind,
 	    resolve_fndecl_for_diagnostic_name (current_function_decl)));
   unsigned saved_kind = contract_static_info_kind;
   contract_static_info_kind = get_contract_assertion_kind (contract);
+  const char *saved_group = contract_static_info_group;
+  if (!contract_config_table.is_empty ())
+    contract_static_info_group
+      = contract_config_group_for (contract_static_info_kind,
+				   EXPR_LOCATION (contract), ctrl,
+				   current_function_decl);
   tree info = build_assertion_static_info_value (side, info_type,
 						 current_function_decl,
 						 comment, loc_value);
+  contract_static_info_group = saved_group;
   contract_static_info_kind = saved_kind;
   tree ctor = build_constructor_va
     (ctx_type, 3,
@@ -47066,8 +47195,14 @@ build_contract_control_constexpr_check (tree contract, tree fndecl,
 	    resolve_fndecl_for_diagnostic_name (fndecl)));
   unsigned saved_kind = contract_static_info_kind;
   contract_static_info_kind = get_contract_assertion_kind (contract);
+  const char *saved_group = contract_static_info_group;
+  if (!contract_config_table.is_empty ())
+    contract_static_info_group
+      = contract_config_group_for (contract_static_info_kind,
+				   EXPR_LOCATION (contract), ctrl, fndecl);
   tree info = build_assertion_static_info_value (side, info_type, fndecl,
 						 comment, loc_value);
+  contract_static_info_group = saved_group;
   contract_static_info_kind = saved_kind;
   tree ctor = build_constructor_va
     (ctx_type, 3,

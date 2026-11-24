@@ -1936,7 +1936,7 @@ parse_contract_configuration (const char *text, const char *source)
   static const char *const caller_keys[]
     = { "namespace", "location", "module", "function", NULL };
   static const char *const output_keys[]
-    = { "semantic", "control", "dynamic", NULL };
+    = { "semantic", "control", "dynamic", "group", NULL };
   static const char *const dynamic_keys[]
     = { "linkage", "name", "provideweak", NULL };
   for (size_t i = 0; i < arr->size (); ++i)
@@ -1959,7 +1959,8 @@ parse_contract_configuration (const char *text, const char *source)
       if (!out
 	  || !contract_config_known_keys (out, "output", output_keys, source)
 	  || !contract_config_string (out, "semantic", &sem, source)
-	  || !contract_config_string (out, "control", &e.control, source))
+	  || !contract_config_string (out, "control", &e.control, source)
+	  || !contract_config_string (out, "group", &e.out_group, source))
 	{
 	  if (!out)
 	    error ("contract configuration %qs: an entry needs an %<output%> "
@@ -2041,10 +2042,11 @@ parse_contract_configuration (const char *text, const char *source)
 	      continue;
 	    }
 	}
-      if (!sem && !e.control && !e.dynamic_name)
+      if (!sem && !e.control && !e.dynamic_name && !e.out_group)
 	{
 	  error ("contract configuration %qs: %<output%> needs a "
-		 "%<semantic%>, a %<control%> or a %<dynamic%>", source);
+		 "%<semantic%>, a %<control%>, a %<dynamic%> or a %<group%>",
+		 source);
 	  continue;
 	}
       if (sem && !(e.semantic = contract_config_semantic (sem)))
@@ -2154,6 +2156,14 @@ parse_contract_configuration (const char *text, const char *source)
 	    e.function += 2;
 	  if (loc && !contract_config_location (loc, e, source))
 	    continue;
+	  if (e.out_group && (e.constexpr_eval != -1 || e.caller))
+	    {
+	      error ("contract configuration %qs: an entry with a %<group%> "
+		     "output can't match %<constexpr%> or %<caller%>: a group "
+		     "belongs to an assertion, not to an evaluation or a "
+		     "check", source);
+	      continue;
+	    }
 	  if ((e.control || e.dynamic_name) && e.constexpr_eval != -1)
 	    {
 	      error ("contract configuration %qs: an entry with a %qs can't "

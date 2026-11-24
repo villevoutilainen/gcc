@@ -1,11 +1,12 @@
 // Read the compact binary form of a contract configuration (written by
 // d4324-embed-config-to-compact.py) into cfg::rules_t at compile time.
 // Layout, all integers little-endian:
-//   "P3595c\x01"  magic and version
+//   "P3595c\x02"  magic and version
 //   u8 count
-//   per rule: u8 kind, u8 caller, u8 semantic, u8 nlines,
+//   per rule: u8 kind, u8 caller, u8 semantic (0: none), u8 nlines,
 //             nlines x (u32 lo, u32 hi),
-//             u8 len + bytes for namespace, function, file.
+//             u8 len + bytes for namespace, function, file, the group
+//             matched and the group assigned ("output": "group").
 #ifndef D4324_EMBED_CONFIG_COMPACT_H
 #define D4324_EMBED_CONFIG_COMPACT_H
 
@@ -41,7 +42,7 @@ parse_compact (const unsigned char (&d)[N])
 	buf[k] = char (u8 ());
       out.assign ({buf, n});
     };
-  for (char c : std::string_view ("P3595c\x01", 7))
+  for (char c : std::string_view ("P3595c\x02", 7))
     if (u8 () != (unsigned char) c)
       throw "compact contract configuration: bad magic";
   rules_t rs;
@@ -62,6 +63,10 @@ parse_compact (const unsigned char (&d)[N])
       s (r.ns);
       s (r.function);
       s (r.file);
+      s (r.group);
+      s (r.out_group);
+      if (!r.semantic && r.out_group.empty ())
+	throw "compact contract configuration: entry without output";
     }
   if (i != N)
     throw "compact contract configuration: trailing data";

@@ -1666,6 +1666,12 @@ extern tree contract_fix_control_object (tree, tree);
 extern unsigned contract_static_info_kind;
 extern location_t contract_static_info_loc;
 extern void contract_static_info_note (tree);
+/* For assertion_static_info::configured_group: the group the
+   configuration assigns the contract assertion being processed, or
+   NULL.  */
+extern const char *contract_static_info_group;
+extern const char *contract_config_group_for (unsigned, location_t, tree,
+					      tree);
 
 class contract_config_scope
 {
@@ -1676,6 +1682,7 @@ class contract_config_scope
   unsigned m_saved_kind;
   location_t m_saved_loc;
   unsigned m_saved_base;
+  const char *m_saved_group;
 public:
   contract_config_scope (tree contract, tree fn = NULL_TREE,
 			 int comptime = -2, int side = -1)
@@ -1685,14 +1692,22 @@ public:
       m_saved_contract (contract_static_info_contract),
       m_saved_kind (contract_static_info_kind),
       m_saved_loc (contract_static_info_loc),
-      m_saved_base (contract_config_base)
+      m_saved_base (contract_config_base),
+      m_saved_group (contract_static_info_group)
   {
-    /* For assertion_static_info::comment, kind and location.  */
+    /* For assertion_static_info::comment, kind, location and
+       configured_group.  */
     if (contract && CONTRACT_P (contract))
       {
 	contract_static_info_comment = CONTRACT_COMMENT (contract);
 	contract_static_info_contract = contract;
 	contract_static_info_note (contract);
+	contract_static_info_group
+	  = (contract_config_table.is_empty () ? NULL
+	     : contract_config_group_for (contract_static_info_kind,
+					  EXPR_LOCATION (contract),
+					  CONTRACT_CONTROL_OBJECT (contract),
+					  fn));
       }
     if (comptime != -2)
       contract_config_consteval = comptime;
@@ -1717,10 +1732,14 @@ public:
       m_saved_contract (contract_static_info_contract),
       m_saved_kind (contract_static_info_kind),
       m_saved_loc (contract_static_info_loc),
-      m_saved_base (contract_config_base)
+      m_saved_base (contract_config_base),
+      m_saved_group (contract_static_info_group)
   {
     contract_static_info_kind = kind;
     contract_static_info_loc = loc;
+    contract_static_info_group
+      = (contract_config_table.is_empty () ? NULL
+	 : contract_config_group_for (kind, loc, ctrl, fn));
     contract_config_consteval = 0;
     if (!contract_config_table.is_empty ())
       contract_config_override
@@ -1736,6 +1755,7 @@ public:
     contract_static_info_kind = m_saved_kind;
     contract_static_info_loc = m_saved_loc;
     contract_config_base = m_saved_base;
+    contract_static_info_group = m_saved_group;
   }
 };
 
