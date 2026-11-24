@@ -6816,16 +6816,64 @@ namespace contracts
   // control objects print them simply (<bits/contracts.h>).
 inline namespace controls
 {
+  // Whether printing a _Tp with std::format can't change anything: a
+  // range is walked only if it's a forward range (walking an input range,
+  // say a subrange of istream_iterator, consumes it -- reporting a
+  // violation must not change the program), and so are its elements and
+  // a pair's or tuple's members.
+  template<typename _Tp>
+    consteval bool
+    __contract_walk_safe();
+
+  template<typename _Tp>
+    struct __contract_walk_safe_members : true_type { };
+
+  template<typename _T1, typename _T2>
+    struct __contract_walk_safe_members<pair<_T1, _T2>>
+    : bool_constant<__contract_walk_safe<remove_cvref_t<_T1>>()
+		    && __contract_walk_safe<remove_cvref_t<_T2>>()> { };
+
+  template<typename... _Ts>
+    struct __contract_walk_safe_members<tuple<_Ts...>>
+    : bool_constant<(__contract_walk_safe<remove_cvref_t<_Ts>>() && ...)>
+    { };
+
+  template<typename _Tp>
+    consteval bool
+    __contract_walk_safe()
+    {
+      if constexpr (ranges::range<const _Tp>)
+	{
+	  if constexpr (!ranges::forward_range<const _Tp>)
+	    return false;
+	  else
+	    {
+	      using _El = remove_cvref_t<ranges::range_reference_t<const _Tp>>;
+	      // A range of itself (filesystem::path) stops here.
+	      if constexpr (is_same_v<_El, _Tp>)
+		return true;
+	      else
+		return __contract_walk_safe<_El>();
+	    }
+	}
+      else
+	return __contract_walk_safe_members<_Tp>::value;
+    }
+
   // An operand of a violated assertion, printed with std::format if it
-  // can be (in a hosted build) -- with the debug format ({:?}) where its
+  // can be (in a hosted build) without walking an input range
+  // (__contract_walk_safe) -- with the debug format ({:?}) where its
   // formatter has one, so strings and characters are quoted and escaped
-  // -- else as __simple_print prints it.
+  // -- else as __simple_print prints it ('?' for a range).
   template<typename _Tp>
     void
     __rich_print_erased(__contract_text& __out, const void* __p)
     {
       const _Tp& __v = *static_cast<const _Tp*>(__p);
-      if constexpr (std::formattable<_Tp, char>)
+      // Formattable as what we have, a const _Tp: a range that can't be
+      // iterated through const (istream_view, generator) is printed simply.
+      if constexpr (std::formattable<const _Tp, char>
+		    && __contract_walk_safe<_Tp>())
 	{
 	  constexpr bool __debug = requires (std::formatter<_Tp, char>& __f)
 	    { __f.set_debug_format(); };
@@ -6870,7 +6918,10 @@ inline namespace controls
   // text ("[s: \"hello\"]"; 'this' only as the string it points to, for
   // a std::string or std::string_view).  Printed with std::format where
   // an operand can be (strings and characters quoted), else as simply as
-  // the library's own control objects print, '?' at worst.  Empty without
+  // the library's own control objects print, '?' at worst.  A range is
+  // printed only if it's a forward range, as are its elements and a pair's
+  // or tuple's members: printing must not walk, and so consume, an input
+  // range.  Empty without
   // a format string (-fcontract-violation-information=none).
 
   // Into BUF, of N bytes: truncated if longer, always NUL-terminated (N
