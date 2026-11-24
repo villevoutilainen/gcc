@@ -129,6 +129,14 @@ public:
 #define CONTRACT_CONTROL_OBJECT(NODE) \
   (TREE_OPERAND (CONTRACT_CHECK (NODE), 5))
 
+/* True if the code chose CONTRACT_CONTROL_OBJECT (pre<obj>(...)), and the
+   configuration kept it: then a P3595 configuration's "control" replaces
+   it only if its config_replaceable query says so.  False for a bare
+   assertion's or an empty '<>''s std::contracts::default_v, and for a
+   control object the configuration chose (contract_configured_control).  */
+#define CONTRACT_CONTROL_CHOSEN_P(NODE) \
+  TREE_LANG_FLAG_5 (CONTRACT_CHECK (NODE))
+
 /* The VAR_DECL of a postcondition result. For deferred contracts, this
    is an IDENTIFIER.  */
 #define POSTCONDITION_IDENTIFIER(NODE) \
@@ -311,7 +319,8 @@ extern bool contract_control_symbolic_like		(tree, contract_check_side, tree, bo
 extern tree contract_default_control_object		(location_t);
 /* P3595 "output": "control" (contracts.cc).  */
 extern tree contract_configured_control (tree, bool, unsigned, location_t,
-					 tree, contract_check_side);
+					 tree, contract_check_side,
+					 bool = false);
 extern const char *contract_config_declarator_function;
 extern char *contract_config_declarator_name (tree, tree);
 extern void maybe_inherit_virtual_contract		(tree, tree);

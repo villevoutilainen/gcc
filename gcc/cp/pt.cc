@@ -13098,15 +13098,18 @@ tsubst_contract (tree decl, tree t, tree args, tsubst_flags_t complain,
 	 known now: the configuration may replace it, if it lets it
 	 (contract_configured_control).  */
       tree configured
-	= contract_configured_control (ctrl, /*code_chosen=*/true,
+	= contract_configured_control (ctrl, CONTRACT_CONTROL_CHOSEN_P (t),
 				       (TREE_CODE (t) == PRECONDITION_STMT
 					? CAK_PRE
 					: TREE_CODE (t) == POSTCONDITION_STMT
 					? CAK_POST : CAK_ASSERT),
 				       EXPR_LOCATION (t), decl,
 				       contract_side_of (t, decl));
-      if (configured != error_mark_node)
-	ctrl = configured;
+      if (configured != error_mark_node && configured != ctrl)
+	{
+	  ctrl = configured;
+	  CONTRACT_CONTROL_CHOSEN_P (r) = false;
+	}
       CONTRACT_CONTROL_OBJECT (r) = ctrl;
     }
   auto constify_ovr

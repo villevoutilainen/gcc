@@ -35401,10 +35401,14 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
   bool control_chosen;
   tree control_object = cp_parser_contract_control_object (parser,
 							   &control_chosen);
+  tree parsed_control = control_object;
   control_object
     = contract_configured_control (control_object, control_chosen,
 				   CAK_ASSERT, loc, current_function_decl,
 				   ccs_not_applicable);
+  /* Still the code's choice: a caller's configuration may not replace it
+     either (CONTRACT_CONTROL_CHOSEN_P).  */
+  control_chosen = control_chosen && control_object == parsed_control;
   if (control_object == error_mark_node)
     {
       cp_parser_skip_to_end_of_statement (parser);
@@ -35464,6 +35468,8 @@ cp_parser_contract_assert (cp_parser *parser, cp_token *token)
     contract = grok_contract (cont_assert, /*mode*/NULL_TREE,
 			      /*result*/NULL_TREE, condition, loc,
 			      control_object);
+    if (contract != error_mark_node)
+      CONTRACT_CONTROL_CHOSEN_P (contract) = control_chosen;
   }
   processing_postcondition = old_pc;
   pop_bindings_and_leave_scope ();
@@ -35651,10 +35657,14 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
   bool control_chosen;
   tree control_object = cp_parser_contract_control_object (parser,
 							   &control_chosen);
+  tree parsed_control = control_object;
   control_object
     = contract_configured_control (control_object, control_chosen,
 				   postcondition_p ? CAK_POST : CAK_PRE, loc,
 				   NULL_TREE, ccs_definition);
+  /* Still the code's choice: a caller's configuration may not replace it
+     either (CONTRACT_CONTROL_CHOSEN_P).  */
+  control_chosen = control_chosen && control_object == parsed_control;
   if (control_object == error_mark_node)
     {
       while (true)
@@ -35784,6 +35794,8 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 	identifier.maybe_add_location_wrapper ();
       contract = grok_contract (contract_name, /*mode*/NULL_TREE, identifier,
 				condition, loc, control_object);
+      if (contract != error_mark_node)
+	CONTRACT_CONTROL_CHOSEN_P (contract) = control_chosen;
 
       /* D4324 + templates: unlike the eager (non-deferred) branch below,
 	 this one never recorded PARAMS (the declarator's own real, named
@@ -35957,6 +35969,8 @@ cp_parser_function_contract_specifier (cp_parser *parser, tree params)
 					    condition_text);
 	contract = grok_contract (contract_name, /*mode*/NULL_TREE, result,
 				  condition, loc, control_object);
+	if (contract != error_mark_node)
+	  CONTRACT_CONTROL_CHOSEN_P (contract) = control_chosen;
       }
       if (n_binders > 0)
 	--processing_template_decl;

@@ -608,6 +608,7 @@ contract_side_of (tree contract, tree fndecl)
    SIDE.  */
 
 static bool contract_redundant_caller_check_p (tree, int, tree);
+static tree contract_caller_check_control (tree, tree, bool = false);
 static contract_evaluation_semantic contract_caller_side_semantic (tree,
 								   tree);
 
@@ -622,6 +623,14 @@ contract_active_p (tree contract, contract_check_side side, tree fn)
      optimizer assumption is emitted).  */
   if (tree ctrl = CONTRACT_CONTROL_OBJECT (contract))
     {
+      /* A redundant caller-side check may have a control object of its
+	 own ("caller" configuration entries with a "control").  */
+      if (contract_redundant_caller_check_p (contract, side, fn))
+	{
+	  tree configured = contract_caller_check_control (contract, fn);
+	  if (configured && configured != error_mark_node)
+	    ctrl = configured;
+	}
       /* validate() is a compile-time-only acceptability gate, entirely
 	 separate from is_ignored()'s own "should this run" question --
 	 checked first, and unconditionally (never short-circuited by
@@ -663,6 +672,7 @@ contract_active_p (tree contract, contract_check_side side, tree fn)
 
 static tree get_orig_func_for_wrapper (tree);
 
+
 static bool
 contract_runs_on_side (tree contract, contract_check_side side,
 		       tree fn = NULL_TREE)
@@ -698,8 +708,9 @@ contract_runs_on_side (tree contract, contract_check_side side,
      "caller" entry that matches decides on its own (its semantic, ignore
      included, then decides whether the check is active).  */
   if (!contract_config_table.is_empty ()
-      && contract_config_semantic_of (contract, wrapper_or_fn, 0,
-				      ccs_wrapper))
+      && (contract_config_semantic_of (contract, wrapper_or_fn, 0,
+				       ccs_wrapper)
+	  || contract_caller_check_control (contract, wrapper_or_fn, true)))
     return true;
   return (TREE_CODE (contract) == POSTCONDITION_STMT
 	  ? flag_contract_client_check > 1
@@ -3917,6 +3928,9 @@ maybe_contract_wrap_call (tree fndecl, tree call)
 
 static unsigned contract_wrappers_defined;
 
+static bool contract_redundant_caller_check_p (tree, int, tree);
+static void contract_configure_caller_control (tree, tree);
+
 /* Map traversal callback to define a wrapper function.
    This generates code for client-side contract check wrappers and the
    noexcept wrapper around the contract violation handler.  */
@@ -3945,6 +3959,14 @@ define_contract_wrapper_func (const tree& fndecl, const tree& wrapdecl,
   set_fn_contract_specifiers ( wrapdecl,
 		      copy_and_remap_contracts (wrapdecl, DECL_ORIGIN (fndecl),
 						cmk_all, /*for_wrapper=*/true));
+  /* A P3595 configuration's "caller" entries may choose the control
+     object of the redundant caller-side checks, for the callers this
+     wrapper serves (CONTRACT_CONFIG_CALLER_MASK, set above).  */
+  if (!contract_config_table.is_empty ())
+    if (tree specs = get_fn_contract_specifiers (wrapdecl))
+      for (tree c : tree_vec_range (specs))
+	if (contract_redundant_caller_check_p (c, ccs_wrapper, wrapdecl))
+	  contract_configure_caller_control (c, wrapdecl);
 
   start_preparsed_function (wrapdecl, /*DECL_ATTRIBUTES*/NULL_TREE,
 			    SF_DEFAULT | SF_PRE_PARSED);
@@ -9576,24 +9598,33 @@ contract_config_semantic_for (unsigned kind, location_t loc, tree ctrl,
    contract assertion of KIND at LOC, naming control object CTRL, of
    function FN (NULL_TREE: the one being declared, or of the current
    scope): the first entry matching the assertion as declared -- its kind,
-   location, namespace, module, function and CTRL's groups -- decides;
-   entries matching one evaluation ("constexpr", "caller") don't take part.
-   NULL if that entry names none, or none matches.  */
+   location, namespace, module, function and CTRL's groups -- decides.
+   For CALLER, the redundant caller-side check of a call whose caller
+   matches the "caller" objects contract_config_caller_mask says, only
+   entries with a "caller" take part, else only the others; entries with a
+   "constexpr" never do.  NULL if that entry names none, or none
+   matches.  */
 
 static const char *
 contract_config_control_for (unsigned kind, location_t loc, tree ctrl,
-			     tree fn)
+			     tree fn, bool caller)
 {
   char *ns = contract_config_ns_of (fn);
   expanded_location xloc = expand_location (loc);
+  const char *mask = (caller && contract_config_caller_mask
+		      ? IDENTIFIER_POINTER (contract_config_caller_mask)
+		      : NULL);
   auto_vec<char *> groups;
   bool groups_known = false;
   char *fn_name = NULL;
   bool fn_name_known = false;
   const char *result = NULL;
-  for (const contract_config_entry &e : contract_config_table)
+  for (unsigned i = 0; i < contract_config_table.length (); ++i)
     {
-      if (e.caller != 0 || e.constexpr_eval != -1)
+      const contract_config_entry &e = contract_config_table[i];
+      if (e.constexpr_eval != -1 || (e.caller != 0) != caller)
+	continue;
+      if (e.caller == 2 && (!mask || mask[i] != '1'))
 	continue;
       if (e.kind && e.kind != kind)
 	continue;
@@ -9697,7 +9728,8 @@ contract_config_lookup_control (const char *name, location_t loc)
 
 tree
 contract_configured_control (tree ctrl, bool code_chosen, unsigned kind,
-			     location_t loc, tree fn, contract_check_side side)
+			     location_t loc, tree fn, contract_check_side side,
+			     bool caller)
 {
   if (contract_config_table.is_empty () || !flag_contract_control_objects
       || !ctrl || ctrl == error_mark_node)
@@ -9721,10 +9753,78 @@ contract_configured_control (tree ctrl, bool code_chosen, unsigned kind,
 					   fn) != 1)
 	return ctrl;
     }
-  const char *name = contract_config_control_for (kind, loc, ctrl, fn);
+  const char *name = contract_config_control_for (kind, loc, ctrl, fn,
+						  caller);
   if (!name)
     return ctrl;
   return contract_config_lookup_control (name, loc);
+}
+
+/* The control object of CONTRACT's redundant caller-side check, of FN or
+   of the caller-side wrapper FN, for the callers the current caller mask
+   (or the wrapper's) says: a "caller" entry's "control", as
+   contract_configured_control chooses it, else CONTRACT's own.  With
+   CHOSEN_ONLY, the configuration's choice or NULL_TREE: whether a
+   "caller" entry chooses the check's control object (as it does for the
+   check of a wrapper, whose copy of CONTRACT names it already).  */
+
+static tree
+contract_caller_check_control (tree contract, tree fn, bool chosen_only)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (contract_config_table.is_empty () || !ctrl || ctrl == error_mark_node)
+    return chosen_only ? NULL_TREE : ctrl;
+  tree saved_mask = contract_config_caller_mask;
+  if (fn && DECL_LANG_SPECIFIC (fn) && DECL_CONTRACT_WRAPPER (fn))
+    {
+      tree *m = hash_map_safe_get (contract_config_wrapper_masks, fn);
+      contract_config_caller_mask = m ? *m : NULL_TREE;
+    }
+  tree configured
+    = contract_configured_control (ctrl, CONTRACT_CONTROL_CHOSEN_P (contract),
+				   get_contract_assertion_kind (contract),
+				   EXPR_LOCATION (contract), fn, ccs_wrapper,
+				   /*caller=*/true);
+  bool chosen
+    = (configured != ctrl
+       || (!CONTRACT_CONTROL_CHOSEN_P (contract)
+	   && contract_config_control_for (get_contract_assertion_kind
+					     (contract),
+					   EXPR_LOCATION (contract), ctrl, fn,
+					   /*caller=*/true)));
+  contract_config_caller_mask = saved_mask;
+  if (chosen_only)
+    return chosen ? configured : NULL_TREE;
+  return configured;
+}
+
+/* A redundant caller-side check's control object (CALLER for
+   contract_configured_control): for CONTRACT, a copy of the contract of
+   the caller-side wrapper WRAPDECL, the configuration's choice for the
+   callers the wrapper serves.  The condition was parsed with the
+   declaration's control object, constified or not as it said, so the
+   choice must say the same: otherwise an error.  */
+
+static void
+contract_configure_caller_control (tree contract, tree wrapdecl)
+{
+  tree ctrl = CONTRACT_CONTROL_OBJECT (contract);
+  if (!ctrl || ctrl == error_mark_node)
+    return;
+  tree configured = contract_caller_check_control (contract, wrapdecl);
+  if (configured == error_mark_node || configured == ctrl)
+    return;
+  if (contract_control_constifies (configured, ccs_wrapper, wrapdecl)
+      != contract_control_constifies (ctrl, ccs_wrapper, wrapdecl))
+    {
+      error_at (EXPR_LOCATION (contract), "the control object a contract "
+		"configuration chooses for a caller-side check of this "
+		"assertion must constify its condition as the declaration's "
+		"does");
+      return;
+    }
+  CONTRACT_CONTROL_OBJECT (contract) = configured;
+  CONTRACT_CONTROL_CHOSEN_P (contract) = false;
 }
 
 /* Whether a check of CONTRACT on SIDE, of FN or of the caller-side

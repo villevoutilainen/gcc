@@ -1910,9 +1910,9 @@ contract_config_location (const char *loc, contract_config_entry &e,
    checks (those with assertion_check_side::client of a non-virtual
    function), and an entry without it, or with it false, only the other
    checks.  "output" has "semantic" (NAME), "control" (the fully qualified
-   name of a control object), or both.  A "control" is chosen once for an
-   assertion, not per evaluation, so an entry with one has no "constexpr" or
-   "caller".  */
+   name of a control object), or both.  A "control" is chosen for an
+   assertion -- with "caller", for its redundant caller-side checks -- not
+   per evaluation, so an entry with one has no "constexpr".  */
 static void
 parse_contract_configuration (const char *text, const char *source)
 {
@@ -2076,12 +2076,12 @@ parse_contract_configuration (const char *text, const char *source)
 	    e.function += 2;
 	  if (loc && !contract_config_location (loc, e, source))
 	    continue;
-	  if (e.control && (e.constexpr_eval != -1 || match->get ("caller")))
+	  if (e.control && e.constexpr_eval != -1)
 	    {
 	      error ("contract configuration %qs: an entry with a "
-		     "%<control%> can't match %<constexpr%> or %<caller%>: the "
-		     "control object is chosen once for an assertion, not for "
-		     "each evaluation", source);
+		     "%<control%> can't match %<constexpr%>: the control "
+		     "object is chosen for an assertion, not for each "
+		     "evaluation", source);
 	      continue;
 	    }
 	}
