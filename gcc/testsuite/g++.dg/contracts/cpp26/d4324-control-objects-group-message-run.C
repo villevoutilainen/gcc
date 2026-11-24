@@ -45,9 +45,9 @@ is (const char *s, const char *t)
 
 static_assert (__is_same (annotated, default_control));
 static_assert (default_control ("g"group, "m").group ()[0] == 'g');
-static_assert (review ("m").group () == nullptr);
-static_assert (mandatory ("g"group).message () == nullptr);
-static_assert (noexcept_assert ().message () == nullptr);
+static_assert (review ("m").group ()[0] == '\0');
+static_assert (mandatory ("g"group).message ()[0] == '\0');
+static_assert (noexcept_assert ().message ()[0] == '\0');
 
 int d_perf (int x) pre<default_control ("perf"group, "d perf")>(x > 0) { return x; }
 int d_quiet (int x) pre<default_control ("quiet"group)>(x > 0) { return x; }

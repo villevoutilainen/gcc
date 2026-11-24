@@ -153,7 +153,7 @@ namespace contracts
 	{
 	  // Never terminates at runtime, so never a compile-time error either.
 	  constexpr_warning_str ("contract",
-				 __message ? __message : __ctx.comment());
+				 __or_comment(__message, __ctx));
 	}
       else
 	{
@@ -231,7 +231,7 @@ namespace contracts
 	  // Always terminates at runtime, regardless of semantic, so always a
 	  // compile-time error too.
 	  constexpr_error_str ("contract",
-			       __message ? __message : __ctx.comment());
+			       __or_comment(__message, __ctx));
 	}
       else
 	{
@@ -256,7 +256,7 @@ namespace contracts
   __symbolic_fail(const assertion_context& __ctx, evaluation_semantic __sem,
 		  const char* __message)
   {
-    const char* __text = __message ? __message : __ctx.comment();
+    const char* __text = __or_comment(__message, __ctx);
     if (__sem == evaluation_semantic::ignore)
       return;
     if consteval

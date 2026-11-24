@@ -6887,7 +6887,7 @@ inline namespace controls
 	= { &__rich_print_erased<_Ops>..., nullptr };
       const __operand_printer __this_print[]
 	= { __deref_string_printer<_Ops>::value..., nullptr };
-      if (!__ctx.static_info().operand_format())
+      if (!*__ctx.static_info().operand_format())
 	{
 	  __buf[0] = '\0';
 	  return __buf;

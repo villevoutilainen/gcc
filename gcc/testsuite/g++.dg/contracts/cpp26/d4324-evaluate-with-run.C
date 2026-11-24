@@ -72,7 +72,7 @@ main ()
   static_assert (i1.kind () == sc::assertion_kind::assert);
   constexpr auto line = sc::assertion_info_for (record_cco{}, sc::assertion_kind::assert).location ().line ();
   static_assert (line == __LINE__ - 1);
-  static_assert (i1.comment () == nullptr);
+  static_assert (i1.comment ()[0] == '\0');
 
   // compute_semantic applies.
   constexpr sc::assertion_static_info i2
@@ -117,8 +117,8 @@ main ()
   if (last_ops != 6)
     __builtin_abort ();
 
-  // Without a message, info () has none either.
+  // Without a comment or message, both are empty (never null).
   sc::evaluate_with (record_cco{}, i1, [&] { return false; });
-  if (last_message != nullptr || last_comment != nullptr)
+  if (!last_message || *last_message || !last_comment || *last_comment)
     __builtin_abort ();
 }

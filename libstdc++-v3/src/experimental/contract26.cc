@@ -48,7 +48,7 @@ void __handle_contract_violation(const std::contracts::contract_violation &viola
     << " at " << violation.location().file_name() << ':' << violation.location().line()
     << ": " << violation.comment();
   // A control object's message, alongside the predicate.
-  if (const char* message = violation.message())
+  if (const char* message = violation.message(); *message)
     std::cerr << ": " << message;
 
   const char* delimiter = "\n[";

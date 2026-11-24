@@ -194,8 +194,9 @@ namespace contracts
 
     // The assertion's predicate text, as assertion_context::comment()
     // gives it, but available to a control object's queries at compile
-    // time; null where no assertion is being built.
-    constexpr const char* comment() const noexcept { return _M_comment; }
+    // time; empty where no assertion is being built.  Never null.
+    constexpr const char* comment() const noexcept
+    { return _M_comment ? _M_comment : ""; }
 
     // The assertion's kind and source location, as assertion_context::kind()
     // and location() give them, but available to a control object's queries
@@ -217,10 +218,11 @@ namespace contracts
     constexpr __SIZE_TYPE__ operand_count() const noexcept
     { return _M_operand_count; }
 
+    // Never null: empty for K out of range, or without operand names.
     constexpr const char* operand_name(__SIZE_TYPE__ __k) const noexcept
     {
       if (__k >= _M_operand_count || !_M_operand_names)
-	return nullptr;
+	return "";
       const char* __p = _M_operand_names;
       for (; __k; --__k)
 	{
@@ -231,8 +233,10 @@ namespace contracts
       return __p;
     }
 
+    // Never null: empty without a format string
+    // (-fcontract-violation-information=none).
     constexpr const char* operand_format() const noexcept
-    { return _M_operand_format; }
+    { return _M_operand_format ? _M_operand_format : ""; }
   };
 
 #if __cpp_impl_reflection
@@ -273,12 +277,15 @@ namespace contracts
     assertion_kind kind() const noexcept { return _M_assertion_kind; }
     evaluation_semantic semantic() const noexcept { return _M_evaluation_semantic; }
     detection_mode mode() const noexcept { return _M_detection_mode; }
-    const char* comment() const noexcept { return _M_comment; }
+    // Never null: empty if none was given.
+    const char* comment() const noexcept
+    { return _M_comment ? _M_comment : ""; }
     // The message a control object passed along with the comment
-    // (assertion_info::set_message), or null.  A violation object built
-    // before the field existed (version 1) has none.
+    // (assertion_info::set_message).  Never null: empty if none was given,
+    // or if the violation object was built before the field existed
+    // (version 1).
     const char* message() const noexcept
-    { return _M_version >= 2 ? _M_message : nullptr; }
+    { return _M_version >= 2 && _M_message ? _M_message : ""; }
     std::source_location location() const noexcept {
       std::source_location __loc;
       __loc._M_impl
@@ -346,7 +353,9 @@ namespace contracts
       _M_semantic(__semantic), _M_kind(__kind)
     { }
 
-    constexpr const char* comment() const noexcept { return _M_comment; }
+    // Never null: empty if not given.
+    constexpr const char* comment() const noexcept
+    { return _M_comment ? _M_comment : ""; }
     constexpr std::source_location location() const noexcept { return _M_location; }
     constexpr evaluation_semantic semantic() const noexcept { return _M_semantic; }
     constexpr assertion_kind kind() const noexcept { return _M_kind; }
@@ -362,7 +371,9 @@ namespace contracts
 
     // A message for the violation handler, alongside the comment: what
     // contract_violation::message() gives it.  Null by default.
-    constexpr const char* message() const noexcept { return _M_message; }
+    // Never null: empty if not given.
+    constexpr const char* message() const noexcept
+    { return _M_message ? _M_message : ""; }
     constexpr void set_message(const char* __message) noexcept
     { _M_message = __message; }
 
@@ -410,7 +421,10 @@ namespace contracts
     // control object supplies its own if any.  A control object that
     // reports forwards it (assertion_info::set_message, as info() does).
     constexpr const char* message() const
-    { return __message_fn ? __message_fn(__message_arg) : nullptr; }
+    {
+      const char* __m = __message_fn ? __message_fn(__message_arg) : nullptr;
+      return __m ? __m : "";
+    }
 
   private:
     assertion_static_info __static_info;
@@ -730,6 +744,8 @@ namespace contracts
   // position, see gcc/cp/contracts.cc's maybe_replace_d4324_violation_
   // handler_call), so this is purely a library-side ergonomics change,
   // just unpacking INFO into the same five arguments it always forwarded.
+  // The violation's comment () and message () are never null
+  // (contract_violation), whatever INFO's are.
   inline void
   invoke_violation_handler(const assertion_info& info, detection_mode mode)
   {
@@ -939,12 +955,17 @@ namespace contracts
   constexpr evaluation_semantic
   __group_semantic(const char* __group, assertion_static_info __info) noexcept
   {
-    if (__group)
+    if (__group && *__group)
       for (const group_semantic_rule& __rule : __info.group_semantic_rules())
 	if (__group_matches(__rule.group_name(), __group))
 	  return __rule.semantic();
     return __info.semantic();
   }
+
+  // MESSAGE if one was given (not null or empty), else the comment.
+  constexpr const char*
+  __or_comment(const char* __message, const assertion_context& __ctx) noexcept
+  { return __message && *__message ? __message : __ctx.comment(); }
 
   // What a default_control-like control object does for a violated
   // assertion whose semantic is SEM: report it, with MESSAGE (if not
@@ -953,7 +974,7 @@ namespace contracts
   __default_fail(const assertion_context& __ctx, evaluation_semantic __sem,
 		 const char* __message)
   {
-    const char* __what = __message ? __message : __ctx.comment();
+    const char* __what = __or_comment(__message, __ctx);
     if consteval
       {
 	if (__sem == evaluation_semantic::observe)
@@ -1288,7 +1309,7 @@ namespace contracts
 	if (__shown[__i])
 	  continue;
 	const char* __name = __info.operand_name(__i);
-	if (!__name)
+	if (!*__name)
 	  continue;
 	bool __this = __builtin_strcmp(__name, "this") == 0;
 	if (__this && !__this_print[__i])
@@ -1323,10 +1344,10 @@ namespace contracts
     // No format string (-fcontract-violation-information=none): no
     // values either.
     const char* __fmt = __ctx.static_info().operand_format();
-    if (!__fmt)
+    if (!*__fmt)
       return __message;
     __contract_text __out{__buf, __buf + __n - 1};
-    if (__message)
+    if (__message && *__message)
       {
 	__out.__put(__message);
 	__out.__put(": ");
@@ -1361,7 +1382,8 @@ namespace contracts
     {
       if (!__values)
 	return __message;
-      if (!__message || (__comment && !__builtin_strcmp(__message, __comment)))
+      if (!__message || !*__message
+	  || (__comment && !__builtin_strcmp(__message, __comment)))
 	return __values;
       __contract_text __out{__buf, __buf + _Nm - 1};
       __out.__put(__message);
@@ -1399,7 +1421,7 @@ namespace contracts
     const char* const* _M_name;
     constexpr const char* const* begin() const noexcept { return _M_name; }
     constexpr const char* const* end() const noexcept
-    { return _M_name + (*_M_name != nullptr); }
+    { return _M_name + (*_M_name != nullptr && **_M_name != '\0'); }
   };
 
   // A contract group's name, as "name"group writes it.  It is a control
@@ -1478,6 +1500,8 @@ namespace contracts
     // control objects.
     constexpr __annotation() noexcept _GLIBCXX_CONVEYOR = default;
 
+    // An empty group or message is none (__one_group, __or_comment, the
+    // printers).
     constexpr explicit
     __annotation(group_name __g) noexcept _GLIBCXX_CONVEYOR
     : _M_group(__g._M_name) { }
@@ -1491,8 +1515,11 @@ namespace contracts
     __annotation(const char* __message) noexcept _GLIBCXX_CONVEYOR
     : _M_message(__message) { }
 
-    constexpr const char* group() const noexcept { return _M_group; }
-    constexpr const char* message() const noexcept { return _M_message; }
+    // Never null: empty if none was given.
+    constexpr const char* group() const noexcept
+    { return _M_group ? _M_group : ""; }
+    constexpr const char* message() const noexcept
+    { return _M_message ? _M_message : ""; }
 
     constexpr __one_group
     groups() const noexcept
@@ -1590,7 +1617,7 @@ namespace contracts
     __fail(const assertion_context& __ctx, const char* __message,
 	   const char* __values) const noexcept
     {
-      const char* __text = __message ? __message : __ctx.comment();
+      const char* __text = __or_comment(__message, __ctx);
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval
@@ -1700,7 +1727,7 @@ namespace contracts
     __fail(const assertion_context& __ctx, const char* __message,
 	   const char* __values) const noexcept
     {
-      const char* __text = __message ? __message : __ctx.comment();
+      const char* __text = __or_comment(__message, __ctx);
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval
@@ -1809,7 +1836,7 @@ namespace contracts
     __fail(const assertion_context& __ctx, const char* __message,
 	   const char* __values) const noexcept
     {
-      const char* __text = __message ? __message : __ctx.comment();
+      const char* __text = __or_comment(__message, __ctx);
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval
@@ -1998,7 +2025,7 @@ namespace contracts
     __fail(const assertion_context& __ctx, const char* __message,
 	   const char* __values) const noexcept
     {
-      const char* __text = __message ? __message : __ctx.comment();
+      const char* __text = __or_comment(__message, __ctx);
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval
@@ -2098,7 +2125,7 @@ namespace contracts
     __fail(const assertion_context& __ctx, const char* __message,
 	   const char* __values) const noexcept
     {
-      const char* __text = __message ? __message : __ctx.comment();
+      const char* __text = __or_comment(__message, __ctx);
 
 #if defined(_GLIBCXX_ASSERTIONS) && defined(_GLIBCXX_ASSERTIONS_USE_VIOLATION_HANDLER)
       if consteval

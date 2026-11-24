@@ -54,8 +54,8 @@ is (const char *s, const char *t)
 
 // The accessors, at compile time.
 static_assert (annotated ("g"group, "m").group ()[0] == 'g');
-static_assert (annotated ("m").group () == nullptr);
-static_assert (annotated ("g"group).message () == nullptr);
+static_assert (annotated ("m").group ()[0] == '\0');
+static_assert (annotated ("g"group).message ()[0] == '\0');
 
 int
 main ()

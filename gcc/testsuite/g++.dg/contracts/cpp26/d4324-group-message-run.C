@@ -81,12 +81,12 @@ main ()
     __builtin_abort ();
   if (msg (-1) != -1 || calls != 2 || !is (last_message, "x must be positive"))
     __builtin_abort ();
-  // No message given: none reported.
-  if (nomsg (-1) != -1 || calls != 3 || last_message)
+  // No message given: an empty one reported.
+  if (nomsg (-1) != -1 || calls != 3 || *last_message)
     __builtin_abort ();
-  // No group: the build's semantic, enforce; no message.
+  // No group: the build's semantic, enforce; an empty message.
   try { nogroup (-1); __builtin_abort (); } catch (int) {}
-  if (calls != 4 || last_message)
+  if (calls != 4 || *last_message)
     __builtin_abort ();
   // In quiet: ignored.
   if (quiet (-1) != -1 || calls != 4)
