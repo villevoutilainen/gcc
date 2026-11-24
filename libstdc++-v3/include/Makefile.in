@@ -492,6 +492,7 @@ bits_freestanding = \
 	${bits_srcdir}/binders.h \
 	${bits_srcdir}/boost_concept_check.h \
 	${bits_srcdir}/concept_check.h \
+	${bits_srcdir}/contracts.h \
 	${bits_srcdir}/char_traits.h \
 	${bits_srcdir}/cpp_type_traits.h \
 	${bits_srcdir}/elements_of.h \

@@ -16,8 +16,9 @@ void h (int x)
 }
 
 // Each of pre<>, post<> and contract_assert<> calls the implicit
-// default_v control object on violation (matching only the call sites,
-// "operator() (&...", not the one dump of operator()'s own definition) ...
-// { dg-final { scan-tree-dump-times "default_control::operator\\(\\) \\(&" 3 "gimple" } }
+// default_v control object on violation -- through a generated helper
+// that passes the condition's operands, one per check, taking a
+// 'const default_control *' ...
+// { dg-final { scan-tree-dump-times "dispatch\\.\[0-9\]+ \\(const struct default_control \\* c, " 3 "gimple" } }
 // ... instead of the built-in violation entry point.
 // { dg-final { scan-tree-dump-not "__tu_has_violation" "gimple" } }

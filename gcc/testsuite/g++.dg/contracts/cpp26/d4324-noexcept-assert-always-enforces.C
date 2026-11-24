@@ -26,4 +26,4 @@ int f (int x)
 
 int main () { return f (-1); }
 
-// { dg-output "Assertion 'x >= 0' failed" }
+// { dg-output "Assertion 'x >= 0 \\(-1 >= 0\\)' failed" }

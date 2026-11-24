@@ -80,7 +80,7 @@ h
 // <concepts> -> <type_traits> would be a hard circular-include failure,
 // not just a slow build -- confirmed by a real regression the first time
 // this relocation was attempted, before that root cause was fixed.
-# include <contracts>
+# include <bits/contracts.h>
 #endif
 /*{
 

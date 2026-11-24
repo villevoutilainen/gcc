@@ -21,4 +21,4 @@ int f (int x)
 
 int main () { return f (-1); }
 
-// { dg-output "Assertion 'fallback message' failed" }
+// { dg-output "Assertion 'fallback message \\(-1 >= 0\\)' failed" }

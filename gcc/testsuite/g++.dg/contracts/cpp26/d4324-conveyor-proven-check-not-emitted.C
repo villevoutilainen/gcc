@@ -31,5 +31,6 @@ int main ()
   return f (&i) == 1 ? 0 : 1;
 }
 
-// Only the second assertion's check remains.
-// { dg-final { scan-tree-dump-times "never_proven_conveyor::operator\\(\\) \\(&" 1 "gimple" } }
+// Only the second assertion's check remains: one call of its control
+// object, through a generated helper passing the condition's operands.
+// { dg-final { scan-tree-dump-times "dispatch\\.\[0-9\]+ \\(const struct never_proven_conveyor \\* c, " 1 "gimple" } }

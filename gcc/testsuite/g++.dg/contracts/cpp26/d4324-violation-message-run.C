@@ -13,12 +13,20 @@
 namespace sc = std::contracts;
 
 const char *last_comment, *last_message;
+char last_message_buf[512];
 int violations;
 void handle_contract_violation (const sc::contract_violation &v)
 {
   ++violations;
   last_comment = v.comment ();
-  last_message = v.message ();
+  // Copied: the message, like the violation, lives only during the call.
+  if (v.message ())
+    {
+      std::strcpy (last_message_buf, v.message ());
+      last_message = last_message_buf;
+    }
+  else
+    last_message = nullptr;
 }
 
 struct msg {
@@ -55,7 +63,8 @@ main ()
   if (violations != 1)
     __builtin_abort ();
   h (-1);
+  // default_v's message: the condition with the operands' values.
   if (violations != 2 || std::strcmp (last_comment, "x > 0") != 0
-      || last_message != nullptr)
+      || std::strcmp (last_message, "-1 > 0") != 0)
     __builtin_abort ();
 }

@@ -14,13 +14,21 @@ using namespace std::contracts;
 
 int calls;
 const char *last_message;
+char last_message_buf[512];
 const char *last_comment;
 
 void
 handle_contract_violation (const contract_violation& v)
 {
   ++calls;
-  last_message = v.message ();
+  // Copied: the message, like the violation, lives only during the call.
+  if (v.message ())
+    {
+      std::strcpy (last_message_buf, v.message ());
+      last_message = last_message_buf;
+    }
+  else
+    last_message = nullptr;
   last_comment = v.comment ();
   if (v.semantic () == evaluation_semantic::enforce)
     throw 0;
@@ -54,20 +62,22 @@ main ()
 {
   // In perf: observed, with the message and the comment.
   if (both (-1) != -1 || calls != 1
-      || !is (last_message, "x must be positive") || !is (last_comment, "x > 0"))
+      || !is (last_message, "x must be positive: -1 > 0")
+      || !is (last_comment, "x > 0"))
     __builtin_abort ();
-  // A group, no message.
-  if (group_only (-1) != -1 || calls != 2 || last_message)
+  // A group, no message: the values alone.
+  if (group_only (-1) != -1 || calls != 2 || !is (last_message, "-1 > 0"))
     __builtin_abort ();
   // A message, no group: the build's semantic, enforce.
   try { message_only (-1); __builtin_abort (); } catch (int) {}
-  if (calls != 3 || !is (last_message, "x must be positive"))
+  if (calls != 3 || !is (last_message, "x must be positive: -1 > 0"))
     __builtin_abort ();
   // In quiet: ignored.
   if (quiet (-1) != -1 || calls != 3)
     __builtin_abort ();
   // A contract_assert, likewise.
-  if (assert_in_body (3) != 3 || calls != 4 || !is (last_message, "x must be even"))
+  if (assert_in_body (3) != 3 || calls != 4
+      || !is (last_message, "x must be even: 3 % 2 == 0"))
     __builtin_abort ();
   // Satisfied: no call.
   if (both (1) != 1 || message_only (1) != 1 || calls != 4)

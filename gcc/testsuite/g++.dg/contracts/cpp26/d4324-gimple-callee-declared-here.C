@@ -5,7 +5,9 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
-#include <contracts>
+// Not <contracts>, which includes <format>: this test declares
+// names <compare> and <cstdlib> do.  Any header brings in the core.
+#include <cstddef>
 using namespace std::contracts;
 
 int div (int a, int b) conveyor // { dg-message "declared here" }

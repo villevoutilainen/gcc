@@ -449,8 +449,10 @@ _GLIBCXX_END_NAMESPACE_VERSION
 // (via <contracts> -> <concepts> -> <type_traits>) is a hard, circular
 // compile failure, not just a slow build. <concepts> itself has no such
 // problem: nothing reaches *this* header from partway through its own
-// body the way <type_traits> can reach bits/version.h.
-#include <contracts>
+// body the way <type_traits> can reach bits/version.h.  (The core,
+// <bits/contracts.h>: <contracts> itself includes <format>, which needs
+// <concepts>.)
+#include <bits/contracts.h>
 #ifdef __cpp_lib_contracts
 namespace std _GLIBCXX_VISIBILITY(default)
 {

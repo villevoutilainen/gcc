@@ -25,4 +25,4 @@ int main ()
   return v[10];
 }
 
-// { dg-output "Assertion '__n < this->size\\(\\)' failed" }
+// { dg-output "Assertion '__n < this->size\\(\\) \\(10 < this->size\\(\\)\\)' failed" }

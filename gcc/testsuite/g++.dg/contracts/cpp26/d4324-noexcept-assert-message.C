@@ -26,7 +26,7 @@ handle_contract_violation (const sc::contract_violation& v)
   bool ok = v.semantic () == sc::evaluation_semantic::enforce
 	    && __builtin_strcmp (v.comment (), "x >= 0") == 0
 	    && v.message ()
-	    && __builtin_strcmp (v.message (), "custom message") == 0;
+	    && __builtin_strcmp (v.message (), "custom message: -1 >= 0") == 0;
   std::exit (ok ? 0 : 1);
 }
 
