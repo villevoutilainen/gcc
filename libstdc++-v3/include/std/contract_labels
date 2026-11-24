@@ -554,6 +554,9 @@ namespace contracts
 	// noexcept_assert).
 	assertion_info __info = __ctx.info ();
 	__info.set_comment (__comment);
+	if constexpr (compute_message_label<_Self>)
+	  __info.set_message (static_cast<const _Self&> (*this)
+			        .compute_message (__info.message ()));
 	__info.set_semantic (__effective);
 	invoke_violation_handler (__info, detection_mode::predicate_false);
 	if (is_terminating (__effective))
