@@ -44086,6 +44086,67 @@ oa_env_check_float_comparison (oa_analysis_env *env, tree expr,
     (*reinterpret_cast<oa_env *> (env), expr, req, NULL, NULL, 0);
 }
 
+/* For a plugin: is EXPR, under ENV's facts, provably an object address
+   (oa_provable_p, the check behind every is_object_address obligation)?
+   If not, *REASON_OUT (if non-null) says why.  */
+
+bool
+oa_env_check_object_address (oa_analysis_env *env, tree expr,
+			     oa_unprovable_reason *reason_out)
+{
+  return oa_provable_p (expr, *reinterpret_cast<oa_env *> (env), reason_out);
+}
+
+/* For a plugin: is EXPR (a value at a call site, e.g. a substituted
+   argument), under ENV's facts, provably nonzero, provably zero, or
+   unknown -- as the built-in engine checks a callee's 'x != 0'
+   precondition conjunct: through a conversion call (a class argument's
+   conversion operator), a literal decides it outright, then the nonzero
+   facts (oa_provably_nonzero_p), then its range (oa_check_ne_constant).
+   If unknown, *REASON_OUT (if non-null) says why.  */
+
+oa_proof_result
+oa_env_check_nonzero (oa_analysis_env *env, tree expr,
+		      oa_unprovable_reason *reason_out)
+{
+  oa_env &e = *reinterpret_cast<oa_env *> (env);
+  expr = oa_strip_conversion_call (expr);
+  tree stripped = STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (TREE_CODE (stripped) == INTEGER_CST)
+    return integer_zerop (stripped) ? OA_PROVEN_FALSE : OA_PROVEN_TRUE;
+  if (oa_provably_nonzero_p (expr, e))
+    return OA_PROVEN_TRUE;
+  oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
+  oa_proof_result r
+    = oa_check_ne_constant (e, expr, build_zero_cst (TREE_TYPE (stripped)),
+			    &reason);
+  if (r == OA_UNKNOWN && reason_out)
+    *reason_out = reason;
+  return r;
+}
+
+/* Thin wrapper over oa_substitute_value_arg, for a plugin: PARAM's
+   argument at CALL, as the value the callee's contract reads -- unlike
+   oa_substitute_call_arg_public, a reference parameter's argument is
+   read through.  */
+
+tree
+oa_substitute_value_arg_public (tree callee, tree call, tree param)
+{
+  return oa_substitute_value_arg (callee, call, param);
+}
+
+/* For a plugin: is the is_object_address obligation of CALL's
+   constructor or destructor receiver a rule (failing it is an error)
+   rather than a proof (a warning, and not checked in a system header)?
+   See oa_cdtor_receiver_strict_p.  */
+
+bool
+oa_cdtor_receiver_strict_public (tree call)
+{
+  return oa_cdtor_receiver_strict_p (call);
+}
+
 /* -fcontract-symbolic-runtime-checks: recognize a ptr->field OP const
    (or (*ptr).field OP const, the same shape after the front end
    desugars '->') conjunct -- the "reached through a persistent

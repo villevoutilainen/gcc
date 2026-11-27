@@ -516,6 +516,30 @@ extern oa_proof_result oa_env_check_comparison
 extern oa_proof_result oa_env_check_float_comparison
   (oa_analysis_env *env, tree expr, tree_code cmp, tree const_val);
 
+/* Is EXPR, under ENV's facts, provably an object address?  If not,
+   *REASON_OUT (if non-null) says why.  */
+extern bool oa_env_check_object_address
+  (oa_analysis_env *env, tree expr, oa_unprovable_reason *reason_out);
+
+/* Is EXPR (a value at a call site), under ENV's facts, provably nonzero
+   (OA_PROVEN_TRUE), provably zero (OA_PROVEN_FALSE), or unknown -- the
+   check of a callee's 'x != 0' precondition conjunct (oa_nonzero_
+   conjunct_p): through a conversion call, a literal, the nonzero facts,
+   then EXPR's range.  */
+extern oa_proof_result oa_env_check_nonzero
+  (oa_analysis_env *env, tree expr, oa_unprovable_reason *reason_out);
+
+/* PARAM's argument at CALL as the value CALLEE's contract reads (a
+   reference parameter's argument read through).  */
+extern tree oa_substitute_value_arg_public (tree callee, tree call,
+					    tree param);
+
+/* Whether the is_object_address obligation of CALL's constructor or
+   destructor receiver is an error when unproven (CALL is in conveyor
+   code, or a callee precondition is proven_conveyor/proven_symbolic)
+   rather than a warning.  */
+extern bool oa_cdtor_receiver_strict_public (tree call);
+
 /* The relational-fact analogue of oa_env_check_comparison above: is
    SUBSTITUTED_PARAM (already positionally substituted at the plugin's
    own call site, the same way SUBSTITUTED_PARAM is for that function)

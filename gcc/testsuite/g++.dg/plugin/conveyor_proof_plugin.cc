@@ -247,9 +247,93 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
 /* One call site's precondition-obligation check, invoked by
    oa_walk_function_calls at every call in program order.  */
 
+/* A constructor's or destructor's receiver -- the object passed as its
+   'this' -- must be provably an object address, whether or not the
+   callee has contracts, as the built-in engine checks it at a plain
+   constructor or destructor call ('T::T (&obj)', an explicit destructor
+   call, a member or base subobject's constructor): an error where that
+   is a rule (conveyor code, a proven_ callee precondition), otherwise a
+   warning, not given in a system header.  (A 'new T ()''s receiver, the
+   slot of the INIT_EXPR around the AGGR_INIT_EXPR, isn't reached from a
+   call site.)  */
+
+static void
+check_cdtor_receiver (tree call, tree callee, oa_analysis_env *env)
+{
+  if (TREE_CODE (call) != CALL_EXPR || call_expr_nargs (call) < 1
+      || !(DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee)))
+    return;
+  tree receiver = CALL_EXPR_ARG (call, 0);
+  bool strict = oa_cdtor_receiver_strict_public (call);
+  if (!strict && in_system_header_at (EXPR_LOCATION (call)))
+    return;
+  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+  if (oa_env_check_object_address (env, receiver, &reason))
+    return;
+  if (strict)
+    error_at (EXPR_LOCATION (call), "cannot prove %<is_object_address%> for "
+	      "%qE, required by the precondition of %qD", receiver, callee);
+  else
+    warning_at (EXPR_LOCATION (call), 0, "cannot verify %<is_object_address%> "
+		"for %qE, required by the precondition of %qD", receiver,
+		callee);
+  if (const char *why = oa_unprovable_reason_text (reason))
+    inform (EXPR_LOCATION (call), "%s", why);
+}
+
+/* A callee's 'x != 0' precondition conjunct (oa_nonzero_conjunct_p, or
+   a reference parameter's 'x != 0'): checked for X's argument, read as
+   a value, with oa_env_check_nonzero.  Returns false if CONJUNCT isn't
+   that shape.  */
+
+static bool
+check_nonzero_conjunct (tree conjunct, tree call, tree callee,
+			oa_analysis_env *env, bool strict)
+{
+  tree nz_arg;
+  if (!oa_nonzero_conjunct_p (conjunct, &nz_arg))
+    {
+      tree param, const_val;
+      tree_code code;
+      if (!oa_match_simple_comparison (conjunct, &param, &code, &const_val)
+	  || code != NE_EXPR || !integer_zerop (const_val)
+	  || !TYPE_REF_P (TREE_TYPE (param)))
+	return false;
+      nz_arg = param;
+    }
+  tree substituted = oa_substitute_value_arg_public (callee, call, nz_arg);
+  if (!substituted)
+    return false;
+  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+  switch (oa_env_check_nonzero (env, substituted, &reason))
+    {
+    case OA_PROVEN_TRUE:
+      break;
+    case OA_PROVEN_FALSE:
+      error_at (EXPR_LOCATION (call),
+		"argument %qE provably violates the precondition of %qD",
+		substituted, callee);
+      break;
+    case OA_UNKNOWN:
+      if (strict)
+	error_at (EXPR_LOCATION (call), "cannot prove that %qE is nonzero, "
+		  "as required by the precondition of %qD", substituted,
+		  callee);
+      else
+	warning_at (EXPR_LOCATION (call), 0, "cannot verify that %qE is "
+		    "nonzero, as required by the precondition of %qD",
+		    substituted, callee);
+      if (const char *why = oa_unprovable_reason_text (reason))
+	inform (EXPR_LOCATION (call), "%s", why);
+      break;
+    }
+  return true;
+}
+
 static void
 check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 {
+  check_cdtor_receiver (call, callee, env);
   for (tree contract : fn_contracts (callee))
     {
       if (!PRECONDITION_P (contract))
@@ -284,8 +368,12 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
       auto_vec<tree> range_params;
       auto_vec<oa_proof_result> range_verdicts;
       auto_vec<tree> range_diag_exprs;
+      bool strict = oa_contract_conveyor_strict_public (contract, callee);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
+	  if (check_nonzero_conjunct (*conjuncts[i], call, callee, env,
+				      strict))
+	    continue;
 	  tree param, const_val;
 	  tree_code code;
 	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code,

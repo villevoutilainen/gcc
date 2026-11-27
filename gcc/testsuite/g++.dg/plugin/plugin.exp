@@ -126,6 +126,8 @@ set plugin_test_list [list \
 	  conveyor-proof-postcondition-unknown.C \
 	  conveyor-proof-float-literal-ok.C \
 	  conveyor-proof-float-literal-bad.C \
+	  conveyor-proof-cdtor-receiver.C \
+	  conveyor-proof-nonzero.C \
 	  conveyor-proof-reference-trust.C } \
     { symbolic_proof_plugin.cc \
 	  symbolic-proof-predicate-ok.C \
