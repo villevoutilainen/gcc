@@ -12,7 +12,7 @@ int divide (int a, int b) pre<sc::analyzed_symbolic_v> (b != 0);
 int any (int x);
 
 int t_literal () { return divide (10, 0); }		// { dg-error "argument .0. provably violates the precondition" }
-int t_any (int x) { return divide (10, any (x)); }	// { dg-warning "cannot verify that .* is nonzero" }
+int t_any (int x) { return divide (10, any (x)); }	// { dg-warning "cannot verify that [^\n]* is nonzero" }
 int t_trusted (int x) pre<sc::analyzed_symbolic_v> (x != 0)
 {
   return divide (10, x);

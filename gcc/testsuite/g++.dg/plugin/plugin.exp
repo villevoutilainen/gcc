@@ -154,6 +154,7 @@ set plugin_test_list [list \
 	  symbolic-proof-elided-copy.C } \
     { gimple_object_address_plugin.cc \
 	  gimple-forced-to-plugin.C \
+	  gimple-persistent-facts.C \
 	  gimple-object-address-ok.C \
 	  gimple-object-address-self-trust-ok.C \
 	  gimple-object-address-postcondition-ok.C \

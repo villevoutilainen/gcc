@@ -27,7 +27,7 @@
    parameter), item 6 (a callee's declared postcondition about its
    result), and the code itself (PHI merges, copies, conversions, the
    ranger).  Facts about persistent memory (named predicates, field
-   ranges) need flow-sensitive state and get a dominator walk.  */
+   ranges) need flow-sensitive state: a fixed-point must-analysis.  */
 
 #include "gcc-plugin.h"
 #include "config.h"
@@ -49,7 +49,6 @@
 #include "plugin-version.h"
 #include "dominance.h"
 #include "gimple-range.h"
-#include "domwalk.h"
 #include "hash-traits.h"
 
 int plugin_is_GPL_compatible;
@@ -62,6 +61,26 @@ conveyor_code_p (tree fndecl)
 {
   return (DECL_DECLARED_CONVEYOR_P (fndecl)
 	  || CONTRACT_HELPER (fndecl) == ldf_contract_predicate_helper);
+}
+
+/* Whether CONTRACT, a postcondition of CALLEE, establishes its condition
+   where a call to CALLEE returns: it is checked, in either flavor, and its
+   failed check stops execution, so execution past the call has it true.
+   *CONVEYOR: established in the conveyor flavor, which one-way trust
+   requires of a fact a conveyor obligation uses.  */
+
+static bool
+postcondition_establishes_p (tree contract, tree callee,
+			     bool *conveyor = NULL)
+{
+  if (!POSTCONDITION_P (contract)
+      || !contract_failure_terminates_p (contract, callee))
+    return false;
+  bool c = oa_contract_conveyor_active_public (contract, callee);
+  bool s = oa_contract_symbolic_active_public (contract, callee);
+  if (conveyor)
+    *conveyor = c;
+  return c || s;
 }
 
 /* Whether CONTRACT, a precondition of CALLEE, is this plugin's to check
@@ -173,7 +192,7 @@ call_postcondition_guarantees_object_address_p (tree callee)
 {
   for (tree contract : fn_contracts (callee))
     {
-      if (!POSTCONDITION_P (contract))
+      if (!postcondition_establishes_p (contract, callee))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id)
@@ -206,7 +225,7 @@ call_postcondition_guarantees_nonzero_p (tree callee)
 {
   for (tree contract : fn_contracts (callee))
     {
-      if (!POSTCONDITION_P (contract))
+      if (!postcondition_establishes_p (contract, callee))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id)
@@ -312,7 +331,7 @@ call_postcondition_range_p (tree callee, oa_range_lite *out)
 {
   for (tree contract : fn_contracts (callee))
     {
-      if (!POSTCONDITION_P (contract))
+      if (!postcondition_establishes_p (contract, callee))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id)
@@ -599,68 +618,98 @@ established_range_of (tree val, hash_map<tree, oa_range_lite> &established_range
   return false;
 }
 
-/* A fourth fact shape, named predicates for a *persistent object*
-   (e.g. 'is_opened(this)') -- fundamentally different from the three
-   above: those are properties of a VALUE (does this SSA name's value
-   satisfy P), answerable by walking backward through SSA_NAME_DEF_STMT/
-   PHI, exactly the kind of question SSA form is built for. A named
-   predicate is a property of *persistent, aliasable memory* (does the
-   object THIS POINTER CURRENTLY DENOTES currently satisfy P) -- an
-   ordinary call passing that same pointer value onward could have
-   mutated the pointee's state without changing the pointer's own SSA
-   value at all, so this needs genuine forward, flow-sensitive
-   reasoning (establish here, invalidate there, propagated along
-   actual control flow), not a backward value walk.
+/* Facts about persistent memory: named predicates of an object
+   ('is_opened (this)'), ranges of its fields ('this->count in [0, N)')
+   and relations among objects and values.  Unlike a value's facts, a call
+   passing the object's address on can change them without changing any
+   SSA value, so they need forward, flow-sensitive reasoning: established
+   here, ended there, and holding at a point only if they hold on every
+   path to it (persistent_facts_walk).  An object's identity is the
+   variable whose address it is, or the pointer value
+   (gimple_object_identity).  */
 
-   Rather than a general worklist CFG dataflow (a full "AND across
-   every predecessor, iterate to a fixpoint" framework), this exploits
-   a simpler, exactly-sufficient property: a fact is available at
-   block B if and only if it was established somewhere that
-   *dominates* B, without an invalidating call anywhere on the (unique,
-   by definition of dominance) path from there to B. A dominator-tree
-   preorder walk (class dom_walker, domwalk.h) gives exactly this for
-   free: processing each block using its own immediate dominator's
-   already-computed exit state as its starting point automatically
-   yields the "true on every path reaching here" semantics
-   oa_env::predicate_fact_merge_with otherwise computes by hand-rolled
-   AND-merging at explicit if/loop join points -- if a fact was
-   established on only one arm of an if, the merge block's own
-   immediate dominator is some common ancestor *above* that if
-   (dominance requires there to be no OTHER way in), so the fact is
-   correctly and automatically absent there, with no explicit merge
-   step written anywhere in this file.
+/* A predicate fact about one object: PRED_FN holds of it (POLARITY) or
+   not; CONVEYOR if established in the conveyor flavor.  */
 
-   IDENTITY is deliberately simple: an SSA_NAME's own identity is
-   itself (an ordinary reassignment produces a brand-new SSA_NAME by
-   construction, so nothing needs to be done to "invalidate" an old
-   value going out of scope -- whoever still holds the OLD SSA name
-   still correctly sees whatever was true of it); '&decl' resolves to
-   DECL directly, so a plain-object receiver ('f.open()') and a
-   pointer receiver ('hp->open()') both key correctly off "the same
-   object" across separate calls on the same variable.
+struct pred_fact { tree pred_fn; bool polarity; bool conveyor; };
 
-   A fifth shape, ptr->field ranges (e.g. 'this->count in [0, N)'),
-   shares this exact same dominator-walk substrate: it's the same kind
-   of persistent-memory fact as a named predicate, just keyed by
-   (IDENTITY, FIELD_DECL) instead of IDENTITY alone and carrying an
-   oa_range_lite payload instead of (PRED_FN, POLARITY) -- so both are
-   threaded through ONE walk, sharing establish/invalidate/consult
-   ordering per statement, rather than two separate walks.  */
+/* The predicate facts about one object, one per predicate function: 'ok
+   (p)' and 'p.get ()' both hold after 'if (ok (p) && p.get ())'.  One
+   beyond the capacity drops the oldest, which only loses precision.  */
 
-struct oa_predicate_fact_lite { tree pred_fn; bool polarity; };
+#define PRED_FACTS_MAX 8
+
+struct pred_facts
+{
+  pred_fact f[PRED_FACTS_MAX];
+  unsigned char n = 0;
+  pred_fact *find (tree pred_fn)
+  {
+    for (unsigned i = 0; i < n; ++i)
+      if (f[i].pred_fn == pred_fn)
+	return &f[i];
+    return NULL;
+  }
+  void put (const pred_fact &fact)
+  {
+    if (pred_fact *p = find (fact.pred_fn))
+      {
+	*p = fact;
+	return;
+      }
+    if (n == PRED_FACTS_MAX)
+      {
+	for (unsigned i = 1; i < n; ++i)
+	  f[i - 1] = f[i];
+	--n;
+      }
+    f[n++] = fact;
+  }
+};
 typedef pair_hash<nofree_ptr_hash<tree_node>, nofree_ptr_hash<tree_node>>
   oa_field_key_hash;
 
-/* Both persistent-memory fact maps for one program point, threaded
-   together through the dominator walk below.  */
-struct dom_fact_state
+/* A relation (oa_relation_conjunct_shape): PRED_FN of the identities
+   IDS, in order -- an object's (gimple_object_identity), or a value's: a
+   constant, the SSA value a scalar is a copy of, the variable holding an
+   aggregate, or a member of one (oa_relation_member_slot).  */
+
+struct relation_fact_lite
 {
-  hash_map<tree, oa_predicate_fact_lite> pred;
-  hash_map<oa_field_key_hash, oa_range_lite> field;
+  tree pred_fn;
+  tree ids[OA_RELATION_MAX_ARGS];
+  unsigned n;
+  bool polarity;
+  bool conveyor;
 };
 
+/* The persistent-memory facts at one program point, threaded through the
+   fact walk below.  Relations are keyed by relation_key.  */
+
+struct dom_fact_state
+{
+  hash_map<tree, pred_facts> pred;
+  hash_map<oa_field_key_hash, oa_range_lite> field;
+  hash_map<tree, relation_fact_lite> rel;
+  /* The locals whose address a call that may end lifetimes was given: it
+     may have kept it, so any later such call may change them.  On any
+     path, so a union at joins.  */
+  hash_set<tree> escaped;
+  /* For a variable holding an aggregate value a relation may be about,
+     the objects that value was obtained from, a TREE_LIST of their
+     identities: a call that may end them ends the value's relations (the
+     derived-value rule).  Absent: not known, so any call that may end
+     lifetimes and is given a route does.  */
+  hash_map<tree, tree> val_src;
+};
+
+/* The object pointer VAL points to: a variable whose address it is, or
+   the pointer value itself, through copies, conversions and PHIs whose
+   arguments all point to the same one.  NULL_TREE if VAL isn't a
+   pointer.  */
+
 static tree
-gimple_object_identity (tree val)
+gimple_object_identity_1 (tree val, hash_set<tree> &visiting)
 {
   if (val == NULL_TREE)
     return NULL_TREE;
@@ -672,8 +721,265 @@ gimple_object_identity (tree val)
       return NULL_TREE;
     }
   if (TREE_CODE (val) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (val)))
+    {
+      if (visiting.add (val))
+	return val;
+      gimple *def = SSA_NAME_DEF_STMT (val);
+      if (def && gimple_code (def) == GIMPLE_PHI)
+	{
+	  tree shared = NULL_TREE;
+	  for (unsigned i = 0; i < gimple_phi_num_args (def); ++i)
+	    {
+	      tree id = gimple_object_identity_1 (gimple_phi_arg_def (def, i),
+						  visiting);
+	      if (!id || (shared && shared != id))
+		return val;
+	      shared = id;
+	    }
+	  return shared ? shared : val;
+	}
+      if (def && is_gimple_assign (def))
+	{
+	  tree_code code = gimple_assign_rhs_code (def);
+	  if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME
+	      || code == ADDR_EXPR)
+	    {
+	      tree id = gimple_object_identity_1 (gimple_assign_rhs1 (def),
+						  visiting);
+	      return id ? id : val;
+	    }
+	}
+      return val;
+    }
+  if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
     return val;
   return NULL_TREE;
+}
+
+static tree
+gimple_object_identity (tree val)
+{
+  hash_set<tree> visiting;
+  return gimple_object_identity_1 (val, visiting);
+}
+
+/* The SSA value scalar VAL is a copy of.  */
+
+static tree
+scalar_value_origin (tree val)
+{
+  while (TREE_CODE (val) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (val);
+      if (!def || !gimple_assign_single_p (def)
+	  || TREE_CODE (gimple_assign_rhs1 (def)) != SSA_NAME)
+	break;
+      val = gimple_assign_rhs1 (def);
+    }
+  return val;
+}
+
+/* The key of relation PRED_FN (IDS[0..N)).  */
+
+static tree
+relation_key (tree pred_fn, const tree *ids, unsigned n)
+{
+  char buf[24 * (OA_RELATION_MAX_ARGS + 1)];
+  int len = snprintf (buf, sizeof buf, "%p", (void *) pred_fn);
+  for (unsigned i = 0; i < n; ++i)
+    len += snprintf (buf + len, sizeof buf - len, ":%p", (void *) ids[i]);
+  return get_identifier (buf);
+}
+
+static void
+relation_put (dom_fact_state &state, tree pred_fn, const tree *ids,
+	      unsigned n, bool polarity, bool conveyor)
+{
+  relation_fact_lite f;
+  f.pred_fn = pred_fn;
+  f.n = n;
+  for (unsigned i = 0; i < n; ++i)
+    f.ids[i] = ids[i];
+  f.polarity = polarity;
+  f.conveyor = conveyor;
+  state.rel.put (relation_key (pred_fn, ids, n), f);
+}
+
+/* STATE's relations with ID, or a member of the value ID is, among their
+   arguments end.  */
+
+static void
+relation_drop (dom_fact_state &state, tree id)
+{
+  if (!id || !state.rel.elements ())
+    return;
+  auto_vec<tree, 8> keys;
+  for (auto it : state.rel)
+    for (unsigned i = 0; i < it.second.n; ++i)
+      if (it.second.ids[i] == id
+	  || oa_relation_member_slot_base (it.second.ids[i]) == id)
+	{
+	  keys.safe_push (it.first);
+	  break;
+	}
+  for (tree k : keys)
+    state.rel.remove (k);
+}
+
+/* The identity of VAL, a GIMPLE operand that is argument I of relation
+   PRED_FN; NULL_TREE if it has none.  */
+
+static tree
+relation_operand_identity (tree pred_fn, unsigned i, tree val)
+{
+  if (!val)
+    return NULL_TREE;
+  if (oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_VALUE)
+    {
+      if (TREE_CODE (val) == INTEGER_CST)
+	return val;
+      if (TREE_CODE (val) == SSA_NAME)
+	return scalar_value_origin (val);
+      if ((VAR_P (val) || TREE_CODE (val) == PARM_DECL)
+	  && AGGREGATE_TYPE_P (TREE_TYPE (val)))
+	return val;
+      if (TREE_CODE (val) == COMPONENT_REF)
+	return oa_relation_member_slot (val);
+      return NULL_TREE;
+    }
+  return gimple_object_identity (val);
+}
+
+/* The GIMPLE operand at CALL, to CALLEE, that ARG, an argument of a
+   relation conjunct of CALLEE's contract, stands for: a constant; the
+   argument CALL passes for a parameter, or for a value read through a
+   reference parameter the variable it is bound to; a member of either;
+   or what CALL's result initializes, for RESULT_NAME, the result of a
+   postcondition.  NULL_TREE if none.  */
+
+static tree
+relation_call_operand (gcall *call, tree callee, tree arg, tree result_name)
+{
+  tree s = oa_relation_strip_arg (arg);
+  if (TREE_CODE (s) == INTEGER_CST)
+    return s;
+  if (TREE_CODE (s) == COMPONENT_REF
+      && TREE_CODE (TREE_OPERAND (s, 1)) == FIELD_DECL)
+    {
+      auto_vec<tree, 4> fields;
+      while (TREE_CODE (s) == COMPONENT_REF
+	     && TREE_CODE (TREE_OPERAND (s, 1)) == FIELD_DECL)
+	{
+	  fields.safe_push (TREE_OPERAND (s, 1));
+	  s = oa_relation_strip_arg (TREE_OPERAND (s, 0));
+	}
+      bool deref = INDIRECT_REF_P (s);
+      tree b = deref ? oa_relation_strip_arg (TREE_OPERAND (s, 0)) : s;
+      tree r = NULL_TREE;
+      if (result_name && b == result_name)
+	r = gimple_call_lhs (call);
+      else if (TREE_CODE (b) == PARM_DECL)
+	{
+	  unsigned argno;
+	  if (find_param_position (callee, b, &argno)
+	      && argno < gimple_call_num_args (call))
+	    {
+	      tree a = gimple_call_arg (call, argno);
+	      if (!deref)
+		r = a;
+	      else if (TREE_CODE (a) == ADDR_EXPR)
+		r = TREE_OPERAND (a, 0);
+	    }
+	}
+      if (!r || !(VAR_P (r) || TREE_CODE (r) == PARM_DECL))
+	return NULL_TREE;
+      for (unsigned i = fields.length (); i-- > 0; )
+	r = build3 (COMPONENT_REF, TREE_TYPE (fields[i]), r, fields[i],
+		    NULL_TREE);
+      return r;
+    }
+  bool deref = INDIRECT_REF_P (s);
+  tree base = deref ? oa_relation_strip_arg (TREE_OPERAND (s, 0)) : s;
+  if (result_name && base == result_name)
+    {
+      tree lhs = gimple_call_lhs (call);
+      if (lhs && (TREE_CODE (lhs) == SSA_NAME || VAR_P (lhs)
+		  || TREE_CODE (lhs) == PARM_DECL))
+	return lhs;
+      return NULL_TREE;
+    }
+  unsigned argno;
+  if (TREE_CODE (base) != PARM_DECL
+      || !find_param_position (callee, base, &argno)
+      || argno >= gimple_call_num_args (call))
+    return NULL_TREE;
+  tree a = gimple_call_arg (call, argno);
+  if (deref && TYPE_REF_P (TREE_TYPE (base)) && !POINTER_TYPE_P (TREE_TYPE (s)))
+    {
+      if (TREE_CODE (a) == ADDR_EXPR
+	  && (VAR_P (TREE_OPERAND (a, 0))
+	      || TREE_CODE (TREE_OPERAND (a, 0)) == PARM_DECL))
+	return TREE_OPERAND (a, 0);
+      return NULL_TREE;
+    }
+  return a;
+}
+
+/* The identities, at CALL to CALLEE, of the arguments ARGS of relation
+   PRED_FN, into IDS; false if one has none.  */
+
+static bool
+relation_call_identities (gcall *call, tree callee, tree pred_fn,
+			  const vec<tree> &args, tree result_name, tree *ids)
+{
+  for (unsigned i = 0; i < args.length (); ++i)
+    if (!(ids[i] = relation_operand_identity
+		     (pred_fn, i, relation_call_operand (call, callee, args[i],
+							 result_name))))
+      return false;
+  return true;
+}
+
+/* Whether conjunct C is a relation (oa_relation_conjunct_shape): that,
+   not a one-object predicate, is what it is checked and established as.  */
+
+static bool
+relation_conjunct_p (tree c)
+{
+  tree pred_fn;
+  bool negated;
+  auto_vec<tree> args;
+  return oa_relation_conjunct_shape (c, &pred_fn, &args, &negated);
+}
+
+/* The identity, in FUN's body, of ARG, argument I of relation PRED_FN in
+   one of FUN's own preconditions: a parameter's value at entry.  */
+
+static tree
+relation_self_identity (function *fun, tree pred_fn, unsigned i, tree arg)
+{
+  tree s = oa_relation_strip_arg (arg);
+  if (TREE_CODE (s) == INTEGER_CST)
+    return s;
+  /* A member of a parameter passed by value ('r.first').  */
+  if (TREE_CODE (s) == COMPONENT_REF)
+    {
+      tree b = s;
+      while (TREE_CODE (b) == COMPONENT_REF)
+	b = oa_relation_strip_arg (TREE_OPERAND (b, 0));
+      return (TREE_CODE (b) == PARM_DECL
+	      && oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_VALUE
+	      ? oa_relation_member_slot (s) : NULL_TREE);
+    }
+  bool deref = INDIRECT_REF_P (s);
+  tree base = deref ? oa_relation_strip_arg (TREE_OPERAND (s, 0)) : s;
+  if (TREE_CODE (base) != PARM_DECL)
+    return NULL_TREE;
+  if (oa_relation_arg_kind_of (pred_fn, i) == OA_RELATION_VALUE
+      && AGGREGATE_TYPE_P (TREE_TYPE (base)) && !deref)
+    return base;
+  tree ssa = ssa_default_def (fun, base);
+  return ssa ? relation_operand_identity (pred_fn, i, ssa) : NULL_TREE;
 }
 
 /* A ptr->field range conjunct group, exactly like contracts.cc's own
@@ -749,14 +1055,36 @@ seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 	{
 	  tree pred_fn, arg_decl;
 	  bool negated;
-	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
-					     &negated))
+	  if (relation_conjunct_p (*conjuncts[i])
+	      || !oa_match_predicate_conjunct (*conjuncts[i], &pred_fn,
+					       &arg_decl, &negated))
 	    continue;
 	  if (TREE_CODE (arg_decl) != PARM_DECL)
 	    continue;
 	  tree ssa = ssa_default_def (fun, arg_decl);
 	  if (ssa)
-	    seed.pred.put (ssa, { pred_fn, !negated });
+	    seed.pred.get_or_insert (ssa).put
+	      ({ pred_fn, !negated,
+		 oa_contract_conveyor_active_public (contract, fndecl) });
+	}
+
+      /* Relations among the parameters.  */
+      bool conveyor = oa_contract_conveyor_active_public (contract, fndecl);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn;
+	  bool negated;
+	  auto_vec<tree> args;
+	  if (!oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &args,
+					   &negated))
+	    continue;
+	  tree ids[OA_RELATION_MAX_ARGS];
+	  bool all = true;
+	  for (unsigned a = 0; a < args.length () && all; ++a)
+	    all = (ids[a] = relation_self_identity (fun, pred_fn, a, args[a]));
+	  if (all)
+	    relation_put (seed, pred_fn, ids, args.length (), !negated,
+			  conveyor);
 	}
 
       auto_vec<field_group_lite> field_groups;
@@ -796,8 +1124,9 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	{
 	  tree pred_fn, arg_decl;
 	  bool negated;
-	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
-					     &negated))
+	  if (relation_conjunct_p (*conjuncts[i])
+	      || !oa_match_predicate_conjunct (*conjuncts[i], &pred_fn,
+					       &arg_decl, &negated))
 	    continue;
 
 	  unsigned argno;
@@ -808,9 +1137,11 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	  tree identity = gimple_object_identity (substituted);
 
 	  bool required = !negated;
-	  oa_predicate_fact_lite *fact
-	    = identity ? state.pred.get (identity) : NULL;
-	  if (fact && fact->pred_fn == pred_fn)
+	  pred_facts *facts = identity ? state.pred.get (identity) : NULL;
+	  pred_fact *fact = facts ? facts->find (pred_fn) : NULL;
+	  if (fact && as_conveyor && !fact->conveyor)
+	    fact = NULL;
+	  if (fact)
 	    {
 	      if (fact->polarity == required)
 		continue;
@@ -832,6 +1163,43 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	    report_unproven (call, false, "cannot verify that %qD (%qE) holds, "
 			     "as required by the precondition of %qD", pred_fn,
 			     substituted, callee);
+	}
+
+      /* Relations: proven by a fact, refuted by one of the other
+	 polarity.  A conveyor obligation needs one a conveyor contract
+	 established.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn;
+	  bool negated;
+	  auto_vec<tree> args;
+	  if (!oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &args,
+					   &negated))
+	    continue;
+	  tree ids[OA_RELATION_MAX_ARGS];
+	  relation_fact_lite *f = NULL;
+	  if (relation_call_identities (call, callee, pred_fn, args, NULL_TREE,
+					ids))
+	    f = state.rel.get (relation_key (pred_fn, ids, args.length ()));
+	  if (f && as_conveyor && !f->conveyor)
+	    f = NULL;
+	  bool required = !negated;
+	  if (f && f->polarity == required)
+	    continue;
+	  if (f)
+	    error_at (gimple_location (call), "%qD provably fails the "
+		      "precondition of %qD: the relation is established %s, "
+		      "but the precondition requires it to be %s", pred_fn,
+		      callee, f->polarity ? "true" : "false",
+		      required ? "true" : "false");
+	  else if (strict)
+	    report_unproven (call, true, "cannot prove that %qD holds, as "
+			     "required by the precondition of %qD", pred_fn,
+			     callee);
+	  else
+	    report_unproven (call, false, "cannot verify that %qD holds, as "
+			     "required by the precondition of %qD", pred_fn,
+			     callee);
 	}
 
       auto_vec<field_group_lite> field_groups;
@@ -877,33 +1245,206 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
     }
 }
 
-/* Rule 2 (see contracts.cc's own oa_invalidate_symbolic_facts_for_call_
-   args, whose exact discipline this mirrors): a tracked object's fact
-   must be invalidated by *any* call taking its address or receiving it
-   as a bare pointer, whether or not that call has any contracts of its
-   own at all -- there's no way to know an arbitrary, uncontracted
-   function didn't change the pointee's logical state.  Drops every
-   tracked field for the same identity too, matching contracts.cc's own
-   contract_field_range_invalidate_all's whole-object granularity.  */
+/* Whether CALL may end the lifetime of an object it is given a route to
+   ('delete p', 'free (p)'): not an internal, const or pure function, a
+   builtin other than free and realloc, a contract check, or a conveyor,
+   symbolic or conversion function.  */
+
+static bool
+call_may_end_lifetimes_p (gcall *call)
+{
+  if (gimple_call_internal_p (call)
+      || (gimple_call_flags (call) & (ECF_CONST | ECF_PURE)))
+    return false;
+  tree sv, cd, dc;
+  if (cg_contract_check_call_public (call, &sv, &cd, &dc))
+    return false;
+  if (gimple_call_builtin_p (call, BUILT_IN_NORMAL))
+    {
+      built_in_function code = DECL_FUNCTION_CODE (gimple_call_fndecl (call));
+      return code == BUILT_IN_FREE || code == BUILT_IN_REALLOC;
+    }
+  tree named = contract_call_named_fn (gimple_call_fn (call));
+  if (named && TREE_CODE (named) == FUNCTION_DECL
+      && (DECL_CONV_FN_P (named) || DECL_DECLARED_CONVEYOR_P (named)
+	  || DECL_DECLARED_SYMBOLIC_P (named)))
+    return false;
+  return true;
+}
+
+/* Does pointer ARG, of object IDENTITY, point to an object no fact can
+   name: one loaded from memory or returned by a call, or either of two
+   objects (a PHI)?  The address of a decl, a parameter's incoming value
+   and a global pointer variable's value are named.  */
+
+static bool
+unnamed_pointer_p (tree arg, tree identity)
+{
+  if (TREE_CODE (arg) == ADDR_EXPR)
+    return !DECL_P (get_base_address (TREE_OPERAND (arg, 0)));
+  if (!identity)
+    return true;
+  if (TREE_CODE (identity) != SSA_NAME || SSA_NAME_IS_DEFAULT_DEF (identity))
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (identity);
+  if (!def || gimple_code (def) == GIMPLE_PHI || is_gimple_call (def))
+    return true;
+  if (gimple_assign_single_p (def))
+    {
+      tree rhs = gimple_assign_rhs1 (def);
+      if (VAR_P (rhs) && is_global_var (rhs))
+	return false;
+      return (TREE_CODE (rhs) != ADDR_EXPR
+	      && (handled_component_p (rhs) || TREE_CODE (rhs) == MEM_REF
+		  || VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL));
+    }
+  return false;
+}
+
+/* What STATE knows of object IDENTITY ends: its predicates, the
+   relations it is in, and its fields' ranges (only FIELD's, if given).  */
 
 static void
-invalidate_persistent_facts_for_call_args (gcall *call, dom_fact_state &state)
+forget_object (dom_fact_state &state, tree identity, tree field = NULL_TREE)
 {
-  unsigned n = gimple_call_num_args (call);
-  for (unsigned i = 0; i < n; ++i)
-    {
-      tree identity = gimple_object_identity (gimple_call_arg (call, i));
-      if (!identity)
-	continue;
-      state.pred.remove (identity);
+  state.pred.remove (identity);
+  relation_drop (state, identity);
+  auto_vec<std::pair<tree, tree>> drop;
+  for (auto it : state.field)
+    if (it.first.first == identity && (!field || it.first.second == field))
+      drop.safe_push (it.first);
+  for (auto &k : drop)
+    state.field.remove (k);
+}
 
-      auto_vec<std::pair<tree, tree>> to_remove;
-      for (auto it : state.field)
-	if (it.first.first == identity)
-	  to_remove.safe_push (it.first);
-      for (unsigned j = 0; j < to_remove.length (); ++j)
-	state.field.remove (to_remove[j]);
+/* What STATE knows of every object ends.  */
+
+static void
+forget_all (dom_fact_state &state)
+{
+  state.pred.empty ();
+  state.field.empty ();
+  state.rel.empty ();
+}
+
+/* OBJ (an identity) may have changed: so may the objects of FUN's
+   parameters that may alias it, if it is one's.  */
+
+static void
+forget_object_and_aliases (dom_fact_state &state, function *fun, tree obj)
+{
+  forget_object (state, obj);
+  tree parm = (TREE_CODE (obj) == SSA_NAME && SSA_NAME_IS_DEFAULT_DEF (obj)
+	       ? SSA_NAME_VAR (obj) : obj);
+  if (!parm || TREE_CODE (parm) != PARM_DECL || DECL_CONTEXT (parm) != fun->decl)
+    return;
+  for (tree sib = DECL_ARGUMENTS (fun->decl); sib; sib = DECL_CHAIN (sib))
+    if (sib != parm && oa_could_alias_as_parameters_public (parm, sib))
+      {
+	tree id = ssa_default_def (fun, sib);
+	forget_object (state, id ? id : sib);
+      }
+}
+
+/* The facts CALL may end, whether or not it has contracts of its own: an
+   object it is given a route to may change, except through a pointer or
+   reference to const to a callee that can't end lifetimes (or cast the
+   constness away and still be conveyor-checked); a scalar it is given
+   loses its predicates (a file descriptor to 'close'); a member's address
+   may be stored to; and given a pointer to non-const to an object no fact
+   names, it may change any object.  An aggregate passed by value is a
+   copy.  */
+
+static void
+invalidate_persistent_facts_for_call_args (gcall *call, function *fun,
+					   dom_fact_state &state)
+{
+  bool may_end = call_may_end_lifetimes_p (call);
+  tree parm_types = (gimple_call_fntype (call)
+		     ? TYPE_ARG_TYPES (gimple_call_fntype (call)) : NULL_TREE);
+  for (unsigned i = 0; i < gimple_call_num_args (call);
+       ++i, parm_types = parm_types ? TREE_CHAIN (parm_types) : NULL_TREE)
+    {
+      tree arg = gimple_call_arg (call, i);
+      bool const_route = (parm_types && INDIRECT_TYPE_P (TREE_VALUE (parm_types))
+			  && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types))));
+      if (const_route && !may_end)
+	continue;
+      if (AGGREGATE_TYPE_P (TREE_TYPE (arg)))
+	continue;
+      tree identity = gimple_object_identity (arg);
+      if (!identity)
+	{
+	  if (TREE_CODE (arg) == SSA_NAME)
+	    {
+	      tree v = scalar_value_origin (arg);
+	      state.pred.remove (v);
+	      relation_drop (state, v);
+	    }
+	}
+      else
+	forget_object_and_aliases (state, fun, identity);
+
+      /* A member's address ('set (&this->d)').  */
+      tree addr = arg;
+      if (TREE_CODE (addr) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (addr)
+	  && gimple_assign_single_p (SSA_NAME_DEF_STMT (addr)))
+	addr = gimple_assign_rhs1 (SSA_NAME_DEF_STMT (addr));
+      if (TREE_CODE (addr) == ADDR_EXPR
+	  && TREE_CODE (TREE_OPERAND (addr, 0)) == COMPONENT_REF)
+	{
+	  tree ref = TREE_OPERAND (addr, 0);
+	  tree obj = TREE_OPERAND (ref, 0);
+	  tree id = gimple_object_identity (TREE_CODE (obj) == MEM_REF
+					    ? TREE_OPERAND (obj, 0) : obj);
+	  if (id)
+	    forget_object (state, id, TREE_OPERAND (ref, 1));
+	}
+
+      if (POINTER_TYPE_P (TREE_TYPE (arg))
+	  && !TYPE_READONLY (TREE_TYPE (TREE_TYPE (arg)))
+	  && !FUNC_OR_METHOD_TYPE_P (TREE_TYPE (TREE_TYPE (arg)))
+	  && TREE_CODE (arg) != INTEGER_CST && !const_route
+	  && unnamed_pointer_p (arg, identity))
+	forget_all (state);
     }
+}
+
+/* A store to LHS, not an SSA name: the object it writes into may change
+   -- its predicates, and the written field's range; through a pointer to
+   an object no fact names, any object may.  */
+
+static void
+invalidate_for_store (tree lhs, function *fun, dom_fact_state &state)
+{
+  if (TREE_CODE (lhs) == SSA_NAME)
+    return;
+  tree field = (TREE_CODE (lhs) == COMPONENT_REF
+		? TREE_OPERAND (lhs, 1) : NULL_TREE);
+  tree base = get_base_address (lhs);
+  if (!base)
+    return;
+  tree id;
+  if (DECL_P (base))
+    id = base;
+  else if (TREE_CODE (base) == MEM_REF)
+    {
+      tree ptr = TREE_OPERAND (base, 0);
+      id = gimple_object_identity (ptr);
+      if (unnamed_pointer_p (ptr, id))
+	{
+	  forget_all (state);
+	  return;
+	}
+    }
+  else
+    return;
+  if (!id)
+    return;
+  state.pred.remove (id);
+  relation_drop (state, id);
+  forget_object (state, id, field ? field : NULL_TREE);
+  forget_object_and_aliases (state, fun, id);
 }
 
 /* CALL's own callee's declared postcondition establishing a fact about
@@ -925,7 +1466,7 @@ establish_persistent_facts_for_call (gcall *call, dom_fact_state &state)
 
   for (tree contract : fn_contracts (callee))
     {
-      if (!POSTCONDITION_P (contract))
+      if (!postcondition_establishes_p (contract, callee))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -937,8 +1478,9 @@ establish_persistent_facts_for_call (gcall *call, dom_fact_state &state)
 	{
 	  tree pred_fn, arg_decl;
 	  bool negated;
-	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
-					     &negated))
+	  if (relation_conjunct_p (*conjuncts[i])
+	      || !oa_match_predicate_conjunct (*conjuncts[i], &pred_fn,
+					       &arg_decl, &negated))
 	    continue;
 
 	  unsigned argno;
@@ -947,8 +1489,28 @@ establish_persistent_facts_for_call (gcall *call, dom_fact_state &state)
 	    continue;
 	  tree substituted = gimple_call_arg (call, argno);
 	  tree identity = gimple_object_identity (substituted);
+	  bool conveyor = false;
+	  postcondition_establishes_p (contract, callee, &conveyor);
 	  if (identity)
-	    state.pred.put (identity, { pred_fn, !negated });
+	    state.pred.get_or_insert (identity).put ({ pred_fn, !negated,
+						       conveyor });
+	}
+
+      bool conveyor = false;
+      postcondition_establishes_p (contract, callee, &conveyor);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree pred_fn;
+	  bool negated;
+	  auto_vec<tree> args;
+	  tree ids[OA_RELATION_MAX_ARGS];
+	  if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &args,
+					  &negated)
+	      && relation_call_identities (call, callee, pred_fn, args,
+					   POSTCONDITION_IDENTIFIER (contract),
+					   ids))
+	    relation_put (state, pred_fn, ids, args.length (), !negated,
+			  conveyor);
 	}
 
       auto_vec<field_group_lite> field_groups;
@@ -968,71 +1530,603 @@ establish_persistent_facts_for_call (gcall *call, dom_fact_state &state)
     }
 }
 
-/* The dominator-preorder walk itself: BLOCK_OUT[bb] is bb's own exit
-   state, computed once (a dominator-tree preorder walk visits each
-   block exactly once) from its immediate dominator's already-computed
-   BLOCK_OUT entry (or SEED, for the root). Heap-allocated per block
-   (rather than stored by value) purely to avoid requiring hash_map's
-   value type to itself be a cheaply-copyable hash_map; freed in the
-   destructor.  */
+/* A store to LHS: the relations of the value it writes end.  Through a
+   pointer to no variable a fact names, it may be any whose address was
+   taken.  */
 
-class predicate_dom_walker : public dom_walker
+static void
+relation_store (tree lhs, dom_fact_state &state)
 {
-public:
-  predicate_dom_walker (dom_fact_state *seed_)
-    : dom_walker (CDI_DOMINATORS), seed (seed_)
-  {}
+  tree base = get_base_address (lhs);
+  if (!base)
+    return;
+  if (DECL_P (base))
+    {
+      relation_drop (state, base);
+      state.val_src.remove (base);
+      return;
+    }
+  if (TREE_CODE (base) != MEM_REF)
+    return;
+  tree id = gimple_object_identity (TREE_OPERAND (base, 0));
+  if (id && DECL_P (id))
+    {
+      relation_drop (state, id);
+      state.val_src.remove (id);
+      return;
+    }
+  auto_vec<tree, 8> keys;
+  for (auto it : state.rel)
+    for (unsigned i = 0; i < it.second.n; ++i)
+      {
+	tree v = it.second.ids[i];
+	if (tree b = oa_relation_member_slot_base (v))
+	  v = b;
+	if (DECL_P (v) && TREE_ADDRESSABLE (v))
+	  {
+	    keys.safe_push (it.first);
+	    break;
+	  }
+      }
+  for (tree k : keys)
+    state.rel.remove (k);
+}
 
-  ~predicate_dom_walker ()
-  {
-    for (auto it : block_out)
-      delete it.second;
-  }
+/* A whole copy of an aggregate value, RHS (a variable or a member of
+   one) to variable LHS: the copy has the value's relations.  */
 
-  edge before_dom_children (basic_block) final override;
-
-  dom_fact_state *seed;
-  hash_map<basic_block, dom_fact_state *> block_out;
-};
-
-edge
-predicate_dom_walker::before_dom_children (basic_block bb)
+static void
+relation_copy (tree lhs, tree rhs, dom_fact_state &state)
 {
-  dom_fact_state *state = new dom_fact_state ();
-
-  basic_block idom = get_immediate_dominator (CDI_DOMINATORS, bb);
-  const dom_fact_state *from = seed;
-  if (idom)
+  if (!(VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL)
+      || lhs == rhs || !AGGREGATE_TYPE_P (TREE_TYPE (lhs)))
+    return;
+  if (TREE_CODE (rhs) == COMPONENT_REF)
     {
-      dom_fact_state **parent = block_out.get (idom);
-      from = parent ? *parent : NULL;
+      rhs = oa_relation_member_slot (rhs);
+      if (!rhs)
+	return;
     }
-  if (from)
+  else if (!(VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL))
+    return;
+  tree src_of = rhs;
+  if (tree b = oa_relation_member_slot_base (rhs))
+    src_of = b;
+  if (state.escaped.contains (src_of))
+    state.escaped.add (lhs);
+  if (tree *src = state.val_src.get (src_of))
+    state.val_src.put (lhs, *src);
+  auto_vec<relation_fact_lite, 4> copies;
+  for (auto it : state.rel)
     {
-      for (auto it : from->pred)
-	state->pred.put (it.first, it.second);
-      for (auto it : from->field)
-	state->field.put (it.first, it.second);
+      relation_fact_lite f = it.second;
+      bool hit = false;
+      for (unsigned i = 0; i < f.n; ++i)
+	if (oa_relation_arg_kind_of (f.pred_fn, i) != OA_RELATION_VALUE)
+	  continue;
+	else if (f.ids[i] == rhs)
+	  {
+	    f.ids[i] = lhs;
+	    hit = true;
+	  }
+	else if (oa_relation_member_slot_base (f.ids[i]) == rhs)
+	  if (tree t = oa_relation_member_slot_rebase (f.ids[i], lhs))
+	    {
+	      f.ids[i] = t;
+	      hit = true;
+	    }
+      if (hit)
+	copies.safe_push (f);
+    }
+  for (auto &f : copies)
+    relation_put (state, f.pred_fn, f.ids, f.n, f.polarity, f.conveyor);
+}
+
+/* The call whose bool result TESTED is, through copies, conversions and
+   negations ('!ok (x)' is '_2 = _1 ^ 1'), flipping *TRUTH for each
+   negation; NULL if it isn't one.  */
+
+static gcall *
+tested_call (tree tested, bool *truth)
+{
+  for (int depth = 0; depth < 8 && TREE_CODE (tested) == SSA_NAME; ++depth)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (tested);
+      if (gcall *call = def ? dyn_cast <gcall *> (def) : NULL)
+	return call;
+      if (!def || !is_gimple_assign (def)
+	  || TREE_CODE (gimple_assign_rhs1 (def)) != SSA_NAME)
+	return NULL;
+      tree_code code = gimple_assign_rhs_code (def);
+      tree rhs1 = gimple_assign_rhs1 (def);
+      bool boolean = TREE_CODE (TREE_TYPE (rhs1)) == BOOLEAN_TYPE;
+      if (code == TRUTH_NOT_EXPR
+	  || (code == BIT_NOT_EXPR && boolean)
+	  || (code == BIT_XOR_EXPR && boolean
+	      && integer_onep (gimple_assign_rhs2 (def))))
+	*truth = !*truth;
+      else if (!(gimple_assign_ssa_name_copy_p (def)
+		 || (CONVERT_EXPR_CODE_P (code)
+		     && INTEGRAL_TYPE_P (TREE_TYPE (rhs1))
+		     && (boolean
+			 || TYPE_PRECISION (TREE_TYPE (rhs1))
+			    <= TYPE_PRECISION (TREE_TYPE (tested))))))
+	return NULL;
+      tested = rhs1;
+    }
+  return NULL;
+}
+
+/* The facts taking edge E establishes, into STATE: E is a true or false
+   edge of a condition testing a value against zero, the result of a call
+   to a one-argument predicate that gives the same result again
+   (oa_call_repeatable_p) -- it holds of the argument, or not.  */
+
+static void
+refine_edge (edge e, dom_fact_state &state)
+{
+  if (!(e->flags & (EDGE_TRUE_VALUE | EDGE_FALSE_VALUE)))
+    return;
+  gcond *cond = safe_dyn_cast <gcond *> (*gsi_last_bb (e->src));
+  if (!cond)
+    return;
+  tree_code code = gimple_cond_code (cond);
+  tree lhs = gimple_cond_lhs (cond);
+  tree rhs = gimple_cond_rhs (cond);
+  if ((code != NE_EXPR && code != EQ_EXPR) || !integer_zerop (rhs)
+      || TREE_CODE (lhs) != SSA_NAME)
+    return;
+  bool truth = ((e->flags & EDGE_TRUE_VALUE) != 0) == (code == NE_EXPR);
+  gcall *call = tested_call (lhs, &truth);
+  if (!call)
+    return;
+  tree callee = gimple_call_fndecl (call);
+  if (!callee || gimple_call_num_args (call) != 1
+      || !oa_call_repeatable_p (callee))
+    return;
+  tree arg = gimple_call_arg (call, 0);
+  tree identity = gimple_object_identity (arg);
+  if (!identity && TREE_CODE (arg) == SSA_NAME)
+    identity = arg;
+  if (identity)
+    state.pred.get_or_insert (identity).put ({ callee, truth, true });
+}
+
+/* The persistent-memory facts are a forward must-analysis: what holds
+   on entry to a block is what holds on every edge into it -- the meet of
+   its predecessors' exit facts, each refined by what taking its edge
+   establishes -- iterated in reverse postorder to a fixed point (a
+   loop's facts start optimistic and only shrink).  Only the last pass,
+   over the fixed entry facts, reports.  */
+
+/* Copy FROM into TO.  */
+
+static void
+copy_state (dom_fact_state &to, const dom_fact_state &from)
+{
+  to.pred.empty ();
+  to.field.empty ();
+  to.rel.empty ();
+  for (auto it : from.pred)
+    to.pred.put (it.first, it.second);
+  for (auto it : from.field)
+    to.field.put (it.first, it.second);
+  for (auto it : from.rel)
+    to.rel.put (it.first, it.second);
+  to.escaped.empty ();
+  for (tree t : from.escaped)
+    to.escaped.add (t);
+  to.val_src.empty ();
+  for (auto it : from.val_src)
+    to.val_src.put (it.first, it.second);
+}
+
+/* Meet B into A: what holds in both.  A field's ranges join to the
+   interval covering both; a fact established in the conveyor flavor on
+   one side only is no longer one.  */
+
+static void
+meet_state (dom_fact_state &a, const dom_fact_state &b)
+{
+  auto_vec<tree, 8> drop;
+  for (auto it : a.pred)
+    {
+      const pred_facts *other
+	= const_cast<hash_map<tree, pred_facts> &> (b.pred).get (it.first);
+      pred_facts kept;
+      if (other)
+	for (unsigned i = 0; i < it.second.n; ++i)
+	  {
+	    pred_fact f = it.second.f[i];
+	    pred_fact *g = const_cast<pred_facts *> (other)->find (f.pred_fn);
+	    if (g && g->polarity == f.polarity)
+	      {
+		f.conveyor &= g->conveyor;
+		kept.put (f);
+	      }
+	  }
+      if (kept.n)
+	it.second = kept;
+      else
+	drop.safe_push (it.first);
+    }
+  for (tree k : drop)
+    a.pred.remove (k);
+
+  auto_vec<std::pair<tree, tree>, 8> fdrop;
+  for (auto it : a.field)
+    {
+      const oa_range_lite *o
+	= const_cast<hash_map<oa_field_key_hash, oa_range_lite> &>
+	    (b.field).get (it.first);
+      if (!o)
+	{
+	  fdrop.safe_push (it.first);
+	  continue;
+	}
+      oa_range_lite &r = it.second;
+      r.has_lo = r.has_lo && o->has_lo;
+      if (r.has_lo)
+	r.lo = wi::smin (r.lo, o->lo);
+      r.has_hi = r.has_hi && o->has_hi;
+      if (r.has_hi)
+	r.hi = wi::smax (r.hi, o->hi);
+      if (!r.has_lo && !r.has_hi)
+	fdrop.safe_push (it.first);
+    }
+  for (auto &k : fdrop)
+    a.field.remove (k);
+
+  drop.truncate (0);
+  for (auto it : a.rel)
+    {
+      const relation_fact_lite *o
+	= const_cast<hash_map<tree, relation_fact_lite> &> (b.rel)
+	    .get (it.first);
+      if (!o || o->polarity != it.second.polarity)
+	drop.safe_push (it.first);
+      else
+	it.second.conveyor &= o->conveyor;
+    }
+  for (tree k : drop)
+    a.rel.remove (k);
+
+  for (tree t : const_cast<hash_set<tree> &> (b.escaped))
+    a.escaped.add (t);
+  drop.truncate (0);
+  for (auto it : a.val_src)
+    {
+      const tree *o = const_cast<hash_map<tree, tree> &> (b.val_src)
+			.get (it.first);
+      if (!o)
+	{
+	  drop.safe_push (it.first);
+	  continue;
+	}
+      for (tree l = *o; l; l = TREE_CHAIN (l))
+	if (!purpose_member (TREE_PURPOSE (l), it.second))
+	  it.second = tree_cons (TREE_PURPOSE (l), NULL_TREE, it.second);
+    }
+  for (tree k : drop)
+    a.val_src.remove (k);
+}
+
+/* Whether A and B hold the same facts.  */
+
+static bool
+same_state (const dom_fact_state &a, const dom_fact_state &b)
+{
+  auto &bp = const_cast<hash_map<tree, pred_facts> &> (b.pred);
+  auto &bf = const_cast<hash_map<oa_field_key_hash, oa_range_lite> &> (b.field);
+  auto &br = const_cast<hash_map<tree, relation_fact_lite> &> (b.rel);
+  if (a.pred.elements () != b.pred.elements ()
+      || a.field.elements () != b.field.elements ()
+      || a.rel.elements () != b.rel.elements ())
+    return false;
+  for (auto it : a.pred)
+    {
+      pred_facts *o = bp.get (it.first);
+      if (!o || o->n != it.second.n)
+	return false;
+      for (unsigned i = 0; i < it.second.n; ++i)
+	{
+	  pred_fact *g = o->find (it.second.f[i].pred_fn);
+	  if (!g || g->polarity != it.second.f[i].polarity
+	      || g->conveyor != it.second.f[i].conveyor)
+	    return false;
+	}
+    }
+  for (auto it : a.field)
+    {
+      oa_range_lite *o = bf.get (it.first);
+      if (!o || o->has_lo != it.second.has_lo || o->has_hi != it.second.has_hi
+	  || (o->has_lo && o->lo != it.second.lo)
+	  || (o->has_hi && o->hi != it.second.hi))
+	return false;
+    }
+  for (auto it : a.rel)
+    {
+      relation_fact_lite *o = br.get (it.first);
+      if (!o || o->polarity != it.second.polarity
+	  || o->conveyor != it.second.conveyor)
+	return false;
+    }
+  auto &be = const_cast<hash_set<tree> &> (b.escaped);
+  auto &bv = const_cast<hash_map<tree, tree> &> (b.val_src);
+  if (a.escaped.elements () != b.escaped.elements ()
+      || a.val_src.elements () != b.val_src.elements ())
+    return false;
+  for (tree t : a.escaped)
+    if (!be.contains (t))
+      return false;
+  for (auto it : a.val_src)
+    {
+      tree *o = bv.get (it.first);
+      if (!o || list_length (*o) != list_length (it.second))
+	return false;
+      for (tree l = it.second; l; l = TREE_CHAIN (l))
+	if (!purpose_member (TREE_PURPOSE (l), *o))
+	  return false;
+    }
+  return true;
+}
+
+/* Whether a call given the route objects ROUTES (any route if ANY_ROUTE)
+   may end SOURCE, an object a value was obtained from: one of ROUTES, a
+   local whose address was handed out, or, for a pointer value, what it
+   was obtained from -- a call's routes, the object a load reads, a PHI's
+   values -- transitively; obtained from nothing nameable, anything.  */
+
+static bool
+source_ended_p (tree source, const vec<tree> &routes, bool any_route,
+		dom_fact_state &state, int depth = 0)
+{
+  if (!source || depth > 4)
+    return false;
+  for (tree r : routes)
+    if (r == source || operand_equal_p (r, source, 0))
+      return true;
+  if (DECL_P (source) && state.escaped.contains (source))
+    return true;
+  if (TREE_CODE (source) != SSA_NAME || !POINTER_TYPE_P (TREE_TYPE (source))
+      || SSA_NAME_IS_DEFAULT_DEF (source))
+    return false;
+  tree id = gimple_object_identity (source);
+  if (id && id != source)
+    return source_ended_p (id, routes, any_route, state, depth + 1);
+  auto_vec<tree, 4> sources;
+  gimple *def = SSA_NAME_DEF_STMT (source);
+  if (gcall *call = dyn_cast <gcall *> (def))
+    {
+      for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+	{
+	  tree arg = gimple_call_arg (call, i);
+	  if (POINTER_TYPE_P (TREE_TYPE (arg)) && TREE_CODE (arg) != INTEGER_CST)
+	    if (tree r = gimple_object_identity (arg))
+	      sources.safe_push (r);
+	}
+    }
+  else if (gphi *phi = dyn_cast <gphi *> (def))
+    {
+      for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+	if (TREE_CODE (gimple_phi_arg_def (phi, i)) == SSA_NAME)
+	  sources.safe_push (gimple_phi_arg_def (phi, i));
+    }
+  else if (gimple_assign_load_p (def))
+    {
+      tree base = get_base_address (gimple_assign_rhs1 (def));
+      if (base && TREE_CODE (base) == MEM_REF)
+	base = gimple_object_identity (TREE_OPERAND (base, 0));
+      if (base && (DECL_P (base) || TREE_CODE (base) == SSA_NAME))
+	sources.safe_push (base);
+    }
+  if (sources.is_empty ())
+    return any_route;
+  for (tree src : sources)
+    if (source_ended_p (src, routes, any_route, state, depth + 1))
+      return true;
+  return false;
+}
+
+/* Whether such a call may end the value ID, a relation's argument.  */
+
+static bool
+value_ended_p (tree id, const vec<tree> &routes, bool any_route,
+	       dom_fact_state &state)
+{
+  if (TREE_CODE (id) == INTEGER_CST)
+    return false;
+  if (tree base = oa_relation_member_slot_base (id))
+    id = base;
+  if (TREE_CODE (id) == SSA_NAME)
+    {
+      if (!POINTER_TYPE_P (TREE_TYPE (id)))
+	return false;
+      if (SSA_NAME_IS_DEFAULT_DEF (id))
+	return any_route;
+      return source_ended_p (id, routes, any_route, state);
+    }
+  if (state.escaped.contains (id))
+    return true;
+  tree *src = state.val_src.get (id);
+  if (!src)
+    return any_route;
+  for (tree l = *src; l; l = TREE_CHAIN (l))
+    if (source_ended_p (TREE_PURPOSE (l), routes, any_route, state))
+      return true;
+  return false;
+}
+
+/* What CALL, which may end lifetimes, ends besides what it is given: the
+   facts about the locals whose address was handed out before, and the
+   relations of the values it may end.  Then the locals it is given the
+   address of are handed out, and a value its result initializes was
+   obtained from what it is given.  */
+
+static void
+process_lifetime_call (gcall *call, dom_fact_state &state)
+{
+  auto_vec<tree, 8> routes;
+  bool any_route = false;
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      tree arg = gimple_call_arg (call, i);
+      if (!POINTER_TYPE_P (TREE_TYPE (arg)) || TREE_CODE (arg) == INTEGER_CST)
+	continue;
+      any_route = true;
+      if (TREE_CODE (arg) == SSA_NAME)
+	routes.safe_push (arg);
+      if (tree id = gimple_object_identity (arg))
+	routes.safe_push (id);
     }
 
+  auto_vec<tree, 8> esc;
+  for (tree t : state.escaped)
+    esc.safe_push (t);
+  for (tree t : esc)
+    forget_object (state, t);
+
+  auto_vec<tree, 8> ended;
+  for (auto it : state.rel)
+    for (unsigned i = 0; i < it.second.n; ++i)
+      if (oa_relation_arg_kind_of (it.second.pred_fn, i) == OA_RELATION_VALUE
+	  && value_ended_p (it.second.ids[i], routes, any_route, state))
+	{
+	  ended.safe_push (it.first);
+	  break;
+	}
+  for (tree k : ended)
+    state.rel.remove (k);
+
+  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+    {
+      tree id = gimple_object_identity (gimple_call_arg (call, i));
+      if (id && DECL_P (id) && !is_global_var (id))
+	state.escaped.add (id);
+    }
+  tree lhs = gimple_call_lhs (call);
+  if (lhs && (VAR_P (lhs) || TREE_CODE (lhs) == PARM_DECL))
+    {
+      if (routes.is_empty ())
+	state.val_src.remove (lhs);
+      else
+	{
+	  tree list = NULL_TREE;
+	  for (tree r : routes)
+	    if (!purpose_member (r, list))
+	      list = tree_cons (r, NULL_TREE, list);
+	  state.val_src.put (lhs, list);
+	}
+    }
+}
+
+/* BB's statements, from the facts on entry in STATE to those on exit:
+   stores end the relations of what they write, a copy of a value takes
+   its relations; at a call, its callee's preconditions are checked
+   against the facts before it (if REPORT), then the facts about what it
+   is given end, then its postconditions establish theirs.  */
+
+static void
+transfer_block (basic_block bb, function *fun, dom_fact_state &state,
+		bool report)
+{
   for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
        gsi_next (&gsi))
     {
       gimple *stmt = gsi_stmt (gsi);
-      if (!is_gimple_call (stmt))
+      if (gimple_assign_single_p (stmt) || is_gimple_call (stmt))
+	if (tree lhs = gimple_get_lhs (stmt))
+	  {
+	    invalidate_for_store (lhs, fun, state);
+	    relation_store (lhs, state);
+	    if (gimple_assign_single_p (stmt))
+	      relation_copy (lhs, gimple_assign_rhs1 (stmt), state);
+	  }
+      gcall *call = dyn_cast <gcall *> (stmt);
+      if (!call)
 	continue;
-      gcall *call = as_a <gcall *> (stmt);
-      /* Same order as contracts.cc's own oa_scan_calls_in_expr: consult
-	 using the state as it stood *before* this call, then invalidate,
-	 then establish whatever this same call's own postcondition
-	 guarantees.  */
-      consult_persistent_facts (call, *state);
-      invalidate_persistent_facts_for_call_args (call, *state);
-      establish_persistent_facts_for_call (call, *state);
+      if (report)
+	consult_persistent_facts (call, state);
+      if (call_may_end_lifetimes_p (call))
+	process_lifetime_call (call, state);
+      invalidate_persistent_facts_for_call_args (call, fun, state);
+      establish_persistent_facts_for_call (call, state);
     }
+}
 
-  block_out.put (bb, state);
-  return NULL;
+/* The facts on entry to BB, into STATE, from the exit facts OUT of its
+   predecessors computed so far (SEED for the function's entry); false if
+   none of them is computed yet.  */
+
+static bool
+entry_state (basic_block bb, function *fun, const dom_fact_state &seed,
+	     hash_map<basic_block, dom_fact_state *> &out,
+	     dom_fact_state &state)
+{
+  bool any = false;
+  edge e;
+  edge_iterator ei;
+  FOR_EACH_EDGE (e, ei, bb->preds)
+    {
+      dom_fact_state from;
+      if (e->src == ENTRY_BLOCK_PTR_FOR_FN (fun))
+	copy_state (from, seed);
+      else if (dom_fact_state **o = out.get (e->src))
+	copy_state (from, **o);
+      else
+	continue;
+      refine_edge (e, from);
+      if (!any)
+	copy_state (state, from);
+      else
+	meet_state (state, from);
+      any = true;
+    }
+  return any;
+}
+
+/* The fixed point, then the reporting pass.  */
+
+static void
+persistent_facts_walk (function *fun, const dom_fact_state &seed)
+{
+  int *rpo = XNEWVEC (int, n_basic_blocks_for_fn (fun));
+  int n = pre_and_rev_post_order_compute_fn (fun, NULL, rpo, false);
+  hash_map<basic_block, dom_fact_state *> out;
+  bool changed = true;
+  for (int round = 0; changed && round < 32; ++round)
+    {
+      changed = false;
+      for (int i = 0; i < n; ++i)
+	{
+	  basic_block bb = BASIC_BLOCK_FOR_FN (fun, rpo[i]);
+	  dom_fact_state state;
+	  if (!entry_state (bb, fun, seed, out, state))
+	    continue;
+	  transfer_block (bb, fun, state, false);
+	  dom_fact_state **o = out.get (bb);
+	  if (o && same_state (**o, state))
+	    continue;
+	  if (!o)
+	    out.put (bb, new dom_fact_state);
+	  copy_state (**out.get (bb), state);
+	  changed = true;
+	}
+    }
+  /* Not settled: no facts are trusted rather than ones that might not
+     hold.  */
+  dom_fact_state none;
+  for (int i = 0; i < n; ++i)
+    {
+      basic_block bb = BASIC_BLOCK_FOR_FN (fun, rpo[i]);
+      dom_fact_state state;
+      if (changed || !entry_state (bb, fun, seed, out, state))
+	copy_state (state, none);
+      transfer_block (bb, fun, state, true);
+    }
+  for (auto it : out)
+    delete it.second;
+  XDELETEVEC (rpo);
 }
 
 /* Is VAL (a real GIMPLE operand: an SSA_NAME, an invariant address, or
@@ -1200,7 +2294,7 @@ call_postcondition_relation_p (tree callee, gcall *call, tree_code *code_out,
 {
   for (tree contract : fn_contracts (callee))
     {
-      if (!POSTCONDITION_P (contract))
+      if (!postcondition_establishes_p (contract, callee))
 	continue;
       tree result_id = POSTCONDITION_IDENTIFIER (contract);
       if (!result_id)
@@ -1610,11 +2704,10 @@ check_function (function *fun, void *)
   disable_ranger (fun);
 
   /* Facts about persistent memory (named predicates, field ranges) are
-     per program point: a dominator walk of their own.  */
+     per program point: a forward analysis of their own.  */
   dom_fact_state predicate_seed;
   seed_predicate_self_trust (fun, predicate_seed);
-  predicate_dom_walker pdw (&predicate_seed);
-  pdw.walk (ENTRY_BLOCK_PTR_FOR_FN (fun));
+  persistent_facts_walk (fun, predicate_seed);
 }
 
 int
