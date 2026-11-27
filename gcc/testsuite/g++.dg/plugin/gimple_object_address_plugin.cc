@@ -2460,6 +2460,98 @@ seed_self_trust (function *fun, hash_set<tree> &established,
     }
 }
 
+/* Whether one of this plugin's rules checks CONJUNCT, a precondition
+   conjunct, at a call: an is_object_address, nonzero, predicate or
+   field-range conjunct on a parameter, a parameter compared with an
+   integer constant or another parameter, or a relation.  Any other is
+   reported (report_uncovered), never passed over.  */
+
+static bool
+conjunct_covered_p (tree conjunct)
+{
+  tree a, b, c;
+  tree_code code;
+  bool negated;
+  if (is_object_address_call_p (conjunct, &a)
+      || oa_match_comparison_against_param (conjunct, &a, &code, &b)
+      || relation_conjunct_p (conjunct))
+    return true;
+  if (oa_nonzero_conjunct_p (conjunct, &a))
+    return true;
+  if (oa_match_simple_comparison (conjunct, &a, &code, &b))
+    return TREE_CODE (a) == PARM_DECL && TREE_CODE (b) == INTEGER_CST;
+  if (oa_match_predicate_conjunct (conjunct, &a, &b, &negated))
+    return true;
+  if (oa_match_field_range_comparison (conjunct, &a, &b, &code, &c))
+    return (TREE_CODE (c) == INTEGER_CST
+	    && TREE_CODE (oa_strip_symbolic_ptr_expr_public (b)) == PARM_DECL);
+  return false;
+}
+
+/* CONJUNCT, a precondition conjunct of CALLEE, with CALL's literal
+   arguments for its parameters, folded: a constant if every parameter it
+   reads has one, else NULL_TREE.  */
+
+static tree
+fold_conjunct_at_call (tree conjunct, gcall *call, tree callee)
+{
+  struct data_t { gcall *call; tree callee; bool ok; };
+  data_t d = { call, callee, true };
+  tree copy = unshare_expr (conjunct);
+  cp_walk_tree (&copy, [](tree *tp, int *walk_subtrees, void *d_) -> tree
+    {
+      data_t *dd = (data_t *) d_;
+      if (TYPE_P (*tp))
+	{
+	  *walk_subtrees = 0;
+	  return NULL_TREE;
+	}
+      if (TREE_CODE (*tp) != PARM_DECL)
+	return NULL_TREE;
+      unsigned argno;
+      tree arg = NULL_TREE;
+      if (!TYPE_REF_P (TREE_TYPE (*tp))
+	  && find_param_position (dd->callee, *tp, &argno)
+	  && argno < gimple_call_num_args (dd->call))
+	arg = gimple_call_arg (dd->call, argno);
+      if (!arg || TREE_CODE (arg) != INTEGER_CST)
+	{
+	  dd->ok = false;
+	  return *tp;
+	}
+      *tp = fold_convert (TREE_TYPE (*tp), arg);
+      *walk_subtrees = 0;
+      return NULL_TREE;
+    }, &d, NULL);
+  if (!d.ok)
+    return NULL_TREE;
+  tree folded = tree_strip_any_location_wrapper (cp_fully_fold (copy));
+  return TREE_CODE (folded) == INTEGER_CST ? folded : NULL_TREE;
+}
+
+/* CONJUNCT, a precondition conjunct of CALLEE no rule checks, at CALL:
+   true or false only if CALL's arguments make it a constant, otherwise
+   unverified.  */
+
+static void
+report_uncovered (tree conjunct, gcall *call, tree callee, bool strict)
+{
+  location_t loc = gimple_location (call);
+  if (tree folded = fold_conjunct_at_call (conjunct, call, callee))
+    {
+      if (integer_zerop (folded))
+	error_at (loc, "the arguments provably violate the precondition %qE "
+		  "of %qD", conjunct, callee);
+      return;
+    }
+  if (strict)
+    report_unproven (call, true, "cannot prove the precondition %qE of %qD",
+		     conjunct, callee);
+  else
+    report_unproven (call, false, "cannot verify the precondition %qE of "
+		     "%qD", conjunct, callee);
+}
+
 /* CALL's callee's preconditions this plugin checks (call_obligation_p),
    against the facts: each is_object_address (param), 'param != 0',
    'param OP other-param' and 'param OP constant' conjunct, with CALL's
@@ -2506,11 +2598,24 @@ check_call (gcall *call, hash_set<tree> &established,
 	  else
 	    continue;
 
+	  tree written = arg;
 	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg)
 		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
 	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
+	  /* Of another operand ('&p->m', 'n + 1'): no rule, unverified.  */
 	  if (TREE_CODE (arg) != PARM_DECL)
-	    continue;
+	    {
+	      if (is_oa && !reported_oa.add (written))
+		report_unproven (call, strict, strict
+				 ? "cannot prove %<is_object_address%> for "
+				   "%qE, as required by the precondition of %qD"
+				 : "cannot verify %<is_object_address%> for "
+				   "%qE, as required by the precondition of %qD",
+				 written, callee);
+	      else if (!is_oa)
+		report_uncovered (*conjuncts[i], call, callee, strict);
+	      continue;
+	    }
 	  /* A conveyor callee's reference parameters and 'this' are the
 	     engine's (reference safety).  */
 	  if ((TYPE_REF_P (TREE_TYPE (arg)) || is_this_parameter (arg))
@@ -2589,6 +2694,10 @@ check_call (gcall *call, hash_set<tree> &established,
 			     "as required by the precondition of %qD",
 			     substituted, callee);
 	}
+
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	if (!conjunct_covered_p (*conjuncts[i]))
+	  report_uncovered (*conjuncts[i], call, callee, strict);
 
       /* Relational obligations against another of the callee's own
 	 parameters ('pre (x < q)'): both substituted positionally.  */
