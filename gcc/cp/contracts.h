@@ -487,6 +487,11 @@ extern const char *oa_unprovable_reason_text (oa_unprovable_reason reason);
    parameters default to NULL, so every existing caller wanting only
    call-site observation is unaffected.
 
+   The walk isn't done here: called from PLUGIN_PRE_GENERICIZE, this
+   registers the callbacks, which the compiler's own walk of FNDECL, later
+   in finish_function, calls -- one walk however many plugins register,
+   on the body that walk sees.
+
    POST_CALLBACK, if non-NULL, fires once per postcondition (POSTCONDITION_
    STMT) of FNDECL, with the environment at the function's exit -- merged
    across every return, the postcondition's named result bound from each

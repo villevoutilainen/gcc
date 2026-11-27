@@ -41943,6 +41943,99 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
 /* Top-level entry point, called from finish_function alongside
    check_conveyor_function_body, at the same pre-genericize timing.  */
 
+/* The plugins' walks of a function (oa_walk_function_calls): each
+   plugin's callbacks, registered from PLUGIN_PRE_GENERICIZE and called
+   from the one built-in walk of the function, in finish_function
+   (resolve_object_address_in_function) -- so that several plugins each
+   see the function (the walk is once per function), and see the body
+   the built-in walk sees.  */
+
+struct oa_plugin_walk
+{
+  tree fndecl;
+  void (*callback) (tree, tree, oa_analysis_env *, void *);
+  void *data;
+  void (*assert_callback) (tree, oa_analysis_env *, void *);
+  void *assert_data;
+  void (*post_callback) (tree, oa_analysis_env *, void *);
+  void *post_data;
+};
+static vec<oa_plugin_walk> oa_plugin_walks;
+
+/* The function whose plugin walks the callbacks below dispatch to.  */
+static tree oa_plugin_walk_fn;
+
+static void
+oa_plugin_call_mux (tree call, tree callee, oa_env *env, void *)
+{
+  for (const oa_plugin_walk &w : oa_plugin_walks)
+    if (w.fndecl == oa_plugin_walk_fn && w.callback)
+      w.callback (call, callee, reinterpret_cast<oa_analysis_env *> (env),
+		  w.data);
+}
+
+static void
+oa_plugin_assert_mux (tree stmt, oa_env *env, void *)
+{
+  for (const oa_plugin_walk &w : oa_plugin_walks)
+    if (w.fndecl == oa_plugin_walk_fn && w.assert_callback)
+      w.assert_callback (stmt, reinterpret_cast<oa_analysis_env *> (env),
+			 w.assert_data);
+}
+
+static void
+oa_plugin_post_mux (tree contract, oa_env *env, void *)
+{
+  for (const oa_plugin_walk &w : oa_plugin_walks)
+    if (w.fndecl == oa_plugin_walk_fn && w.post_callback)
+      w.post_callback (contract, reinterpret_cast<oa_analysis_env *> (env),
+		       w.post_data);
+}
+
+/* While one is live, the built-in walk of FNDECL also calls the plugins
+   registered for it; afterwards their registrations are dropped.  */
+
+class oa_plugin_walk_scope
+{
+  tree m_saved_fn;
+  void (*m_saved_call) (tree, tree, oa_env *, void *);
+  void (*m_saved_assert) (tree, oa_env *, void *);
+  void (*m_saved_post) (tree, oa_env *, void *);
+  tree m_fn;
+public:
+  oa_plugin_walk_scope (tree fndecl)
+    : m_saved_fn (oa_plugin_walk_fn),
+      m_saved_call (oa_call_site_callback),
+      m_saved_assert (oa_assert_site_callback),
+      m_saved_post (oa_post_site_callback), m_fn (fndecl)
+  {
+    bool call = false, assert_ = false, post = false;
+    for (const oa_plugin_walk &w : oa_plugin_walks)
+      if (w.fndecl == fndecl)
+	{
+	  call |= w.callback != NULL;
+	  assert_ |= w.assert_callback != NULL;
+	  post |= w.post_callback != NULL;
+	}
+    oa_plugin_walk_fn = fndecl;
+    oa_call_site_callback = call ? oa_plugin_call_mux : NULL;
+    oa_assert_site_callback = assert_ ? oa_plugin_assert_mux : NULL;
+    oa_post_site_callback = post ? oa_plugin_post_mux : NULL;
+  }
+  ~oa_plugin_walk_scope ()
+  {
+    oa_plugin_walk_fn = m_saved_fn;
+    oa_call_site_callback = m_saved_call;
+    oa_assert_site_callback = m_saved_assert;
+    oa_post_site_callback = m_saved_post;
+    unsigned ix;
+    oa_plugin_walk *w;
+    FOR_EACH_VEC_ELT_REVERSE (oa_plugin_walks, ix, w)
+      if (w->fndecl == m_fn)
+	oa_plugin_walks.ordered_remove (ix);
+  }
+};
+
 /* Put back the conditions as written (oa_condition_as_written_map) of the
    contract statements in FNDECL's body and of its own contracts, for its
    walk to start over.  */
@@ -41974,6 +42067,9 @@ void
 resolve_object_address_in_function (tree fndecl)
 {
   contract_note_returned_reference_sources (fndecl);
+  /* The plugins registered for FNDECL (oa_walk_function_calls) are
+     called from this walk.  */
+  oa_plugin_walk_scope plugins (fndecl);
 
   /* A 'conveyor(auto)' specialization being deduced is walked as the
      conveyor function it is presumed to be -- trusting its own reference
@@ -42345,44 +42441,9 @@ oa_walk_function_calls (tree fndecl,
 			 void (*post_callback) (tree, oa_analysis_env *, void *),
 			 void *post_data)
 {
-  void (*saved_callback) (tree, tree, oa_env *, void *) = oa_call_site_callback;
-  void *saved_data = oa_call_site_callback_data;
-  void (*saved_assert_callback) (tree, oa_env *, void *) = oa_assert_site_callback;
-  void *saved_assert_data = oa_assert_site_callback_data;
-  void (*saved_post_callback) (tree, oa_env *, void *) = oa_post_site_callback;
-  void *saved_post_data = oa_post_site_callback_data;
-
-  oa_call_site_callback
-    = reinterpret_cast<void (*) (tree, tree, oa_env *, void *)> (callback);
-  oa_call_site_callback_data = data;
-  oa_assert_site_callback
-    = reinterpret_cast<void (*) (tree, oa_env *, void *)> (assert_callback);
-  oa_assert_site_callback_data = assert_data;
-  oa_post_site_callback
-    = reinterpret_cast<void (*) (tree, oa_env *, void *)> (post_callback);
-  oa_post_site_callback_data = post_data;
-
-  /* Walk the body the built-in walk (resolve_object_address_in_function,
-     from finish_function) walks.  A plugin calls this from
-     PLUGIN_PRE_GENERICIZE, before finish_function folds non-ODR uses of
-     constants (cp_fold_function_non_odr_use) -- 'H &r = g; ... &r'
-     becomes '&g' -- and the walk, once per function, is then this one:
-     without the fold, e.g. a trust through such a reference ('contract_
-     assert<never_proven_...> (std::is_object_address (&r))') didn't
-     make 'g' an object again.  The fold is idempotent; finish_function's
-     own does nothing more.  */
-  if (!processing_template_decl)
-    cp_fold_function_non_odr_use (fndecl);
-  contract_note_returned_reference_sources (fndecl);
-
-  oa_resolve_object_address_in_function_1 (fndecl);
-
-  oa_call_site_callback = saved_callback;
-  oa_call_site_callback_data = saved_data;
-  oa_assert_site_callback = saved_assert_callback;
-  oa_assert_site_callback_data = saved_assert_data;
-  oa_post_site_callback = saved_post_callback;
-  oa_post_site_callback_data = saved_post_data;
+  oa_plugin_walk w = { fndecl, callback, data, assert_callback, assert_data,
+		       post_callback, post_data };
+  oa_plugin_walks.safe_push (w);
 }
 
 /* Thin wrapper over oa_collect_conjuncts, for a plugin (see
