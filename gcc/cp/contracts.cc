@@ -34563,7 +34563,11 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
 	 before the plugin ever got to read it -- exactly the ordering
 	 the built-in's own consult calls above already avoid by running
 	 first.  */
-      if (oa_call_site_callback)
+      /* Only on the walk that diagnoses: not on a speculative loop
+	 re-walk, nor a condition re-scanned for its facts -- the built-in
+	 consults above are silent there too -- or a plugin reports each
+	 call of a loop body once per walk of it.  */
+      if (oa_call_site_callback && oa_diagnostics_active)
 	{
 	  tree callee = cp_get_callee_fndecl_nofold (t);
 	  if (callee && TREE_CODE (callee) == FUNCTION_DECL)
@@ -40323,7 +40327,8 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
       }
 
     case ASSERTION_STMT:
-      if (oa_assert_site_callback)
+      /* See the call-site callback: once, on the diagnosing walk.  */
+      if (oa_assert_site_callback && oa_diagnostics_active)
 	oa_assert_site_callback (t, &env, oa_assert_site_callback_data);
       oa_handle_assertion_stmt (t, env);
       return;
