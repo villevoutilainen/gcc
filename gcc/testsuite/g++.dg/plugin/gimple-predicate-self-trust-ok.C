@@ -18,7 +18,7 @@
 // implied it), or this test would be exercising an unsound call rather
 // than the self-trust case it's actually about.
 // { dg-do run }
-// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects" }
+// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple -fcontract-analysis-proofs=plugin -fcontract-conveyor-proofs" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>

@@ -6,7 +6,7 @@
 // nonzero/general ranges), so this compiles and runs successfully with
 // only this prototype's own warning. See ~/gimple-contract-analysis.md.
 // { dg-do run }
-// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects" }
+// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple -fcontract-analysis-proofs=plugin -fcontract-conveyor-proofs" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
@@ -33,7 +33,7 @@ struct thing {
 void relay (thing *p)
   pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
-  p->consume (); // { dg-warning "gimple-oa: cannot verify" }
+  p->consume (); // { dg-warning "cannot verify" }
 }
 
 int main () { thing t; t.count = 50; relay (&t); return 0; }

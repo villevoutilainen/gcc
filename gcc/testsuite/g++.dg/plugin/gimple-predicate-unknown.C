@@ -19,7 +19,7 @@
 // explicitly, or this test would be exercising an unsound call rather
 // than the OA_UNKNOWN case it's actually about.
 // { dg-do run }
-// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects" }
+// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple -fcontract-analysis-proofs=plugin -fcontract-conveyor-proofs" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
@@ -42,7 +42,7 @@ struct io_facility {
 
 void relay (io_facility *p) pre<conveyor_ctrl_v>(std::is_object_address (p))
 {
-  p->read (); // { dg-warning "gimple-oa: cannot verify" }
+  p->read (); // { dg-warning "cannot verify" }
 }
 
 int main () { io_facility f; relay (&f); return 0; }

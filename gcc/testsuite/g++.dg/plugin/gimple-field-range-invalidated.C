@@ -8,7 +8,7 @@
 // range_invalidate_all's whole-object granularity). See
 // ~/gimple-contract-analysis.md.
 // { dg-do run }
-// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects" }
+// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple -fcontract-analysis-proofs=plugin -fcontract-conveyor-proofs" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
@@ -43,7 +43,7 @@ void invalidated_caller ()
   thing t;
   t.produce ();
   unrelated (&t);
-  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.consume (); // { dg-warning "gimple-oa: cannot verify" }
+  contract_assert<std::contracts::never_proven_conveyor_v> (std::is_object_address (__builtin_addressof (t))); t.consume (); // { dg-warning "cannot verify" }
 }
 
 int main () { invalidated_caller (); return 0; }

@@ -10,7 +10,7 @@
 // prototype's own warning. The sound answer is "cannot verify," not
 // silent acceptance.
 // { dg-do run }
-// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects" }
+// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple -fcontract-analysis-proofs=plugin -fcontract-conveyor-proofs" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
@@ -30,7 +30,7 @@ int consumer (int n) pre<conveyor_ctrl_v>(n != 0) { return 10 / n; }
 
 int relay (int m)
 {
-  return consumer (m); // { dg-warning "gimple-oa: cannot verify" }
+  return consumer (m); // { dg-warning "cannot verify" }
 }
 
 int main () { return relay (5) - 2; }

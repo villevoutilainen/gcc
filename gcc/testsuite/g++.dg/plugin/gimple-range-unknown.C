@@ -8,7 +8,7 @@
 // so this compiles and runs successfully with only this prototype's
 // own warning. See ~/gimple-contract-analysis.md.
 // { dg-do run }
-// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects" }
+// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple -fcontract-analysis-proofs=plugin -fcontract-conveyor-proofs" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
@@ -28,7 +28,7 @@ void consumer (int x) pre<conveyor_ctrl_v>(x >= 20 && x < 100) { (void) x; }
 
 void relay (int m)
 {
-  consumer (m); // { dg-warning "gimple-oa: cannot verify" }
+  consumer (m); // { dg-warning "cannot verify" }
 }
 
 int main () { relay (50); return 0; }

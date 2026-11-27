@@ -6,7 +6,7 @@
 // (other), so this must report "cannot verify". See
 // ~/gimple-contract-analysis.md.
 // { dg-do run }
-// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects" }
+// { dg-options "-std=c++26 -fcontracts -fcontract-control-objects -fcontract-analysis-engine=gimple -fcontract-analysis-proofs=plugin -fcontract-conveyor-proofs" }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
 
 #include <contracts>
@@ -25,7 +25,7 @@ inline constexpr conveyor_ctrl conveyor_ctrl_v{};
 int f (int x, int const q) pre<conveyor_ctrl_v> (x < q) { return x; }
 int g (int x, int q, int const other) pre<conveyor_ctrl_v> (x < q)
 {
-  return f (x, other); // { dg-warning "gimple-oa: cannot verify" }
+  return f (x, other); // { dg-warning "cannot verify" }
 }
 
 int main () { return g (2, 5, 10) - 2; }

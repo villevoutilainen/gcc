@@ -1,86 +1,33 @@
-/* gimple-object-address: an experimental prototype demonstrating the
-   "Option A, front-end-assisted" design from ~/gimple-contract-
-   analysis.md -- doing D4324's mandatory item 6/7/8 checks (is_object_
-   address, nonzero-divisor; more fact shapes to follow, see the
-   analysis's own Section 8) as a GIMPLE pass, run right after SSA is
-   built (before any optimization pass), instead of the existing
-   AST-walk (gcc/cp/contracts.cc's own oa_* machinery, hooked at
-   PLUGIN_PRE_GENERICIZE).
+/* gimple-object-address: the GIMPLE engine's proof checks, as a plugin.
 
-   This is an ADDITIONAL alternative, not a replacement: the existing
-   mandatory checks (contracts.cc) keep running exactly as before, so a
-   test compiled with this plugin will typically see BOTH the existing
-   check's own diagnostic AND this pass's own (distinctly worded,
-   "gimple-oa:"-prefixed) diagnostic for the same construct -- that
-   overlap is expected and is not a bug in either engine.
+   An alternative to the built-in GIMPLE engine's (contracts-gimple.cc)
+   proof checks, with facts and verdicts of its own.  The engine keeps what
+   isn't a proof check: the lowering, the eager per-function scheduling,
+   the mandatory checks (the conveyor rules, is_object_address in conveyor
+   code, a conveyor callee's mandatory preconditions) and the contracts
+   whose control object forces analysis (analyzed_X, proven_X).  The
+   plugin registers a function checker with cg_register_function_check;
+   the engine calls it for every function it checks, with the function in
+   SSA form and the symbolic contracts' markers in place.
 
-   Design (see ~/gimple-contract-analysis.md, section 4, "the wrapper-
-   parameter problem, and its resolution"): this pass NEVER looks at a
-   contract's own outlined GIMPLE machinery (F.pre/F.post/the
-   predicate-core function/the thunk) -- it reads a function's
-   *declared* precondition/postcondition text directly off its own
-   FUNCTION_DECL (get_fn_contract_specifiers/CONTRACT_CONDITION,
-   exactly the same front-end API the existing AST-walk itself uses,
-   and the exported is_object_address_call_p/oa_nonzero_conjunct_p
-   recognizers, unchanged), and does the "is this argument provably
-   true, right here" part with ordinary GIMPLE/SSA reasoning:
-   SSA_NAME_DEF_STMT plus a recursive PHI-argument walk (a PHI's own
-   "reaches from every incoming edge" is exactly the merge rule
-   oa_env::merge_with hand-rolls at the AST level, but reified as a
-   real node here instead of a hand-maintained env). Because contract
-   *text* is read declaratively, this sidesteps both the wrapper-
-   parameter correspondence problem (Section 4.1 of the analysis) and
-   the fact that a `symbolic` contract's own condition may generate no
-   GIMPLE at all (Section 2.2) -- neither matters, since this pass
-   never needs the contract's own generated code, only its declared
-   text plus the ordinary code around it.
+   It runs under -fcontract-analysis-proofs=plugin, which leaves the
+   engines no proof checks, and checks the flavors the proof flags ask
+   for (contract_analysis_plugin_proofs_p), and every contract whose
+   control object forces analysis.  Diagnostics are the engine's own,
+   word for word.
 
-   Every fact shape below (is_object_address, nonzero -- more to
-   follow) shares this exact same three-part structure, mirroring the
-   "classic" m_map/m_nz_map maps' own self-trust/consult/item-6 trio in
-   contracts.cc itself:
-   1. Self-trust: a function's own declared precondition seeds a fact
-      onto ssa_default_def(fun, parm) at function entry.
-   2. Call-site consult: a direct callee's own declared precondition is
-      checked against the caller's actual gimple_call_arg, substituted
-      positionally (find_param_position, the GIMPLE analogue of
-      oa_substitute_call_arg).
-   3. Item 6: a direct callee's own declared postcondition
-      unconditionally guaranteeing the fact for its own return value is
-      recognized wherever a GIMPLE_CALL's own result feeds into a later
-      obligation.
-   Provability itself is a single recursive SSA walk per fact shape:
-   SSA_NAME_DEF_STMT dispatch on GIMPLE_PHI (AND over every incoming
-   value, cycle-guarded via an IN_PROGRESS hash_set for loop-carried
-   PHIs -- conservatively false, the same "must be provable, else
-   unprovable" discipline used throughout), GIMPLE_ASSIGN (a trivial
-   shape, or propagate through a copy/conversion), and GIMPLE_CALL
-   (item 6).
+   Only the contract-text shape recognizers (is_object_address_call_p,
+   oa_nonzero_conjunct_p, oa_match_*), the contract-property queries
+   (which flavors a contract is active in, whether it is strict or
+   forced) and the lowering readers (cg_contract_check_call_public) are
+   shared with the engine.
 
-   A sixth shape, added as a follow-up once the built-in engines
-   (contracts.cc/contracts-gimple.cc) gained it: a *relational* fact
-   between two of the same function's own parameters ("x < q", q not a
-   literal), via the shared oa_match_comparison_against_param/oa_match_
-   result_relation -- rel_fact_lite/get_relational/call_postcondition_
-   relation_p mirror contracts-gimple.cc's own cg_rel_fact/cg_get_
-   relational/cg_call_postcondition_relation_p exactly, just without a
-   conveyor/symbolic provenance tag (this prototype is flavor-agnostic
-   throughout, unlike the built-in engines).
-
-   Deliberately narrow scope, kept out on purpose (see the analysis's
-   own "phased plan," section 6, and its own "Section 8"/"Section 9"
-   validation-results writeups for how this evolved):
-   - ASSERTION_STMT (contract_assert, which has no single fixed
-     get_fn_contract_specifiers-style declarative home the way pre/post
-     do), and a postcondition establishing a fact about a *persistent
-     parameter* (as opposed to the return value) for a later, separate
-     call site, are both still out of scope for every fact shape below.
-   - Only DIRECT calls (a resolved GIMPLE_CALL callee FUNCTION_DECL)
-     are consulted; an indirect/virtual call gets no consult at all,
-     matching the same limitation the existing AST-walk already has.
-   - IILE recursion is explicitly, permanently out of scope for this
-     prototype (not merely deferred) -- an immediately-invoked closure
-     always reports "cannot verify" here, by design.  */
+   Facts are kept per SSA name, from three sources: self-trust (the
+   function's own declared precondition, on ssa_default_def of the
+   parameter), item 6 (a callee's declared postcondition about its
+   result), and the code itself (PHI merges, copies, conversions, the
+   ranger).  Facts about persistent memory (named predicates, field
+   ranges) need flow-sensitive state and get a dominator walk.  */
 
 #include "gcc-plugin.h"
 #include "config.h"
@@ -106,6 +53,88 @@
 #include "hash-traits.h"
 
 int plugin_is_GPL_compatible;
+
+/* Whether the function being checked is conveyor code: a conveyor
+   function, or the core of a predicate (its condition, outlined).  */
+
+static bool
+conveyor_code_p (tree fndecl)
+{
+  return (DECL_DECLARED_CONVEYOR_P (fndecl)
+	  || CONTRACT_HELPER (fndecl) == ldf_contract_predicate_helper);
+}
+
+/* Whether CONTRACT, a precondition of CALLEE, is this plugin's to check
+   at a call in the function being checked -- the engine's gating, with
+   the proof checks the plugin's.  Not when it is active in no flavor the
+   proof flags ask for, unless its control object forces analysis; nor
+   when it is a mandatory obligation (a conveyor callee's precondition in
+   conveyor code whose failed check doesn't stop execution: the engine's).
+   *AS_CONVEYOR: checked in the conveyor flavor, the stricter one, when
+   active in both; its is_object_address conjuncts are then mandatory, the
+   engine's.  *STRICT: an unproven conjunct is an error.  */
+
+static bool
+call_obligation_p (tree contract, tree callee, bool *as_conveyor,
+		   bool *strict)
+{
+  if (!PRECONDITION_P (contract)
+      || !contract_precondition_caller_obligation_p (contract, callee))
+    return false;
+  bool conveyor = oa_contract_conveyor_active_public (contract, callee);
+  bool symbolic = oa_contract_symbolic_active_public (contract, callee);
+  bool mandatory_ctx = (conveyor && DECL_DECLARED_CONVEYOR_P (callee)
+			&& conveyor_code_p (current_function_decl));
+  if (mandatory_ctx && !contract_failure_terminates_p (contract, callee))
+    return false;
+  if (!(conveyor
+	&& (contract_analysis_plugin_proofs_p (true)
+	    || oa_contract_conveyor_analysis_forced_public (contract, callee)))
+      && !(symbolic
+	   && (contract_analysis_plugin_proofs_p (false)
+	       || oa_contract_symbolic_analysis_forced_public (contract,
+							       callee))))
+    return false;
+  *as_conveyor = conveyor;
+  *strict = ((conveyor && oa_contract_conveyor_strict_public (contract, callee))
+	     || (symbolic
+		 && oa_contract_symbolic_strict_public (contract, callee)));
+  return true;
+}
+
+/* Report an unproven obligation of CALL's callee: an error if STRICT,
+   else a warning.  */
+
+static void ATTRIBUTE_GCC_DIAG (3,4)
+report_unproven (gcall *call, bool strict, const char *gmsgid, ...)
+{
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, gmsgid);
+  emit_diagnostic_valist (strict ? diagnostics::kind::error
+				 : diagnostics::kind::warning,
+			  gimple_location (call), 0, gmsgid, &ap);
+  va_end (ap);
+}
+
+/* While alive, a diagnostic issued about CALL gets a note where its
+   callee is declared, as the engine's do.  */
+
+class callee_declared_note
+{
+  tree m_callee;
+  int m_count;
+public:
+  explicit callee_declared_note (gcall *call)
+    : m_callee (gimple_call_fndecl (call)),
+      m_count (errorcount + warningcount)
+  { }
+  ~callee_declared_note ()
+  {
+    if (m_callee && errorcount + warningcount > m_count)
+      inform (DECL_SOURCE_LOCATION (m_callee), "declared here");
+  }
+};
 
 /* Positional correspondence between CALLEE's own PARM_DECLs and CALL's
    actual argument expressions -- the GIMPLE-level analogue of
@@ -300,6 +329,202 @@ call_postcondition_range_p (tree callee, oa_range_lite *out)
   return false;
 }
 
+/* Which bounds of the ranger's range of integer VAL to trust.  The
+   ranger takes signed overflow, being undefined, not to happen, and so
+   clamps the range of an operation that can overflow at the type's bound
+   the overflow would cross: that bound is only as good as the assumption
+   being proven.  A bound of an arithmetic result is trusted when interval
+   arithmetic on its operands' trusted bounds keeps it inside the type; an
+   operand's untrusted or unknown bound is unbounded.  A copy or a
+   conversion keeps its operand's trust; any other operation on an operand
+   with an untrusted bound is untrusted.  A cycle through loop PHIs is
+   assumed trusted, each operation in it still checked.  */
+
+struct bounds_trust { bool lo, hi; };
+
+static bounds_trust
+trusted_bounds (tree val, gimple_ranger *ranger, hash_set<tree> &visiting,
+		unsigned depth = 0)
+{
+  const bounds_trust all = { true, true }, none = { false, false };
+  if (TREE_CODE (val) != SSA_NAME || !ranger)
+    return all;
+  if (depth > 12)
+    return none;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (!def || gimple_nop_p (def) || is_gimple_call (def))
+    return all;
+  if (visiting.add (val))
+    return all;
+
+  bounds_trust t = all;
+  if (gphi *phi = dyn_cast <gphi *> (def))
+    for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+      {
+	bounds_trust a = trusted_bounds (gimple_phi_arg_def (phi, i), ranger,
+					 visiting, depth + 1);
+	t.lo &= a.lo;
+	t.hi &= a.hi;
+      }
+  else if (is_gimple_assign (def))
+    {
+      tree_code code = gimple_assign_rhs_code (def);
+      tree type = TREE_TYPE (val);
+      bool undefined_overflow = (INTEGRAL_TYPE_P (type)
+				 && TYPE_OVERFLOW_UNDEFINED (type));
+      bool arith = (undefined_overflow
+		    && (code == PLUS_EXPR || code == MINUS_EXPR
+			|| code == MULT_EXPR || code == NEGATE_EXPR
+			|| code == ABS_EXPR || code == LSHIFT_EXPR));
+      if (!arith)
+	{
+	  bool copy = code == SSA_NAME || CONVERT_EXPR_CODE_P (code);
+	  for (unsigned i = 1; i < gimple_num_ops (def); ++i)
+	    {
+	      bounds_trust a = trusted_bounds (gimple_op (def, i), ranger,
+					       visiting, depth + 1);
+	      if (copy)
+		{
+		  t.lo &= a.lo;
+		  t.hi &= a.hi;
+		}
+	      else if (!a.lo || !a.hi)
+		t = none;
+	    }
+	  /* The minimum divided by -1 overflows.  */
+	  if (undefined_overflow
+	      && (code == TRUNC_DIV_EXPR || code == TRUNC_MOD_EXPR))
+	    {
+	      tree op0 = gimple_assign_rhs1 (def);
+	      tree op1 = gimple_assign_rhs2 (def);
+	      if (TREE_CODE (op1) != INTEGER_CST || integer_minus_onep (op1))
+		{
+		  int_range_max r;
+		  if (TREE_CODE (op0) != SSA_NAME
+		      || !ranger->range_of_expr (r, op0, def)
+		      || r.undefined_p () || r.varying_p ()
+		      || (wi::to_widest (TYPE_MIN_VALUE (type))
+			  >= widest_int::from (r.lower_bound (), SIGNED)))
+		    t = none;
+		}
+	    }
+	}
+      else
+	{
+	  /* OP's bounds at DEF: unbounded where unknown or untrusted.  */
+	  struct bnd { bool has_lo, has_hi; widest_int lo, hi; };
+	  auto bounds_of = [&] (tree op) -> bnd
+	    {
+	      bnd b = { false, false, 0, 0 };
+	      if (TREE_CODE (op) == INTEGER_CST)
+		{
+		  b.has_lo = b.has_hi = true;
+		  b.lo = b.hi = wi::to_widest (op);
+		  return b;
+		}
+	      int_range_max r;
+	      if (TREE_CODE (op) != SSA_NAME
+		  || !INTEGRAL_TYPE_P (TREE_TYPE (op))
+		  || !ranger->range_of_expr (r, op, def)
+		  || r.undefined_p () || r.varying_p ())
+		return b;
+	      bounds_trust a = trusted_bounds (op, ranger, visiting, depth + 1);
+	      signop sgn = TYPE_SIGN (TREE_TYPE (op));
+	      b.has_lo = a.lo;
+	      b.has_hi = a.hi;
+	      b.lo = widest_int::from (r.lower_bound (), sgn);
+	      b.hi = widest_int::from (r.upper_bound (), sgn);
+	      return b;
+	    };
+	  bool unary = code == NEGATE_EXPR || code == ABS_EXPR;
+	  bnd a = bounds_of (gimple_assign_rhs1 (def));
+	  bnd b = unary ? bnd { true, true, 0, 0 }
+			: bounds_of (gimple_assign_rhs2 (def));
+	  bool has_lo = false, has_hi = false;
+	  widest_int lo = 0, hi = 0;
+	  switch (code)
+	    {
+	    case PLUS_EXPR:
+	      has_lo = a.has_lo && b.has_lo, lo = a.lo + b.lo;
+	      has_hi = a.has_hi && b.has_hi, hi = a.hi + b.hi;
+	      break;
+	    case MINUS_EXPR:
+	      has_lo = a.has_lo && b.has_hi, lo = a.lo - b.hi;
+	      has_hi = a.has_hi && b.has_lo, hi = a.hi - b.lo;
+	      break;
+	    case NEGATE_EXPR:
+	      has_lo = a.has_hi, lo = -a.hi;
+	      has_hi = a.has_lo, hi = -a.lo;
+	      break;
+	    case ABS_EXPR:
+	      has_lo = a.has_lo, lo = 0;
+	      has_hi = a.has_lo && a.has_hi, hi = wi::smax (-a.lo, a.hi);
+	      break;
+	    case MULT_EXPR:
+	      if (a.has_lo && a.has_hi && b.has_lo && b.has_hi)
+		{
+		  widest_int c[4] = { a.lo * b.lo, a.lo * b.hi, a.hi * b.lo,
+				      a.hi * b.hi };
+		  lo = hi = c[0];
+		  for (auto &v : c)
+		    lo = wi::smin (lo, v), hi = wi::smax (hi, v);
+		  has_lo = has_hi = true;
+		}
+	      else if (a.has_lo && b.has_lo && !wi::neg_p (a.lo)
+		       && !wi::neg_p (b.lo))
+		has_lo = true, lo = a.lo * b.lo;
+	      else if (a.has_hi && b.has_hi && !wi::neg_p (-a.hi)
+		       && !wi::neg_p (-b.hi))
+		has_lo = true, lo = a.hi * b.hi;
+	      else if (a.has_lo && b.has_hi && !wi::neg_p (a.lo)
+		       && !wi::neg_p (-b.hi))
+		has_hi = true, hi = a.lo * b.hi;
+	      else if (a.has_hi && b.has_lo && !wi::neg_p (-a.hi)
+		       && !wi::neg_p (b.lo))
+		has_hi = true, hi = a.hi * b.lo;
+	      break;
+	    case LSHIFT_EXPR:
+	      if (b.has_lo && b.has_hi && !wi::neg_p (b.lo)
+		  && b.hi < TYPE_PRECISION (type) && a.has_lo && a.has_hi)
+		{
+		  widest_int f = wi::lshift (widest_int (1), b.hi.to_uhwi ());
+		  lo = wi::smin (wi::smin (a.lo * f, a.hi * f), a.lo);
+		  hi = wi::smax (wi::smax (a.lo * f, a.hi * f), a.hi);
+		  has_lo = has_hi = true;
+		}
+	      break;
+	    default:
+	      break;
+	    }
+	  widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
+	  widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
+	  t.lo = has_lo && lo >= tmin && lo <= tmax;
+	  t.hi = has_hi && hi >= tmin && hi <= tmax;
+	}
+    }
+  visiting.remove (val);
+  return t;
+}
+
+/* VAL's range at AT as the ranger computes it from the code, including
+   the conditions guarding AT, in VR; false unless both its bounds are to
+   be trusted (trusted_bounds).  */
+
+static bool
+trusted_range_at (tree val, gimple *at, gimple_ranger *ranger,
+		  int_range_max &vr)
+{
+  if (!ranger || (TREE_CODE (val) != SSA_NAME
+		  && TREE_CODE (val) != INTEGER_CST)
+      || !INTEGRAL_TYPE_P (TREE_TYPE (val))
+      || !ranger->range_of_expr (vr, val, at)
+      || vr.undefined_p () || vr.varying_p ())
+    return false;
+  hash_set<tree> visiting;
+  bounds_trust t = trusted_bounds (val, ranger, visiting);
+  return t.lo && t.hi;
+}
+
 /* Resolve VAL's own range, trying, in order: a literal constant; a
    self-trusted/item-6 fact in ESTABLISHED_RANGE (keyed exactly like
    ESTABLISHED/ESTABLISHED_NZ elsewhere in this file); item 6 via a
@@ -315,7 +540,7 @@ call_postcondition_range_p (tree callee, oa_range_lite *out)
 
 static bool
 established_range_of (tree val, hash_map<tree, oa_range_lite> &established_range,
-		       gimple_ranger *ranger, oa_range_lite *out)
+		       gimple_ranger *ranger, gimple *at, oa_range_lite *out)
 {
   if (val == NULL_TREE)
     return false;
@@ -357,25 +582,18 @@ established_range_of (tree val, hash_map<tree, oa_range_lite> &established_range
       enum tree_code code = gimple_assign_rhs_code (def);
       if ((CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	  && established_range_of (gimple_assign_rhs1 (def), established_range,
-				    ranger, out))
+				    ranger, at, out))
 	return true;
     }
 
-  if (ranger)
+  int_range_max vr;
+  if (trusted_range_at (val, at, ranger, vr))
     {
-      int_range_max vr;
-      if (ranger->range_of_expr (vr, val) && !vr.undefined_p ()
-	  && !vr.varying_p ())
-	{
-	  unsigned n = vr.num_pairs ();
-	  if (n > 0)
-	    {
-	      out->has_lo = out->has_hi = true;
-	      out->lo = widest_int::from (vr.lower_bound (0), SIGNED);
-	      out->hi = widest_int::from (vr.upper_bound (n - 1), SIGNED);
-	      return true;
-	    }
-	}
+      signop sgn = TYPE_SIGN (TREE_TYPE (val));
+      out->has_lo = out->has_hi = true;
+      out->lo = widest_int::from (vr.lower_bound (), sgn);
+      out->hi = widest_int::from (vr.upper_bound (), sgn);
+      return true;
     }
 
   return false;
@@ -562,9 +780,11 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
   if (!callee)
     return;
 
+  callee_declared_note note (call);
   for (tree contract : fn_contracts (callee))
     {
-      if (!PRECONDITION_P (contract))
+      bool as_conveyor, strict;
+      if (!call_obligation_p (contract, callee, &as_conveyor, &strict))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -590,13 +810,28 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	  bool required = !negated;
 	  oa_predicate_fact_lite *fact
 	    = identity ? state.pred.get (identity) : NULL;
-	  if (fact && fact->pred_fn == pred_fn && fact->polarity == required)
-	    continue; /* Proven true: silently discharged.  */
+	  if (fact && fact->pred_fn == pred_fn)
+	    {
+	      if (fact->polarity == required)
+		continue;
+	      /* Established at the opposite polarity: a contradiction.  */
+	      error_at (gimple_location (call), "argument %qE provably "
+			"violates the precondition of %qD: %qD (%qE) is "
+			"established %s, but the precondition requires it to "
+			"be %s", substituted, callee, pred_fn, substituted,
+			fact->polarity ? "true" : "false",
+			required ? "true" : "false");
+	      continue;
+	    }
 
-	  warning_at (gimple_location (call), 0,
-		      "gimple-oa: cannot verify that %qD (%qE) holds, as "
-		      "required by the precondition of %qD",
-		      pred_fn, substituted, callee);
+	  if (strict)
+	    report_unproven (call, true, "cannot prove that %qD (%qE) holds, "
+			     "as required by the precondition of %qD", pred_fn,
+			     substituted, callee);
+	  else
+	    report_unproven (call, false, "cannot verify that %qD (%qE) holds, "
+			     "as required by the precondition of %qD", pred_fn,
+			     substituted, callee);
 	}
 
       auto_vec<field_group_lite> field_groups;
@@ -611,20 +846,33 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	  tree identity = gimple_object_identity (substituted);
 	  oa_range_lite &required = field_groups[g].range;
 
-	  oa_range_lite *established
+	  oa_range_lite *have
 	    = identity ? state.field.get ({identity, field_groups[g].field})
 		       : NULL;
-	  if (established
-	      && (!required.has_lo
-		  || (established->has_lo && established->lo >= required.lo))
-	      && (!required.has_hi
-		  || (established->has_hi && established->hi <= required.hi)))
-	    continue; /* Proven true: silently discharged.  */
+	  if (have
+	      && (!required.has_lo || (have->has_lo && have->lo >= required.lo))
+	      && (!required.has_hi || (have->has_hi && have->hi <= required.hi)))
+	    continue;
+	  /* Disjoint from what is required: a contradiction.  */
+	  if (have
+	      && ((required.has_lo && have->has_hi && have->hi < required.lo)
+		  || (required.has_hi && have->has_lo
+		      && have->lo > required.hi)))
+	    {
+	      error_at (gimple_location (call), "argument %qE provably "
+			"violates the precondition of %qD", substituted,
+			callee);
+	      continue;
+	    }
 
-	  warning_at (gimple_location (call), 0,
-		      "gimple-oa: cannot verify that field %qD of %qE "
-		      "satisfies the precondition of %qD",
-		      field_groups[g].field, substituted, callee);
+	  if (strict)
+	    report_unproven (call, true, "cannot prove that field %qD of %qE "
+			     "satisfies the precondition of %qD",
+			     field_groups[g].field, substituted, callee);
+	  else
+	    report_unproven (call, false, "cannot verify that field %qD of %qE "
+			     "satisfies the precondition of %qD",
+			     field_groups[g].field, substituted, callee);
 	}
     }
 }
@@ -1118,13 +1366,10 @@ seed_self_trust (function *fun, hash_set<tree> &established,
     }
 }
 
-/* For CALL's own callee, check every is_object_address(param)/'param
-   != 0'-shaped conjunct of its own declared precondition against
-   CALL's own actual argument, substituted positionally
-   (find_param_position) exactly the way the AST-walk's own
-   oa_substitute_call_arg already does -- again, only CALLEE's
-   *declared* condition is ever consulted, never CALLEE.pre's own
-   outlined body.  */
+/* CALL's callee's preconditions this plugin checks (call_obligation_p),
+   against the facts: each is_object_address (param), 'param != 0',
+   'param OP other-param' and 'param OP constant' conjunct, with CALL's
+   arguments for the parameters.  */
 
 static void
 check_call (gcall *call, hash_set<tree> &established,
@@ -1137,9 +1382,12 @@ check_call (gcall *call, hash_set<tree> &established,
   if (!callee)
     return;
 
+  callee_declared_note note (call);
+  hash_set<tree> reported_oa, reported_nz;
   for (tree contract : fn_contracts (callee))
     {
-      if (!PRECONDITION_P (contract))
+      bool as_conveyor, strict;
+      if (!call_obligation_p (contract, callee, &as_conveyor, &strict))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -1155,13 +1403,24 @@ check_call (gcall *call, hash_set<tree> &established,
 	    {
 	      STRIP_ANY_LOCATION_WRAPPER (arg);
 	      is_oa = true;
+	      /* Mandatory in the conveyor flavor: the engine's.  */
+	      if (as_conveyor)
+		continue;
 	    }
 	  else if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
 	    is_oa = false;
 	  else
 	    continue;
 
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg)
+		 || TREE_CODE (arg) == VIEW_CONVERT_EXPR)
+	    arg = STRIP_ANY_LOCATION_WRAPPER (TREE_OPERAND (arg, 0));
 	  if (TREE_CODE (arg) != PARM_DECL)
+	    continue;
+	  /* A conveyor callee's reference parameters and 'this' are the
+	     engine's (reference safety).  */
+	  if ((TYPE_REF_P (TREE_TYPE (arg)) || is_this_parameter (arg))
+	      && DECL_DECLARED_CONVEYOR_P (callee))
 	    continue;
 
 	  unsigned argno;
@@ -1174,28 +1433,71 @@ check_call (gcall *call, hash_set<tree> &established,
 	  if (is_oa)
 	    {
 	      if (provable_object_address_p (substituted, established,
-					      in_progress))
-		continue; /* Proven true: silently discharged.  */
-	      warning_at (gimple_location (call), 0,
-			  "gimple-oa: cannot verify %<is_object_address%> for "
-			  "%qE, as required by the precondition of %qD",
-			  substituted, callee);
+					      in_progress)
+		  || reported_oa.add (arg))
+		continue;
+	      if (strict)
+		report_unproven (call, true, "cannot prove %<is_object_address%> "
+				 "for %qE, as required by the precondition of "
+				 "%qD", substituted, callee);
+	      else
+		report_unproven (call, false, "cannot verify "
+				 "%<is_object_address%> for %qE, as required "
+				 "by the precondition of %qD", substituted,
+				 callee);
+	      continue;
 	    }
-	  else
+
+	  tree literal = STRIP_ANY_LOCATION_WRAPPER (substituted);
+	  if (TREE_CODE (literal) == INTEGER_CST)
 	    {
-	      if (provable_nonzero_p (substituted, established_nz, in_progress))
-		continue; /* Proven true: silently discharged.  */
-	      warning_at (gimple_location (call), 0,
-			  "gimple-oa: cannot verify that %qE is nonzero, as "
-			  "required by the precondition of %qD",
-			  substituted, callee);
+	      if (integer_zerop (literal) && !reported_nz.add (arg))
+		{
+		  error_at (gimple_location (call), "argument %qE provably "
+			    "violates the precondition of %qD", literal,
+			    callee);
+		  inform (gimple_location (call), "%qE is established to be "
+			  "exactly zero, but the precondition requires it to "
+			  "be nonzero", literal);
+		}
+	      continue;
 	    }
+	  int_range_max vr;
+	  if (provable_nonzero_p (substituted, established_nz, in_progress)
+	      || (trusted_range_at (substituted, call, ranger, vr)
+		  && !vr.contains_p (wi::zero (TYPE_PRECISION
+						 (TREE_TYPE (substituted))))))
+	    continue;
+	  /* Exactly zero where CALL is ('x == 0 && f (x)').  */
+	  tree zero_at;
+	  if (trusted_range_at (substituted, call, ranger, vr)
+	      && vr.singleton_p (&zero_at) && integer_zerop (zero_at))
+	    {
+	      if (!reported_nz.add (arg))
+		{
+		  error_at (gimple_location (call), "argument %qE provably "
+			    "violates the precondition of %qD", substituted,
+			    callee);
+		  inform (gimple_location (call), "%qE is established to be "
+			  "exactly zero, but the precondition requires it to "
+			  "be nonzero", substituted);
+		}
+	      continue;
+	    }
+	  if (reported_nz.add (arg))
+	    continue;
+	  if (strict)
+	    report_unproven (call, true, "cannot prove that %qE is nonzero, as "
+			     "required by the precondition of %qD",
+			     substituted, callee);
+	  else
+	    report_unproven (call, false, "cannot verify that %qE is nonzero, "
+			     "as required by the precondition of %qD",
+			     substituted, callee);
 	}
 
       /* Relational obligations against another of the callee's own
-	 parameters (e.g. 'pre<ctrl>(x < q)') -- both PARM_DECLs
-	 substituted positionally, mirroring the is_object_address/
-	 nonzero loop just above, one shape over.  */
+	 parameters ('pre (x < q)'): both substituted positionally.  */
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree rel_param, rel_other;
@@ -1214,17 +1516,14 @@ check_call (gcall *call, hash_set<tree> &established,
 	  tree sub_param = gimple_call_arg (call, param_argno);
 	  tree sub_other = gimple_call_arg (call, other_argno);
 
-	  /* Both sides are ordinary compile-time literals at this call
-	     site -- plain constant folding, not resolving any
-	     parameter's own opaque meaning.  */
+	  /* Both literals: plain constant folding.  */
 	  if (TREE_CODE (sub_param) == INTEGER_CST
 	      && TREE_CODE (sub_other) == INTEGER_CST)
 	    {
-	      if (oa_relational_literal_holds (rel_code, sub_param, sub_other))
-		continue; /* Proven true: silently discharged.  */
-	      warning_at (gimple_location (call), 0,
-			  "gimple-oa: argument %qE provably violates the "
-			  "precondition of %qD", sub_param, callee);
+	      if (!oa_relational_literal_holds (rel_code, sub_param, sub_other))
+		error_at (gimple_location (call), "argument %qE provably "
+			  "violates the precondition of %qD", sub_param,
+			  callee);
 	      continue;
 	    }
 
@@ -1233,23 +1532,27 @@ check_call (gcall *call, hash_set<tree> &established,
 	  if (get_relational (sub_param, established_rel, &fact_code, &fact_rhs)
 	      && oa_relational_code_implies (fact_code, rel_code)
 	      && fact_rhs == sub_other)
-	    continue; /* Proven true: silently discharged.  */
+	    continue;
 
-	  warning_at (gimple_location (call), 0,
-		      "gimple-oa: cannot verify that %qE satisfies the "
-		      "precondition of %qD", sub_param, callee);
+	  report_unproven (call, strict, strict
+			   ? ("cannot prove that %qE satisfies the "
+				"precondition of %qD")
+			   : ("cannot verify that %qE satisfies the "
+				"precondition of %qD"), sub_param, callee);
 	}
 
-      /* Range obligations: same per-param grouping as seed_self_trust's
-	 own range handling, since one precondition can constrain
-	 several distinct parameters, each via more than one conjunct.  */
+      /* Range obligations ('pre (x >= 20 && x < 100)'), grouped per
+	 parameter, since one precondition can constrain several, each
+	 through more than one conjunct.  */
       auto_vec<tree> params;
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree param, const_val;
 	  tree_code code;
 	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code, &const_val)
-	      && TREE_CODE (param) == PARM_DECL && !params.contains (param))
+	      && TREE_CODE (param) == PARM_DECL
+	      && TREE_CODE (const_val) == INTEGER_CST
+	      && !params.contains (param))
 	    params.safe_push (param);
 	}
       for (unsigned p = 0; p < params.length (); ++p)
@@ -1264,51 +1567,31 @@ check_call (gcall *call, hash_set<tree> &established,
 	    continue;
 	  tree substituted = gimple_call_arg (call, argno);
 
-	  oa_range_lite established_r;
+	  oa_range_lite have;
 	  if (established_range_of (substituted, established_range, ranger,
-				     &established_r)
-	      && (!required.has_lo
-		  || (established_r.has_lo && established_r.lo >= required.lo))
-	      && (!required.has_hi
-		  || (established_r.has_hi && established_r.hi <= required.hi)))
-	    continue; /* Proven true: silently discharged.  */
+				     call, &have)
+	      && (!required.has_lo || (have.has_lo && have.lo >= required.lo))
+	      && (!required.has_hi || (have.has_hi && have.hi <= required.hi)))
+	    continue;
 
-	  warning_at (gimple_location (call), 0,
-		      "gimple-oa: cannot verify that %qE satisfies the "
-		      "precondition of %qD", substituted, callee);
+	  report_unproven (call, strict, strict
+			   ? ("cannot prove that %qE satisfies the "
+				"precondition of %qD")
+			   : ("cannot verify that %qE satisfies the "
+				"precondition of %qD"), substituted, callee);
 	}
     }
 }
 
-namespace {
+/* The function checker the engine calls (cg_register_function_check).  */
 
-const pass_data pass_data_gimple_object_address =
+static void
+check_function (function *fun, void *)
 {
-  GIMPLE_PASS,			/* type */
-  "gimple_object_address",	/* name */
-  OPTGROUP_NONE,		/* optinfo_flags */
-  TV_NONE,			/* tv_id */
-  PROP_ssa,			/* properties_required */
-  0,				/* properties_provided */
-  0,				/* properties_destroyed */
-  0,				/* todo_flags_start */
-  0,				/* todo_flags_finish */
-};
+  /* The engine's own proof checks run otherwise.  */
+  if (!flag_contract_analysis_proofs)
+    return;
 
-class pass_gimple_object_address : public gimple_opt_pass
-{
-public:
-  pass_gimple_object_address (gcc::context *ctxt)
-    : gimple_opt_pass (pass_data_gimple_object_address, ctxt)
-  {}
-
-  bool gate (function *) final override { return true; }
-  unsigned int execute (function *) final override;
-};
-
-unsigned int
-pass_gimple_object_address::execute (function *fun)
-{
   hash_set<tree> established;
   hash_set<tree> established_nz;
   hash_map<tree, oa_range_lite> established_range;
@@ -1316,61 +1599,31 @@ pass_gimple_object_address::execute (function *fun)
   seed_self_trust (fun, established, established_nz, established_range,
 		    established_rel);
 
-  calculate_dominance_info (CDI_DOMINATORS);
   gimple_ranger *ranger = enable_ranger (fun, false);
-
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
     for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
 	 gsi_next (&gsi))
-      {
-	gimple *stmt = gsi_stmt (gsi);
-	if (is_gimple_call (stmt))
-	  check_call (as_a <gcall *> (stmt), established, established_nz,
-		      established_range, established_rel, ranger);
-      }
-
+      if (gcall *call = dyn_cast <gcall *> (gsi_stmt (gsi)))
+	check_call (call, established, established_nz, established_range,
+		    established_rel, ranger);
   disable_ranger (fun);
 
-  /* Named-predicate and field-range facts get their own, separate
-     dominator-tree-based walk (see predicate_dom_walker's own comment)
-     rather than folding into the FOR_EACH_BB_FN loop above: that
-     loop's own three fact shapes are consulted using a single,
-     function-wide ESTABLISHED set/map (correct for them, since a
-     backward SSA walk needs no block-order-sensitive state at all),
-     whereas these two are inherently per-program-point and need the
-     dominator walk's own per-block state threading.  */
+  /* Facts about persistent memory (named predicates, field ranges) are
+     per program point: a dominator walk of their own.  */
   dom_fact_state predicate_seed;
   seed_predicate_self_trust (fun, predicate_seed);
   predicate_dom_walker pdw (&predicate_seed);
   pdw.walk (ENTRY_BLOCK_PTR_FOR_FN (fun));
-
-  return 0;
-}
-
-} // anon namespace
-
-static gimple_opt_pass *
-make_pass_gimple_object_address (gcc::context *ctxt)
-{
-  return new pass_gimple_object_address (ctxt);
 }
 
 int
 plugin_init (struct plugin_name_args *plugin_info,
 	     struct plugin_gcc_version *version)
 {
-  const char *plugin_name = plugin_info->base_name;
-
   if (!plugin_default_version_check (version, &gcc_version))
     return 1;
 
-  struct register_pass_info pass_info;
-  pass_info.pass = make_pass_gimple_object_address (g);
-  pass_info.reference_pass_name = "ssa";
-  pass_info.ref_pass_instance_number = 1;
-  pass_info.pos_op = PASS_POS_INSERT_AFTER;
-
-  register_callback (plugin_name, PLUGIN_PASS_MANAGER_SETUP, NULL, &pass_info);
+  cg_register_function_check (check_function, NULL);
   return 0;
 }
