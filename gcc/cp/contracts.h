@@ -561,6 +561,14 @@ extern bool oa_env_check_symbolic_object_address
 extern oa_proof_result oa_env_check_symbolic_nonzero (oa_analysis_env *env,
 						      tree expr);
 
+/* The symbolic flavor's verdict for a callee precondition's named
+   predicate conjunct PRED_FN (ARG_DECL), possibly NEGATED, SUBSTITUTED
+   the argument: another call's result has its postcondition's facts, a
+   by-value class parameter (a copy) has none of the argument's.  */
+extern oa_proof_result oa_env_check_symbolic_predicate
+  (oa_analysis_env *env, tree arg_decl, tree substituted, tree pred_fn,
+   bool negated);
+
 /* CONJUNCT is 'E != C' (or 'C != E'), C an integer constant.  */
 extern bool oa_match_ne_constant_public (tree conjunct, tree *expr_out,
 					 tree *cst_out);

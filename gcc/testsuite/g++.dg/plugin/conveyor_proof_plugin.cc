@@ -509,6 +509,46 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	if (!conjunct_covered_p (*conjuncts[i], env))
 	  report_uncovered_conjunct (call, callee, *conjuncts[i], strict);
+      /* 'param - receiver.accessor () OP K' and its kin: a call-relational
+	 fact with an offset, as the built-in engine checks it.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rhs_receiver, rhs_callee;
+	  tree_code rel_code;
+	  widest_int offset = 0;
+	  if (!oa_match_shifted_comparison_against_call_public
+		(*conjuncts[i], env, &rel_param, &rel_code, &rhs_receiver,
+		 &rhs_callee, &offset, /*allow_symbolic_accessor=*/false)
+	      || TREE_CODE (rhs_receiver) != PARM_DECL)
+	    continue;
+	  tree sub_param
+	    = oa_substitute_value_arg_public (callee, call, rel_param);
+	  tree sub_receiver
+	    = oa_substitute_call_arg_public (callee, call, rhs_receiver);
+	  switch (oa_env_check_call_relational_fact
+		    (env, sub_param, rel_code, sub_receiver, rhs_callee,
+		     /*require_conveyor=*/true, offset))
+	    {
+	    case OA_PROVEN_TRUE:
+	      break;
+	    case OA_PROVEN_FALSE:
+	      error_at (EXPR_LOCATION (call), "argument %qE provably violates "
+			"the precondition of %qD", sub_param, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    case OA_UNKNOWN:
+	      if (strict)
+		error_at (EXPR_LOCATION (call), "cannot prove that %qE "
+			  "satisfies the precondition of %qD",
+			  sub_param ? sub_param : rel_param, callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0, "cannot verify that %qE "
+			    "satisfies the precondition of %qD",
+			    sub_param ? sub_param : rel_param, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      break;
+	    }
+	}
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  if (check_nonzero_conjunct (*conjuncts[i], call, callee, env,

@@ -210,6 +210,61 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
    obligations, since that logic is already solved once, shared with
    the built-in checker.  */
 
+/* Whether CONJUNCT, a symbolic precondition conjunct, is one of the
+   shapes this plugin (as the built-in engine) has a proof rule for.  */
+
+static bool
+conjunct_covered_p (tree conjunct, oa_analysis_env *env)
+{
+  tree a, b, c, d;
+  tree_code code;
+  bool negated;
+  widest_int offset;
+  auto_vec<tree> rel_args;
+  return (is_object_address_call_p (conjunct, &a)
+	  || oa_nonzero_conjunct_p (conjunct, &a)
+	  || oa_match_simple_comparison (conjunct, &a, &code, &b)
+	  || oa_match_general_comparison_public (conjunct, &a, &code, &b)
+	  || oa_match_comparison_against_param (conjunct, &a, &code, &b)
+	  || oa_match_comparison_against_call (conjunct, &a, &code, &b, &c,
+					       /*allow_symbolic_accessor=*/true)
+	  || oa_match_shifted_comparison_against_call_public
+	       (conjunct, env, &a, &code, &b, &c, &offset,
+		/*allow_symbolic_accessor=*/true)
+	  || oa_match_call_against_call (conjunct, &a, &b, &code, &c, &d,
+					 /*allow_symbolic_accessor=*/true)
+	  || oa_match_predicate_conjunct (conjunct, &a, &b, &negated)
+	  || oa_relation_conjunct_shape (conjunct, &a, &rel_args, &negated)
+	  || oa_unsupported_symbolic_predicate_p (conjunct, &a));
+}
+
+/* A precondition conjunct with no proof rule: true or false only if
+   CALL's arguments make it a constant, else reported as unverifiable,
+   as the built-in engine reports it.  */
+
+static void
+report_uncovered_conjunct (tree call, tree callee, tree conjunct, bool strict)
+{
+  location_t loc = EXPR_LOCATION (call);
+  if (tree folded = oa_fold_conjunct_at_call_public (callee, call, conjunct))
+    {
+      if (integer_zerop (folded))
+	{
+	  error_at (loc, "the arguments provably violate the precondition "
+		    "%qE of %qD", conjunct, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	}
+      return;
+    }
+  if (strict)
+    error_at (loc, "cannot prove the precondition %qE of %qD", conjunct,
+	      callee);
+  else
+    warning_at (loc, 0, "cannot verify the precondition %qE of %qD",
+		conjunct, callee);
+  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+}
+
 static void
 check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 {
@@ -231,6 +286,9 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
       auto_vec<tree *> conjuncts;
       oa_collect_conjuncts_public (&cond, &conjuncts);
       bool strict = oa_contract_symbolic_strict_public (contract, callee);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	if (!conjunct_covered_p (*conjuncts[i], env))
+	  report_uncovered_conjunct (call, callee, *conjuncts[i], strict);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree pred_fn, arg_decl;
@@ -329,6 +387,23 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		}
 	      continue;
 	    }
+	  /* A symbolic predicate called in a form the analysis can't track
+	     a fact for.  */
+	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
+					    &negated)
+	      && oa_unsupported_symbolic_predicate_p (*conjuncts[i], &pred_fn))
+	    {
+	      if (strict)
+		error_at (EXPR_LOCATION (call), "cannot prove that %qD holds, "
+			  "as required by the precondition of %qD", pred_fn,
+			  callee);
+	      else
+		warning_at (EXPR_LOCATION (call), 0, "cannot verify that %qD "
+			    "holds, as required by the precondition of %qD",
+			    pred_fn, callee);
+	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	      continue;
+	    }
 	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
 					    &negated))
 	    /* Not a predicate-identity conjunct -- e.g. a range shape,
@@ -341,9 +416,12 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	  if (!substituted)
 	    continue;
 
+	  /* As the built-in check: another call's result has its
+	     postcondition's facts; a by-value class parameter is a copy,
+	     with none of the argument's.  */
 	  oa_proof_result pr
-	    = oa_env_check_predicate_fact (env, substituted, pred_fn, !negated,
-					    /*require_conveyor=*/false);
+	    = oa_env_check_symbolic_predicate (env, arg_decl, substituted,
+					       pred_fn, negated);
 	  switch (pr)
 	    {
 	    case OA_PROVEN_TRUE:

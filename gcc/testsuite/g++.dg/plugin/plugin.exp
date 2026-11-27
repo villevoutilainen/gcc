@@ -129,7 +129,8 @@ set plugin_test_list [list \
 	  conveyor-proof-cdtor-receiver.C \
 	  conveyor-proof-nonzero.C \
 	  conveyor-proof-reference-trust.C \
-	  conveyor-proof-ne-uncovered.C } \
+	  conveyor-proof-ne-uncovered.C \
+	  conveyor-proof-shifted-call.C } \
     { symbolic_proof_plugin.cc \
 	  symbolic-proof-predicate-ok.C \
 	  symbolic-proof-predicate-bad.C \
@@ -149,7 +150,8 @@ set plugin_test_list [list \
 	  symbolic-proof-relation.C \
 	  symbolic-proof-assert-postcondition.C \
 	  symbolic-proof-nonzero-address.C \
-	  symbolic-proof-scalar-self-trust.C } \
+	  symbolic-proof-scalar-self-trust.C \
+	  symbolic-proof-elided-copy.C } \
     { gimple_object_address_plugin.cc \
 	  gimple-object-address-ok.C \
 	  gimple-object-address-self-trust-ok.C \

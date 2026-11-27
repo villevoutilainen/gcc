@@ -29611,6 +29611,46 @@ oa_check_call_relation (tree call, tree callee, tree pred_fn,
   oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 }
 
+/* The symbolic flavor's verdict for a callee precondition's named
+   predicate conjunct PRED_FN (ARG_DECL), possibly NEGATED, with
+   SUBSTITUTED the argument at the call: proven if the argument is
+   another call's result whose postcondition establishes it (guaranteed
+   elision, or a temporary bound to a reference), or if a fact of the
+   required polarity holds for the argument's identity; provably false
+   if one of the other polarity does (*FACT_OUT); else unknown, with
+   *OTHER_FACT whether the identity has facts of other predicates.  A
+   by-value class parameter is a copy, a new object: it has none of the
+   argument's facts.  */
+
+static oa_proof_result
+oa_symbolic_predicate_verdict (tree arg_decl, tree substituted, tree pred_fn,
+			       bool negated, oa_env &env,
+			       oa_predicate_fact *fact_out, bool *other_fact)
+{
+  *other_fact = false;
+  if (tree rc = oa_elided_result_call (substituted))
+    if (oa_call_result_predicate_p (rc, pred_fn, !negated))
+      return OA_PROVEN_TRUE;
+  bool copy_param = (TREE_CODE (arg_decl) == PARM_DECL
+		     && CLASS_TYPE_P (TREE_TYPE (arg_decl)));
+  tree identity;
+  if (copy_param)
+    identity = NULL_TREE;
+  else if (!oa_object_identity_decl (substituted, &identity)
+	   && !oa_field_slot_identity (substituted, env, &identity)
+	   && !oa_array_slot_identity (substituted, env, &identity)
+	   && !oa_field_object_identity (substituted, env, &identity))
+    identity = NULL_TREE;
+  else
+    identity = env.alias_find (identity);
+  if (!identity || !env.predicate_fact_get (identity, pred_fn, fact_out))
+    {
+      *other_fact = identity && env.predicate_fact_any (identity);
+      return OA_UNKNOWN;
+    }
+  return fact_out->polarity == !negated ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+}
+
 /* The symbolic flavor's is_object_address verdict for SUBSTITUTED, a
    callee precondition's argument at a call: conveyor's own fallback
    (oa_provable_p), then a symbolic postcondition's object-address fact
@@ -29760,35 +29800,15 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	  tree substituted = oa_substitute_call_arg (callee, call, arg_decl);
 	  if (!substituted)
 	    continue;
-	  /* The argument is another call's result, the object that call
-	     initializes ('read (make ())': guaranteed elision makes it the
-	     parameter itself; or a temporary bound to a reference): the facts
-	     that callee's postconditions establish about its result.  */
-	  if (tree rc = oa_elided_result_call (substituted))
-	    if (oa_call_result_predicate_p (rc, pred_fn, !negated))
-	      continue;
-	  /* A by-value class parameter initialized from an object is a copy,
-	     a new object: it has none of the original's facts.  */
-	  bool copy_param = (TREE_CODE (arg_decl) == PARM_DECL
-			     && CLASS_TYPE_P (TREE_TYPE (arg_decl)));
-
-	  tree identity;
-	  if (copy_param)
-	    identity = NULL_TREE;
-	  else if (!oa_object_identity_decl (substituted, &identity)
-	      && !oa_field_slot_identity (substituted, env, &identity)
-	      && !oa_array_slot_identity (substituted, env, &identity)
-	      && !oa_field_object_identity (substituted, env, &identity))
-	    identity = NULL_TREE;
-	  else
-	    identity = env.alias_find (identity);
-
-	  bool required = !negated;
+	  bool other_fact = false;
 	  oa_predicate_fact fact;
-	  bool found = (identity
-			&& env.predicate_fact_get (identity, pred_fn, &fact));
-	  bool other_fact = (!found && identity
-			     && env.predicate_fact_any (identity));
+	  oa_proof_result pv
+	    = oa_symbolic_predicate_verdict (arg_decl, substituted, pred_fn,
+					     negated, env, &fact, &other_fact);
+	  if (pv == OA_PROVEN_TRUE)
+	    continue;
+	  bool required = !negated;
+	  bool found = pv == OA_PROVEN_FALSE;
 	  if (!found)
 	    {
 	      if (strict)
@@ -44214,6 +44234,24 @@ oa_env_check_symbolic_object_address (oa_analysis_env *env, tree expr,
   if (!r && reason_out)
     *reason_out = reason;
   return r;
+}
+
+/* For a plugin: the symbolic flavor's verdict for a callee precondition's
+   named predicate conjunct PRED_FN (ARG_DECL), possibly NEGATED, with
+   SUBSTITUTED the argument at the call -- as the built-in check: another
+   call's result has its postcondition's facts (guaranteed elision), a
+   by-value class parameter is a copy with none of the argument's.  */
+
+oa_proof_result
+oa_env_check_symbolic_predicate (oa_analysis_env *env, tree arg_decl,
+				 tree substituted, tree pred_fn, bool negated)
+{
+  oa_predicate_fact fact;
+  bool other_fact;
+  return oa_symbolic_predicate_verdict (arg_decl, substituted, pred_fn,
+					negated,
+					*reinterpret_cast<oa_env *> (env),
+					&fact, &other_fact);
 }
 
 oa_proof_result
