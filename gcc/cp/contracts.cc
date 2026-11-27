@@ -42400,6 +42400,19 @@ oa_walk_function_calls (tree fndecl,
     = reinterpret_cast<void (*) (tree, oa_env *, void *)> (post_callback);
   oa_post_site_callback_data = post_data;
 
+  /* Walk the body the built-in walk (resolve_object_address_in_function,
+     from finish_function) walks.  A plugin calls this from
+     PLUGIN_PRE_GENERICIZE, before finish_function folds non-ODR uses of
+     constants (cp_fold_function_non_odr_use) -- 'H &r = g; ... &r'
+     becomes '&g' -- and the walk, once per function, is then this one:
+     without the fold, e.g. a trust through such a reference ('contract_
+     assert<never_proven_...> (std::is_object_address (&r))') didn't
+     make 'g' an object again.  The fold is idempotent; finish_function's
+     own does nothing more.  */
+  if (!processing_template_decl)
+    cp_fold_function_non_odr_use (fndecl);
+  contract_note_returned_reference_sources (fndecl);
+
   oa_resolve_object_address_in_function_1 (fndecl);
 
   oa_call_site_callback = saved_callback;
