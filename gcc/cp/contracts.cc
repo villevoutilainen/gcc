@@ -27250,6 +27250,8 @@ oa_relational_literal_holds (tree_code code, tree a, tree b)
    parameter here sidesteps that entirely.  */
 
 static tree oa_substitute_value_arg (tree, tree, tree);
+static oa_range_subsumption_result
+oa_range_subsumption (const oa_range_fact &, const oa_range_fact &);
 
 static void
 oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
@@ -27490,9 +27492,35 @@ oa_handle_precondition_simple_range_obligation (tree call, oa_env &env,
 	continue;
 
       oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
-      oa_proof_result r
-	= oa_env_check_range_subsumption (env, substituted, range_facts[idx],
-					   &reason);
+      oa_proof_result r;
+      /* A symbolic precondition first trusts the range a symbolic
+	 postcondition established for the argument (m_contract_scalar_
+	 range_map), then the general range, as the symbolic bare-scalar
+	 check that used to report this conjunct a second time did.  */
+      oa_range_fact sym_range;
+      tree arg_decl
+	= oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (substituted));
+      if (!conveyor
+	  && (VAR_P (arg_decl) || TREE_CODE (arg_decl) == PARM_DECL)
+	  && env.contract_scalar_range_get (arg_decl, &sym_range))
+	{
+	  switch (oa_range_subsumption (sym_range, range_facts[idx]))
+	    {
+	    case OA_RANGE_SUBSUMED:
+	      r = OA_PROVEN_TRUE;
+	      break;
+	    case OA_RANGE_DISJOINT:
+	      r = OA_PROVEN_FALSE;
+	      break;
+	    default:
+	      r = OA_UNKNOWN;
+	      reason = OA_UNPROVABLE_RANGE_PARTIAL;
+	      break;
+	    }
+	}
+      else
+	r = oa_env_check_range_subsumption (env, substituted, range_facts[idx],
+					    &reason);
       switch (r)
 	{
 	case OA_PROVEN_TRUE:
@@ -32677,124 +32705,6 @@ oa_precondition_symbolic_ranges (tree callee,
     }
 }
 
-/* -fcontract-symbolic-proofs: the bare-scalar consult side, sibling of
-   oa_handle_call_symbolic_precondition_obligation above (which only
-   handles the predicate and ptr->field shapes) -- for each of CALL's
-   callee's own symbolic-active preconditions comparing one of its own
-   by-value parameters (oa_precondition_symbolic_ranges, already built
-   for Mechanism B's runtime dispatch and reused here as-is), check
-   whether ENV already has a compile-time established range for the
-   substituted argument, with the same three-way subsumed/disjoint/
-   partial outcome as the ptr->field consult above. Falls back to the
-   general-purpose m_range_map (conveyor's own numeric checking's own
-   map, populated by ordinary dataflow throughout the caller's body, not
-   just by a callee's postcondition) when m_contract_scalar_range_map
-   has nothing for this decl -- the same allowed conveyor-feeds-symbolic
-   direction as is_object_address/nonzero's own new fallback just above,
-   giving this check the same reach conveyor's own numeric checking
-   already has. Only a plain integer range, never a pointer's own
-   offset-into-array range (BASE null), is a meaningful fallback here --
-   this obligation is about a *by-value scalar* argument, not a pointer,
-   mirroring oa_provably_nonzero_p's own identical BASE-null guard on its
-   own m_range_map fallback.  */
-
-static void
-oa_handle_call_symbolic_scalar_precondition_obligation (tree call, oa_env &env)
-{
-  tree callee = cp_get_callee_fndecl_nofold (call);
-  if (!callee || TREE_CODE (callee) != FUNCTION_DECL)
-    return;
-
-  auto_vec<oa_symbolic_precondition_match> matches;
-  oa_precondition_symbolic_ranges (callee, &matches);
-  for (unsigned m = 0; m < matches.length (); ++m)
-    {
-      tree contract = matches[m].contract;
-      tree param = matches[m].param;
-      oa_range_fact &required = matches[m].range;
-
-      tree substituted = oa_substitute_value_arg (callee, call, param);
-      if (!substituted)
-	continue;
-      /* Full lookthrough (conversion operator and copy-construction)
-	 -- this is a value fact like oa_get_range's own domain, not an
-	 identity one, so unlike the predicate/field-range layer there's
-	 no establish/invalidate-vs-consult asymmetry to worry about; a
-	 class-typed argument reached via a conversion operator, or
-	 forwarded by value through a real copy/move-constructor call,
-	 must resolve the same way oa_get_range itself already does.
-
-	 Deliberately NOT extended to also consult oa_call_symbolic_
-	 range_p here the way this function's runtime-codegen sibling
-	 (oa_handle_call_symbolic_scalar_obligation) now does for a
-	 CALL_EXPR argument: tried, and confirmed (by direct testing) to
-	 produce a genuine duplicate diagnostic for that shape --
-	 oa_handle_precondition_simple_range_obligation (this file's own
-	 general, non-decl-restricted range consult, shared with the
-	 conveyor flavor) already independently discovers the identical
-	 postcondition-derived range for a bare CALL_EXPR argument on its
-	 own, via oa_get_range's own postcondition-consulting fallback, so
-	 this function's own decl-only restriction for a CALL_EXPR is
-	 correctly redundant here, not a gap -- unlike on the codegen
-	 side, where nothing else ever provides the runtime dispatch.  */
-      tree arg_decl = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (substituted));
-      if (!VAR_P (arg_decl) && TREE_CODE (arg_decl) != PARM_DECL)
-	continue;
-
-      bool strict = oa_contract_symbolic_strict_p (contract, callee);
-
-      oa_range_fact established;
-      if (!env.contract_scalar_range_get (arg_decl, &established))
-	{
-	  oa_range_fact fallback;
-	  if (!env.range_get (arg_decl, &fallback) || fallback.base != NULL_TREE)
-	    {
-	      if (strict)
-		oa_error_at (EXPR_LOCATION (call),
-			  "cannot prove that %qE satisfies the precondition "
-			  "of %qD", substituted, callee);
-	      else
-		oa_warning_at (EXPR_LOCATION (call), 0,
-			    "cannot verify that %qE satisfies the precondition "
-			    "of %qD", substituted, callee);
-	      oa_inform (EXPR_LOCATION (call), "%s",
-		      _(oa_unprovable_reason_text (OA_UNPROVABLE_NO_FACT)));
-	      oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	      continue;
-	    }
-	  established = fallback;
-	}
-
-      oa_range_subsumption_result r = oa_range_subsumption (established, required);
-      if (r == OA_RANGE_SUBSUMED)
-	continue; /* Proven true: silently discharged.  */
-      if (r == OA_RANGE_DISJOINT)
-	{
-	  oa_error_at (EXPR_LOCATION (call),
-		    "argument %qE provably violates the precondition of %qD",
-		    substituted, callee);
-	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	}
-      else if (strict)
-	{
-	  oa_error_at (EXPR_LOCATION (call),
-		    "cannot prove that %qE satisfies the precondition "
-		    "of %qD", substituted, callee);
-	  oa_inform (EXPR_LOCATION (call), "%s",
-		  _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	}
-      else
-	{
-	  oa_warning_at (EXPR_LOCATION (call), 0,
-		      "cannot verify that %qE satisfies the precondition "
-		      "of %qD", substituted, callee);
-	  oa_inform (EXPR_LOCATION (call), "%s",
-		  _(oa_unprovable_reason_text (OA_UNPROVABLE_RANGE_PARTIAL)));
-	  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
-	}
-    }
-}
 
 /* Thin wrapper over oa_contract_symbolic_active_p, for a plugin.  */
 
@@ -34567,7 +34477,6 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
       if (flag_contract_symbolic_proofs || symbolic_forced)
 	{
 	  oa_handle_call_symbolic_precondition_obligation (t, *e);
-	  oa_handle_call_symbolic_scalar_precondition_obligation (t, *e);
 	}
       /* A plugin's own consult runs here, at the same relative position
 	 as the built-in diagnostics just above -- *before* this call's
