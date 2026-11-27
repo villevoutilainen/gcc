@@ -128,7 +128,10 @@ field_range_callback (tree contract, tree field, tree base_parm,
 		       bool has_lo, tree lo, bool has_hi, tree hi, void *data)
 {
   range_ctx *ctx = (range_ctx *) data;
-  if (!oa_contract_conveyor_active_public (contract, ctx->callee))
+  /* An analyzed_/proven_ precondition is the built-in engine's to check
+     (oa_contract_conveyor_analysis_forced_public).  */
+  if (!oa_contract_conveyor_active_public (contract, ctx->callee)
+      || oa_contract_conveyor_analysis_forced_public (contract, ctx->callee))
     return;
   tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, base_parm);
   if (!substituted)
@@ -172,7 +175,10 @@ float_field_range_callback (tree contract, tree field, tree base_parm,
 			     void *data)
 {
   range_ctx *ctx = (range_ctx *) data;
-  if (!oa_contract_conveyor_active_public (contract, ctx->callee))
+  /* An analyzed_/proven_ precondition is the built-in engine's to check
+     (oa_contract_conveyor_analysis_forced_public).  */
+  if (!oa_contract_conveyor_active_public (contract, ctx->callee)
+      || oa_contract_conveyor_analysis_forced_public (contract, ctx->callee))
     return;
   tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, base_parm);
   if (!substituted)
@@ -213,7 +219,10 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
 		      bool has_lo, tree lo, bool has_hi, tree hi, void *data)
 {
   range_ctx *ctx = (range_ctx *) data;
-  if (!oa_contract_conveyor_active_public (contract, ctx->callee))
+  /* An analyzed_/proven_ precondition is the built-in engine's to check
+     (oa_contract_conveyor_analysis_forced_public).  */
+  if (!oa_contract_conveyor_active_public (contract, ctx->callee)
+      || oa_contract_conveyor_analysis_forced_public (contract, ctx->callee))
     return;
   tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, receiver_parm);
   if (!substituted)
@@ -264,6 +273,30 @@ check_cdtor_receiver (tree call, tree callee, oa_analysis_env *env)
       || !(DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee)))
     return;
   tree receiver = CALL_EXPR_ARG (call, 0);
+  /* A callee whose own precondition already requires
+     std::is_object_address (this) -- a conveyor one's implicit one -- has
+     it checked by the mandatory check: reporting it again would repeat
+     that diagnostic (the built-in engine reports a parameter once).  */
+  for (tree contract : fn_contracts (callee))
+    {
+      if (!PRECONDITION_P (contract))
+	continue;
+      tree cond = CONTRACT_CONDITION (contract);
+      if (cond == NULL_TREE || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree arg;
+	  if (!is_object_address_call_p (*conjuncts[i], &arg))
+	    continue;
+	  STRIP_NOPS (arg);
+	  if (arg == DECL_ARGUMENTS (callee)
+	      || (TREE_CODE (arg) == PARM_DECL && is_this_parameter (arg)))
+	    return;
+	}
+    }
   bool strict = oa_cdtor_receiver_strict_public (call);
   if (!strict && in_system_header_at (EXPR_LOCATION (call)))
     return;
@@ -330,6 +363,106 @@ check_nonzero_conjunct (tree conjunct, tree call, tree callee,
   return true;
 }
 
+/* A callee's precondition conjunct with no proof rule (none of the
+   shapes below, which are the built-in engine's): true or false only if
+   CALL's arguments make it a constant, else reported as unverifiable --
+   never passed over in silence.  */
+
+static void
+report_uncovered_conjunct (tree call, tree callee, tree conjunct, bool strict)
+{
+  location_t loc = EXPR_LOCATION (call);
+  if (tree folded = oa_fold_conjunct_at_call_public (callee, call, conjunct))
+    {
+      if (integer_zerop (folded))
+	{
+	  error_at (loc, "the arguments provably violate the precondition "
+		    "%qE of %qD", conjunct, callee);
+	  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+	}
+      return;
+    }
+  if (strict)
+    error_at (loc, "cannot prove the precondition %qE of %qD", conjunct,
+	      callee);
+  else
+    warning_at (loc, 0, "cannot verify the precondition %qE of %qD",
+		conjunct, callee);
+  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+}
+
+/* Whether CONJUNCT, a callee's precondition conjunct, is one of the
+   shapes this plugin (as the built-in engine) has a proof rule for.  */
+
+static bool
+conjunct_covered_p (tree conjunct, oa_analysis_env *env)
+{
+  tree a, b, c, d;
+  tree_code code;
+  bool negated;
+  widest_int offset;
+  return (is_object_address_call_p (conjunct, &a)
+	  || oa_match_simple_comparison (conjunct, &a, &code, &b)
+	  || oa_match_comparison_against_param (conjunct, &a, &code, &b)
+	  || (oa_match_comparison_against_call (conjunct, &a, &code, &b, &c,
+						/*allow_symbolic_accessor=*/
+						  false)
+	      && TREE_CODE (b) == PARM_DECL)
+	  || oa_match_shifted_comparison_against_call_public
+	       (conjunct, env, &a, &code, &b, &c, &offset,
+		/*allow_symbolic_accessor=*/false)
+	  || oa_match_call_against_call (conjunct, &a, &b, &code, &c, &d,
+					 /*allow_symbolic_accessor=*/false)
+	  || oa_nonzero_conjunct_p (conjunct, &a)
+	  || oa_match_ne_constant_public (conjunct, &a, &b)
+	  || oa_match_predicate_conjunct (conjunct, &a, &b, &negated)
+	  || oa_match_general_comparison_public (conjunct, &a, &code, &b));
+}
+
+/* A callee's 'E != C' precondition conjunct, C a nonzero constant (or E
+   not a parameter): E's argument (or E, substituted) must be provably
+   different from C.  Returns false if CONJUNCT isn't that shape.  */
+
+static bool
+check_ne_conjunct (tree conjunct, tree call, tree callee,
+		   oa_analysis_env *env, bool strict)
+{
+  tree ne_expr, ne_cst;
+  if (!oa_match_ne_constant_public (conjunct, &ne_expr, &ne_cst))
+    return false;
+  tree substituted
+    = (TREE_CODE (ne_expr) == PARM_DECL
+       ? oa_substitute_value_arg_public (callee, call, ne_expr)
+       : oa_substitute_call_expr_public (callee, call, ne_expr));
+  if (!substituted)
+    {
+      report_uncovered_conjunct (call, callee, conjunct, strict);
+      return true;
+    }
+  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+  switch (oa_env_check_ne_constant (env, substituted, ne_cst, &reason))
+    {
+    case OA_PROVEN_TRUE:
+      break;
+    case OA_PROVEN_FALSE:
+      error_at (EXPR_LOCATION (call),
+		"argument %qE provably violates the precondition of %qD",
+		substituted, callee);
+      break;
+    case OA_UNKNOWN:
+      if (strict)
+	error_at (EXPR_LOCATION (call), "cannot prove that %qE satisfies the "
+		  "precondition of %qD", substituted, callee);
+      else
+	warning_at (EXPR_LOCATION (call), 0, "cannot verify that %qE "
+		    "satisfies the precondition of %qD", substituted, callee);
+      if (const char *why = oa_unprovable_reason_text (reason))
+	inform (EXPR_LOCATION (call), "%s", why);
+      break;
+    }
+  return true;
+}
+
 static void
 check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 {
@@ -339,6 +472,10 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
       if (!PRECONDITION_P (contract))
 	continue;
       if (!oa_contract_conveyor_active_public (contract, callee))
+	continue;
+      /* An analyzed_/proven_conveyor precondition is the built-in
+	 engine's to check, whatever the command line says.  */
+      if (oa_contract_conveyor_analysis_forced_public (contract, callee))
 	continue;
 
       tree cond = CONTRACT_CONDITION (contract);
@@ -370,9 +507,13 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
       auto_vec<tree> range_diag_exprs;
       bool strict = oa_contract_conveyor_strict_public (contract, callee);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
+	if (!conjunct_covered_p (*conjuncts[i], env))
+	  report_uncovered_conjunct (call, callee, *conjuncts[i], strict);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  if (check_nonzero_conjunct (*conjuncts[i], call, callee, env,
-				      strict))
+				      strict)
+	      || check_ne_conjunct (*conjuncts[i], call, callee, env, strict))
 	    continue;
 	  tree param, const_val;
 	  tree_code code;
@@ -441,6 +582,17 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		   handles correctly.  */
 		if (TREE_CODE (gen_const_val) == REAL_CST)
 		  continue;
+		/* Likewise a 'ptr->field OP const' conjunct: the field-range
+		   mechanism (oa_precondition_field_range_obligations/
+		   field_range_callback) combines a field's bounds and
+		   diagnoses them once, as the built-in engine does.  */
+		{
+		  tree f, pe, cv;
+		  tree_code fc;
+		  if (oa_match_field_range_comparison (*conjuncts[i], &f, &pe,
+						       &fc, &cv))
+		    continue;
+		}
 
 		tree substituted
 		  = oa_substitute_call_expr_public (callee, call, gen_expr);
@@ -687,7 +839,8 @@ check_assert (tree stmt, oa_analysis_env *env, void *data)
      check's business; an unprovable conjunct is an error only for a
      strict (proven_conveyor) assertion.  */
   if (!oa_contract_conveyor_active_public (stmt, fndecl)
-      || oa_contract_never_proven_public (stmt, fndecl))
+      || oa_contract_never_proven_public (stmt, fndecl)
+      || oa_contract_conveyor_analysis_forced_public (stmt, fndecl))
     return;
   bool strict = oa_contract_conveyor_strict_public (stmt, fndecl);
 
@@ -773,7 +926,8 @@ check_post (tree contract, oa_analysis_env *env, void *data)
 {
   tree fndecl = (tree) data;
   if (!oa_contract_conveyor_active_public (contract, fndecl)
-      || oa_contract_never_proven_public (contract, fndecl))
+      || oa_contract_never_proven_public (contract, fndecl)
+      || oa_contract_conveyor_analysis_forced_public (contract, fndecl))
     return;
   tree cond = CONTRACT_CONDITION (contract);
   if (cond == NULL_TREE || cond == error_mark_node)

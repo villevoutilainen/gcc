@@ -29527,18 +29527,21 @@ oa_symbolic_conjunct_covered_p (tree conjunct, oa_env &env)
 
 const char *oa_unprovable_reason_text (oa_unprovable_reason);
 
-static void
-oa_check_call_relation (tree call, tree callee, tree pred_fn,
-			const vec<tree> &args, bool negated, oa_env &env,
-			bool strict)
+/* The verdict of that check: OA_PROVEN_TRUE if a fact in ENV of the
+   required polarity relates CALL's arguments for ARGS, OA_PROVEN_FALSE if
+   one of the other polarity does, else OA_UNKNOWN (no fact).  An argument
+   that is another call's result first gets that call's relations
+   (guaranteed elision), keyed by the call, in ENV.  */
+
+static oa_proof_result
+oa_call_relation_verdict (tree call, tree callee, tree pred_fn,
+			  const vec<tree> &args, bool negated, oa_env &env)
 {
   auto_vec<tree, OA_RELATION_MAX_ARGS> subs;
   tree ids[OA_RELATION_MAX_ARGS];
   oa_relation_fact fact;
   bool substituted = oa_relation_substitute_args (callee, call, args,
 						 NULL_TREE, NULL_TREE, subs);
-  /* An argument that is another call's result has that call's facts
-     (guaranteed elision), keyed by the call.  */
   if (substituted)
     for (tree sub : subs)
       if (tree rc = oa_elided_result_call (sub))
@@ -29546,14 +29549,27 @@ oa_check_call_relation (tree call, tree callee, tree pred_fn,
   bool have = (substituted
 	       && oa_relation_identities (pred_fn, subs, env, ids)
 	       && env.relation_get (pred_fn, ids, subs.length (), &fact));
+  if (!have)
+    return OA_UNKNOWN;
+  return fact.polarity == !negated ? OA_PROVEN_TRUE : OA_PROVEN_FALSE;
+}
+
+static void
+oa_check_call_relation (tree call, tree callee, tree pred_fn,
+			const vec<tree> &args, bool negated, oa_env &env,
+			bool strict)
+{
+  oa_proof_result r
+    = oa_call_relation_verdict (call, callee, pred_fn, args, negated, env);
+  bool have = r != OA_UNKNOWN;
   bool required = !negated;
-  if (have && fact.polarity == required)
+  if (r == OA_PROVEN_TRUE)
     return;
   if (have)
     oa_error_at (EXPR_LOCATION (call),
 		 "%qD provably fails the precondition of %qD: the relation "
 		 "is established %s, but the precondition requires it to be "
-		 "%s", pred_fn, callee, fact.polarity ? "true" : "false",
+		 "%s", pred_fn, callee, !required ? "true" : "false",
 		 required ? "true" : "false");
   else if (strict)
     oa_error_at (EXPR_LOCATION (call), "cannot prove that %qD holds, as "
@@ -42507,6 +42523,23 @@ oa_contract_symbolic_strict_public (tree contract, tree owner_fn)
    control object, which exempts it from being checked (it is trusted as
    written), as oa_handle_postcondition_stmt and its siblings do.  */
 
+/* For a plugin: whether the built-in engine checks CONTRACT (of
+   OWNER_FN) whatever the command line says -- its control object is
+   analyzed_ or proven_conveyor (resp. _symbolic) -- so that a plugin
+   checking it as well would repeat the built-in diagnostics.  */
+
+bool
+oa_contract_conveyor_analysis_forced_public (tree contract, tree owner_fn)
+{
+  return oa_contract_conveyor_analysis_forced_p (contract, owner_fn);
+}
+
+bool
+oa_contract_symbolic_analysis_forced_public (tree contract, tree owner_fn)
+{
+  return oa_contract_symbolic_analysis_forced_p (contract, owner_fn);
+}
+
 bool
 oa_contract_never_proven_public (tree contract, tree owner_fn)
 {
@@ -44150,6 +44183,82 @@ bool
 oa_cdtor_receiver_strict_public (tree call)
 {
   return oa_cdtor_receiver_strict_p (call);
+}
+
+/* For a plugin: the check, at CALL, of a precondition conjunct of CALLEE
+   relating ARGS (CALLEE's parameters or values of them) by the symbolic
+   relation PRED_FN, possibly NEGATED -- the shape oa_relation_conjunct_
+   shape recognizes: proven, provably false (a fact of the other
+   polarity), or unknown (no fact).  An argument that is another call's
+   result first gets that call's relations, as the built-in check does.  */
+
+/* Thin wrapper over oa_match_ne_constant, for a plugin: CONJUNCT is
+   'E != C' (or 'C != E'), C an integer constant.  */
+
+bool
+oa_match_ne_constant_public (tree conjunct, tree *expr_out, tree *cst_out)
+{
+  return oa_match_ne_constant (conjunct, expr_out, cst_out);
+}
+
+/* For a plugin: is EXPR (a value at a call site), under ENV's facts,
+   provably different from CST, provably equal to it, or unknown -- the
+   built-in check of an 'E != C' precondition conjunct: through a
+   conversion call, a literal decides it outright, otherwise EXPR's range
+   and facts (oa_check_ne_constant).  If unknown, *REASON_OUT (if
+   non-null) says why.  */
+
+oa_proof_result
+oa_env_check_ne_constant (oa_analysis_env *env, tree expr, tree cst,
+			  oa_unprovable_reason *reason_out)
+{
+  expr = oa_strip_conversion_call (expr);
+  tree stripped = STRIP_ANY_LOCATION_WRAPPER (expr);
+  if (TREE_CODE (stripped) == INTEGER_CST)
+    return (wi::to_widest (stripped) == wi::to_widest (cst)
+	    ? OA_PROVEN_FALSE : OA_PROVEN_TRUE);
+  oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
+  oa_proof_result r
+    = oa_check_ne_constant (*reinterpret_cast<oa_env *> (env), expr, cst,
+			    &reason);
+  if (r == OA_UNKNOWN && reason_out)
+    *reason_out = reason;
+  return r;
+}
+
+/* Thin wrapper over oa_fold_conjunct_at_call, for a plugin: CONJUNCT, a
+   precondition conjunct of CALLEE, with CALL's arguments for its
+   parameters, if that makes it a constant (an INTEGER_CST, zero meaning
+   provably false), else NULL_TREE -- what the built-in check reports a
+   conjunct with no proof rule by.  */
+
+tree
+oa_fold_conjunct_at_call_public (tree callee, tree call, tree conjunct)
+{
+  return oa_fold_conjunct_at_call (callee, call, conjunct);
+}
+
+/* oa_match_shifted_comparison_against_call, for a plugin, which holds an
+   oa_analysis_env: CONJUNCT is 'param OP receiver.accessor () +- K'
+   (ENV consulted as that function does).  */
+
+bool
+oa_match_shifted_comparison_against_call_public
+  (tree conjunct, oa_analysis_env *env, tree *param_out, tree_code *code_out,
+   tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
+   bool allow_symbolic_accessor)
+{
+  return oa_match_shifted_comparison_against_call
+    (conjunct, *reinterpret_cast<oa_env *> (env), param_out, code_out,
+     rhs_receiver_out, rhs_callee_out, offset_out, allow_symbolic_accessor);
+}
+
+oa_proof_result
+oa_env_check_call_relation (oa_analysis_env *env, tree call, tree callee,
+			    tree pred_fn, const vec<tree> &args, bool negated)
+{
+  return oa_call_relation_verdict (call, callee, pred_fn, args, negated,
+				   *reinterpret_cast<oa_env *> (env));
 }
 
 /* -fcontract-symbolic-runtime-checks: recognize a ptr->field OP const

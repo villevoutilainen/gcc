@@ -540,6 +540,36 @@ extern tree oa_substitute_value_arg_public (tree callee, tree call,
    rather than a warning.  */
 extern bool oa_cdtor_receiver_strict_public (tree call);
 
+/* The check, at CALL, of CALLEE's precondition conjunct PRED_FN (ARGS),
+   possibly NEGATED -- a symbolic relation, oa_relation_conjunct_shape:
+   proven, provably false, or unknown, under ENV's facts.  */
+extern oa_proof_result oa_env_check_call_relation
+  (oa_analysis_env *env, tree call, tree callee, tree pred_fn,
+   const vec<tree> &args, bool negated);
+
+/* CONJUNCT is 'E != C' (or 'C != E'), C an integer constant.  */
+extern bool oa_match_ne_constant_public (tree conjunct, tree *expr_out,
+					 tree *cst_out);
+
+/* Is EXPR (a value at a call site), under ENV's facts, provably different
+   from CST (OA_PROVEN_TRUE), provably equal (OA_PROVEN_FALSE), or
+   unknown -- the check of an 'E != C' precondition conjunct.  */
+extern oa_proof_result oa_env_check_ne_constant
+  (oa_analysis_env *env, tree expr, tree cst,
+   oa_unprovable_reason *reason_out);
+
+/* CONJUNCT, a precondition conjunct of CALLEE, with CALL's arguments for
+   its parameters, if that makes it a constant (zero: provably false),
+   else NULL_TREE: how a conjunct with no proof rule is reported.  */
+extern tree oa_fold_conjunct_at_call_public (tree callee, tree call,
+					     tree conjunct);
+
+/* oa_match_shifted_comparison_against_call, given a plugin's ENV.  */
+extern bool oa_match_shifted_comparison_against_call_public
+  (tree conjunct, oa_analysis_env *env, tree *param_out, tree_code *code_out,
+   tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
+   bool allow_symbolic_accessor);
+
 /* The relational-fact analogue of oa_env_check_comparison above: is
    SUBSTITUTED_PARAM (already positionally substituted at the plugin's
    own call site, the same way SUBSTITUTED_PARAM is for that function)
@@ -896,6 +926,14 @@ extern bool oa_contract_symbolic_strict_public (tree contract, tree owner_fn);
 /* Whether CONTRACT (of OWNER_FN) is never_proven: trusted as written,
    exempt from being checked.  */
 extern bool oa_contract_never_proven_public (tree contract, tree owner_fn);
+
+/* Whether the built-in engine checks CONTRACT (of OWNER_FN) whatever the
+   command line says (an analyzed_/proven_ control object): a plugin
+   checking it too would repeat the built-in diagnostics.  */
+extern bool oa_contract_conveyor_analysis_forced_public (tree contract,
+							 tree owner_fn);
+extern bool oa_contract_symbolic_analysis_forced_public (tree contract,
+							 tree owner_fn);
 
 /* oa_match_simple_comparison above, with its own "must be a bare
    PARM_DECL" restriction on the non-literal side dropped -- accepts

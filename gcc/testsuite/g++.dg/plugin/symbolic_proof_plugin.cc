@@ -122,7 +122,10 @@ field_range_callback (tree contract, tree field, tree base_parm,
      conveyor plugin (CALLEE could carry preconditions of either
      flavor) -- only this contract's own symbolic-active matches are
      this plugin's obligation to check.  */
-  if (!oa_contract_symbolic_active_public (contract, ctx->callee))
+  /* An analyzed_/proven_ precondition is the built-in engine's to check
+     (oa_contract_symbolic_analysis_forced_public).  */
+  if (!oa_contract_symbolic_active_public (contract, ctx->callee)
+      || oa_contract_symbolic_analysis_forced_public (contract, ctx->callee))
     return;
   tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, base_parm);
   if (!substituted)
@@ -164,7 +167,10 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
 		      bool has_lo, tree lo, bool has_hi, tree hi, void *data)
 {
   range_ctx *ctx = (range_ctx *) data;
-  if (!oa_contract_symbolic_active_public (contract, ctx->callee))
+  /* An analyzed_/proven_ precondition is the built-in engine's to check
+     (oa_contract_symbolic_analysis_forced_public).  */
+  if (!oa_contract_symbolic_active_public (contract, ctx->callee)
+      || oa_contract_symbolic_analysis_forced_public (contract, ctx->callee))
     return;
   tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, receiver_parm);
   if (!substituted)
@@ -213,6 +219,10 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	continue;
       if (!oa_contract_symbolic_active_public (contract, callee))
 	continue;
+      /* An analyzed_/proven_symbolic precondition is the built-in
+	 engine's to check, whatever the command line says.  */
+      if (oa_contract_symbolic_analysis_forced_public (contract, callee))
+	continue;
 
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -220,10 +230,44 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 
       auto_vec<tree *> conjuncts;
       oa_collect_conjuncts_public (&cond, &conjuncts);
+      bool strict = oa_contract_symbolic_strict_public (contract, callee);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree pred_fn, arg_decl;
 	  bool negated;
+	  /* A symbolic relation of two or more of the callee's parameters
+	     ('related (a, b)'), checked as the built-in engine does.  */
+	  auto_vec<tree> rel_args;
+	  if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &rel_args,
+					  &negated))
+	    {
+	      switch (oa_env_check_call_relation (env, call, callee, pred_fn,
+						  rel_args, negated))
+		{
+		case OA_PROVEN_TRUE:
+		  break;
+		case OA_PROVEN_FALSE:
+		  error_at (EXPR_LOCATION (call),
+			    "%qD provably fails the precondition of %qD: the "
+			    "relation is established %s, but the precondition "
+			    "requires it to be %s", pred_fn, callee,
+			    negated ? "true" : "false", negated ? "false" : "true");
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		case OA_UNKNOWN:
+		  if (strict)
+		    error_at (EXPR_LOCATION (call), "cannot prove that %qD "
+			      "holds, as required by the precondition of %qD",
+			      pred_fn, callee);
+		  else
+		    warning_at (EXPR_LOCATION (call), 0, "cannot verify that "
+				"%qD holds, as required by the precondition of "
+				"%qD", pred_fn, callee);
+		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  break;
+		}
+	      continue;
+	    }
 	  if (!oa_match_predicate_conjunct (*conjuncts[i], &pred_fn, &arg_decl,
 					    &negated))
 	    /* Not a predicate-identity conjunct -- e.g. a range shape,
@@ -392,6 +436,90 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
   oa_precondition_call_range_obligations (callee, call_range_callback, &ctx);
 }
 
+/* A symbolic contract_assert's or postcondition's conjuncts, against
+   ENV, as the built-in -fcontract-symbolic-proofs checks them: a
+   never_proven one is trusted as written, a bare std::is_object_address
+   conjunct is the mandatory check's business, an unprovable conjunct is
+   an error for a strict (proven_symbolic) one.  For a postcondition
+   (POST), a conjunct naming a symbolic predicate or relation is an
+   axiom: there is no body to check it against.  */
+
+static void
+check_symbolic_conjuncts (tree contract, oa_analysis_env *env, tree fndecl,
+			  bool post)
+{
+  if (!oa_contract_symbolic_active_public (contract, fndecl)
+      || oa_contract_never_proven_public (contract, fndecl)
+      || oa_contract_symbolic_analysis_forced_public (contract, fndecl))
+    return;
+  tree cond = CONTRACT_CONDITION (contract);
+  if (cond == NULL_TREE || cond == error_mark_node)
+    return;
+  bool strict = oa_contract_symbolic_strict_public (contract, fndecl);
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree conjunct = *conjuncts[i];
+      tree oa_arg, pred_fn, arg_decl;
+      bool negated;
+      if (is_object_address_call_p (conjunct, &oa_arg))
+	continue;
+      if (post)
+	{
+	  auto_vec<tree> rel_args;
+	  if ((oa_match_predicate_conjunct (conjunct, &pred_fn, &arg_decl,
+					    &negated)
+	       && DECL_DECLARED_SYMBOLIC_P (pred_fn))
+	      || oa_relation_conjunct_shape (conjunct, &pred_fn, &rel_args,
+					     &negated))
+	    continue;
+	}
+      switch (oa_check_assertion_conjunct_public (env, conjunct,
+						   /*require_conveyor=*/false))
+	{
+	case OA_PROVEN_TRUE:
+	  break;
+	case OA_PROVEN_FALSE:
+	  if (post)
+	    error_at (EXPR_LOCATION (conjunct),
+		      "postcondition condition %qE is provably false", conjunct);
+	  else
+	    error_at (EXPR_LOCATION (conjunct),
+		      "%<contract_assert%> condition %qE is provably false",
+		      conjunct);
+	  break;
+	case OA_UNKNOWN:
+	  if (strict && post)
+	    error_at (EXPR_LOCATION (conjunct),
+		      "cannot prove postcondition condition %qE", conjunct);
+	  else if (strict)
+	    error_at (EXPR_LOCATION (conjunct),
+		      "cannot prove %<contract_assert%> condition %qE", conjunct);
+	  else if (post)
+	    warning_at (EXPR_LOCATION (conjunct), 0,
+			"cannot verify postcondition condition %qE", conjunct);
+	  else
+	    warning_at (EXPR_LOCATION (conjunct), 0,
+			"cannot verify %<contract_assert%> condition %qE",
+			conjunct);
+	  break;
+	}
+    }
+}
+
+static void
+check_assert (tree stmt, oa_analysis_env *env, void *data)
+{
+  check_symbolic_conjuncts (stmt, env, (tree) data, /*post=*/false);
+}
+
+static void
+check_post (tree contract, oa_analysis_env *env, void *data)
+{
+  check_symbolic_conjuncts (contract, env, (tree) data, /*post=*/true);
+}
+
 /* PLUGIN_PRE_GENERICIZE: fires once per non-template function, body
    still in its pre-genericize GENERIC form -- exactly when
    oa_walk_function_calls needs it (see contracts.h).  */
@@ -402,7 +530,8 @@ symbolic_proof_pre_genericize (void *event_data, void * /*data*/)
   tree fndecl = (tree) event_data;
   if (TREE_CODE (fndecl) != FUNCTION_DECL)
     return;
-  oa_walk_function_calls (fndecl, check_call, NULL);
+  oa_walk_function_calls (fndecl, check_call, NULL, check_assert, fndecl,
+			  check_post, fndecl);
 }
 
 int
