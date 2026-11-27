@@ -147,7 +147,9 @@ set plugin_test_list [list \
 	  symbolic-proof-relational-bad.C \
 	  symbolic-proof-relational-unknown.C \
 	  symbolic-proof-relation.C \
-	  symbolic-proof-assert-postcondition.C } \
+	  symbolic-proof-assert-postcondition.C \
+	  symbolic-proof-nonzero-address.C \
+	  symbolic-proof-scalar-self-trust.C } \
     { gimple_object_address_plugin.cc \
 	  gimple-object-address-ok.C \
 	  gimple-object-address-self-trust-ok.C \

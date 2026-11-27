@@ -547,6 +547,15 @@ extern oa_proof_result oa_env_check_call_relation
   (oa_analysis_env *env, tree call, tree callee, tree pred_fn,
    const vec<tree> &args, bool negated);
 
+/* The symbolic flavor's verdicts for EXPR, a callee precondition's
+   argument at a call, for a symbolic precondition's
+   'std::is_object_address (q)' and 'n != 0' conjuncts: consulting
+   symbolic postconditions' facts as well as the conveyor ones.  */
+extern bool oa_env_check_symbolic_object_address
+  (oa_analysis_env *env, tree expr, oa_unprovable_reason *reason_out);
+extern oa_proof_result oa_env_check_symbolic_nonzero (oa_analysis_env *env,
+						      tree expr);
+
 /* CONJUNCT is 'E != C' (or 'C != E'), C an integer constant.  */
 extern bool oa_match_ne_constant_public (tree conjunct, tree *expr_out,
 					 tree *cst_out);

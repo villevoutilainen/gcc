@@ -29611,6 +29611,68 @@ oa_check_call_relation (tree call, tree callee, tree pred_fn,
   oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
 }
 
+/* The symbolic flavor's is_object_address verdict for SUBSTITUTED, a
+   callee precondition's argument at a call: conveyor's own fallback
+   (oa_provable_p), then a symbolic postcondition's object-address fact
+   for its identity.  If not proven, *REASON says why.  */
+
+static bool
+oa_symbolic_object_address_verdict (tree substituted, oa_env &env,
+				    oa_unprovable_reason *reason)
+{
+  if (oa_provable_p (substituted, env, reason))
+    return true;
+  tree identity;
+  return (oa_object_identity_decl (substituted, &identity)
+	  && env.symbolic_object_address_provable_p (identity));
+}
+
+/* The symbolic flavor's nonzero verdict for SUBSTITUTED, a callee
+   precondition's argument at a call: proven by conveyor's own nonzero
+   facts, a symbolic postcondition's nonzero fact or scalar range for its
+   identity, or a callee's symbolic postcondition range excluding zero;
+   provably false if it is established to be exactly zero; else
+   unknown.  */
+
+static oa_proof_result
+oa_symbolic_nonzero_verdict (tree substituted, oa_env &env)
+{
+  if (oa_provably_nonzero_p (substituted, env))
+    return OA_PROVEN_TRUE;
+  /* Nonzero-ness is a value fact (copy-invariant, unlike identity), so
+     the symbolic checks may as well see through a by-value copy.  */
+  substituted = oa_strip_conversion_call (substituted);
+  tree identity;
+  if (oa_object_identity_decl (substituted, &identity)
+      && env.symbolic_nz_provable_p (identity))
+    return OA_PROVEN_TRUE;
+  tree stripped = STRIP_ANY_LOCATION_WRAPPER (substituted);
+  oa_range_fact scalar_range;
+  if ((VAR_P (stripped) || TREE_CODE (stripped) == PARM_DECL)
+      && env.contract_scalar_range_get (stripped, &scalar_range)
+      && ((scalar_range.has_lo && scalar_range.lo > 0)
+	  || (scalar_range.has_hi && scalar_range.hi < 0)))
+    return OA_PROVEN_TRUE;
+  /* A call whose callee's symbolic postcondition guarantees a range
+     excluding zero (e.g. 'r > 0'); oa_provably_nonzero_p above covers
+     the conveyor flavor.  */
+  if (TREE_CODE (stripped) == CALL_EXPR
+      && oa_call_symbolic_range_p (stripped, &scalar_range)
+      && !scalar_range.base
+      && ((scalar_range.has_lo && scalar_range.lo > 0)
+	  || (scalar_range.has_hi && scalar_range.hi < 0)))
+    return OA_PROVEN_TRUE;
+  /* Exactly zero where the call is ('x == 0 && f (x)').  */
+  oa_unprovable_reason nz_reason = OA_UNPROVABLE_NO_FACT;
+  if (INTEGRAL_TYPE_P (TREE_TYPE (stripped))
+      && (oa_check_ne_constant (env, substituted,
+				build_zero_cst (TREE_TYPE (stripped)),
+				&nz_reason)
+	  == OA_PROVEN_FALSE))
+    return OA_PROVEN_FALSE;
+  return OA_UNKNOWN;
+}
+
 static void
 oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 {
@@ -30020,11 +30082,8 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 	      if (!substituted)
 		continue;
 	      oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-	      if (oa_provable_p (substituted, env, &reason))
-		continue; /* Proven true: silently discharged.  */
-	      tree identity;
-	      if (oa_object_identity_decl (substituted, &identity)
-		  && env.symbolic_object_address_provable_p (identity))
+	      if (oa_symbolic_object_address_verdict (substituted, env,
+						      &reason))
 		continue; /* Proven true: silently discharged.  */
 	      if (strict)
 		oa_error_at (EXPR_LOCATION (call),
@@ -30049,57 +30108,24 @@ oa_handle_call_symbolic_precondition_obligation (tree call, oa_env &env)
 						strict);
 		  continue;
 		}
-	      if (oa_provably_nonzero_p (substituted, env))
-		continue; /* Proven true: silently discharged.  */
-	      /* Nonzero-ness is a value fact (copy-invariant, unlike
-		 identity), so the fallback symbolic_nz_provable_p check
-		 just below may as well see through a by-value copy too --
-		 harmless if oa_provably_nonzero_p (just above, which
-		 already does this internally) already succeeded.  */
-	      substituted = oa_strip_conversion_call (substituted);
-	      tree identity;
-	      if (oa_object_identity_decl (substituted, &identity)
-		  && env.symbolic_nz_provable_p (identity))
-		continue; /* Proven true: silently discharged.  */
-	      tree stripped = STRIP_ANY_LOCATION_WRAPPER (substituted);
-	      oa_range_fact scalar_range;
-	      if ((VAR_P (stripped) || TREE_CODE (stripped) == PARM_DECL)
-		  && env.contract_scalar_range_get (stripped, &scalar_range)
-		  && ((scalar_range.has_lo && scalar_range.lo > 0)
-		      || (scalar_range.has_hi && scalar_range.hi < 0)))
-		continue; /* Proven true: silently discharged.  */
-	      /* A call whose callee's symbolic postcondition guarantees a
-		 range excluding zero (e.g. 'r > 0'); oa_provably_nonzero_p
-		 above covers the conveyor flavor.  */
-	      if (TREE_CODE (stripped) == CALL_EXPR
-		  && oa_call_symbolic_range_p (stripped, &scalar_range)
-		  && !scalar_range.base
-		  && ((scalar_range.has_lo && scalar_range.lo > 0)
-		      || (scalar_range.has_hi && scalar_range.hi < 0)))
+	      oa_proof_result nz = oa_symbolic_nonzero_verdict (substituted, env);
+	      if (nz == OA_PROVEN_TRUE)
 		continue; /* Proven true: silently discharged.  */
 	      if (reported_nz_parms.add (arg))
 		continue; /* Already reported for this call.  */
-	      /* Exactly zero where CALL is ('x == 0 && f (x)').  */
-	      {
-		oa_unprovable_reason nz_reason = OA_UNPROVABLE_NO_FACT;
-		if (INTEGRAL_TYPE_P (TREE_TYPE (stripped))
-		    && (oa_check_ne_constant (env, substituted,
-					      build_zero_cst
-						(TREE_TYPE (stripped)),
-					      &nz_reason)
-			== OA_PROVEN_FALSE))
-		  {
-		    oa_error_at (EXPR_LOCATION (call),
-				 "argument %qE provably violates the "
-				 "precondition of %qD", substituted, callee);
-		    oa_inform (EXPR_LOCATION (call),
-			       "%qE is established to be exactly zero, but the "
-			       "precondition requires it to be nonzero",
-			       substituted);
-		    oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
-		    continue;
-		  }
-	      }
+	      substituted = oa_strip_conversion_call (substituted);
+	      if (nz == OA_PROVEN_FALSE)
+		{
+		  oa_error_at (EXPR_LOCATION (call),
+			       "argument %qE provably violates the "
+			       "precondition of %qD", substituted, callee);
+		  oa_inform (EXPR_LOCATION (call),
+			     "%qE is established to be exactly zero, but the "
+			     "precondition requires it to be nonzero",
+			     substituted);
+		  oa_inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  continue;
+		}
 	      if (strict)
 		oa_error_at (EXPR_LOCATION (call),
 			  "cannot prove that %qE is nonzero, as required by "
@@ -32827,11 +32853,17 @@ oa_env_check_scalar_range_fact (oa_analysis_env *env, tree expr, bool has_lo,
 				 tree lo, bool has_hi, tree hi)
 {
   oa_env &e = *reinterpret_cast<oa_env *> (env);
+  tree value = expr;
   expr = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (expr));
-  oa_range_fact established;
-  if (!e.contract_scalar_range_get (expr, &established))
-    return OA_UNKNOWN;
   oa_range_fact required = oa_range_fact_from_bounds (has_lo, lo, has_hi, hi);
+  oa_range_fact established;
+  /* As the built-in check (oa_handle_precondition_simple_range_
+     obligation, symbolic flavor): the range a symbolic postcondition or
+     precondition established, else the general range -- conveyor's
+     facts satisfy a symbolic obligation (the allowed direction).  */
+  if (!((VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
+	&& e.contract_scalar_range_get (expr, &established)))
+    return oa_env_check_range_subsumption (e, value, required, NULL);
   switch (oa_range_subsumption (established, required))
     {
     case OA_RANGE_SUBSUMED: return OA_PROVEN_TRUE;
@@ -44103,6 +44135,31 @@ oa_cdtor_receiver_strict_public (tree call)
 
 /* Thin wrapper over oa_match_ne_constant, for a plugin: CONJUNCT is
    'E != C' (or 'C != E'), C an integer constant.  */
+
+/* For a plugin: the symbolic flavor's is_object_address and nonzero
+   verdicts for EXPR, a callee precondition's argument at a call -- as
+   the built-in -fcontract-symbolic-proofs checks a symbolic
+   precondition's 'std::is_object_address (q)' and 'n != 0' conjuncts,
+   consulting symbolic postconditions' facts as well as the conveyor
+   ones.  */
+
+bool
+oa_env_check_symbolic_object_address (oa_analysis_env *env, tree expr,
+				      oa_unprovable_reason *reason_out)
+{
+  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+  bool r = oa_symbolic_object_address_verdict
+	     (expr, *reinterpret_cast<oa_env *> (env), &reason);
+  if (!r && reason_out)
+    *reason_out = reason;
+  return r;
+}
+
+oa_proof_result
+oa_env_check_symbolic_nonzero (oa_analysis_env *env, tree expr)
+{
+  return oa_symbolic_nonzero_verdict (expr, *reinterpret_cast<oa_env *> (env));
+}
 
 bool
 oa_match_ne_constant_public (tree conjunct, tree *expr_out, tree *cst_out)

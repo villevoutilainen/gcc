@@ -235,6 +235,67 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	{
 	  tree pred_fn, arg_decl;
 	  bool negated;
+	  /* 'std::is_object_address (q)' and 'n != 0' in a symbolic
+	     precondition, as the built-in engine checks them (not the
+	     mandatory check's business: it covers conveyor contracts).  */
+	  {
+	    tree arg;
+	    if (is_object_address_call_p (*conjuncts[i], &arg))
+	      {
+		STRIP_ANY_LOCATION_WRAPPER (arg);
+		tree substituted
+		  = oa_substitute_call_arg_public (callee, call, arg);
+		oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
+		if (substituted
+		    && !oa_env_check_symbolic_object_address (env, substituted,
+							      &reason))
+		  {
+		    if (strict)
+		      error_at (EXPR_LOCATION (call), "cannot prove "
+				"%<is_object_address%> for %qE, as required by "
+				"the precondition of %qD", substituted, callee);
+		    else
+		      warning_at (EXPR_LOCATION (call), 0, "cannot verify "
+				  "%<is_object_address%> for %qE, as required "
+				  "by the precondition of %qD", substituted,
+				  callee);
+		    if (const char *why = oa_unprovable_reason_text (reason))
+		      inform (EXPR_LOCATION (call), "%s", why);
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		  }
+		continue;
+	      }
+	    if (oa_nonzero_conjunct_p (*conjuncts[i], &arg))
+	      {
+		tree substituted
+		  = oa_substitute_call_arg_public (callee, call, arg);
+		if (!substituted)
+		  continue;
+		switch (oa_env_check_symbolic_nonzero (env, substituted))
+		  {
+		  case OA_PROVEN_TRUE:
+		    break;
+		  case OA_PROVEN_FALSE:
+		    error_at (EXPR_LOCATION (call), "argument %qE provably "
+			      "violates the precondition of %qD", substituted,
+			      callee);
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    break;
+		  case OA_UNKNOWN:
+		    if (strict)
+		      error_at (EXPR_LOCATION (call), "cannot prove that %qE "
+				"is nonzero, as required by the precondition "
+				"of %qD", substituted, callee);
+		    else
+		      warning_at (EXPR_LOCATION (call), 0, "cannot verify that "
+				  "%qE is nonzero, as required by the "
+				  "precondition of %qD", substituted, callee);
+		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
+		    break;
+		  }
+		continue;
+	      }
+	  }
 	  /* A symbolic relation of two or more of the callee's parameters
 	     ('related (a, b)'), checked as the built-in engine does.  */
 	  auto_vec<tree> rel_args;
