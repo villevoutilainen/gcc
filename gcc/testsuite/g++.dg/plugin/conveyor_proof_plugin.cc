@@ -295,8 +295,14 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	      if (!substituted)
 		continue;
 
+	      /* A float bound has its own query: oa_env_check_comparison
+		 tracks integer ranges only.  */
 	      oa_proof_result r
-		= oa_env_check_comparison (env, substituted, code, const_val);
+		= (TREE_CODE (const_val) == REAL_CST
+		   ? oa_env_check_float_comparison (env, substituted, code,
+						    const_val)
+		   : oa_env_check_comparison (env, substituted, code,
+					      const_val));
 
 	      unsigned idx;
 	      for (idx = 0; idx < range_params.length (); ++idx)

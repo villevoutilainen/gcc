@@ -44045,6 +44045,34 @@ oa_env_check_comparison (oa_analysis_env *env, tree expr, tree_code cmp,
 				     expr, cmp, const_val);
 }
 
+/* The floating-point counterpart of oa_env_check_comparison, for a
+   plugin: is EXPR, under ENV's facts, provably CMP CONST_VAL (a
+   REAL_CST) for every value it could take, for none, or unknown?  The
+   built-in obligation checks (oa_handle_precondition_simple_range_
+   obligation) combine a parameter's float bounds into one range and
+   check it with oa_env_check_float_range_subsumption; one bound at a
+   time gives the same verdict (subsumed iff each bound holds, disjoint
+   iff some bound is violated by the whole range).  */
+
+oa_proof_result
+oa_env_check_float_comparison (oa_analysis_env *env, tree expr,
+			       tree_code cmp, tree const_val)
+{
+  if (TREE_CODE (const_val) != REAL_CST
+      || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (expr)))
+    return OA_UNKNOWN;
+  /* Only what oa_float_tighten_range_bound turns into a bound: another
+     code would leave REQ unbounded, which anything subsumes.  */
+  if (cmp != LT_EXPR && cmp != LE_EXPR && cmp != GT_EXPR && cmp != GE_EXPR
+      && cmp != EQ_EXPR)
+    return OA_UNKNOWN;
+  oa_float_range_fact req;
+  oa_float_tighten_range_bound (req, cmp, TREE_REAL_CST (const_val),
+				TREE_TYPE (expr));
+  return oa_env_check_float_range_subsumption
+    (*reinterpret_cast<oa_env *> (env), expr, req, NULL, NULL, 0);
+}
+
 /* -fcontract-symbolic-runtime-checks: recognize a ptr->field OP const
    (or (*ptr).field OP const, the same shape after the front end
    desugars '->') conjunct -- the "reached through a persistent

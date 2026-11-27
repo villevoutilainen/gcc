@@ -510,6 +510,12 @@ extern void oa_walk_function_calls
 extern oa_proof_result oa_env_check_comparison
   (oa_analysis_env *env, tree expr, tree_code cmp, tree const_val);
 
+/* The same for a floating-point EXPR and a REAL_CST CONST_VAL, which
+   oa_env_check_comparison (integer ranges only) always answers
+   OA_UNKNOWN.  */
+extern oa_proof_result oa_env_check_float_comparison
+  (oa_analysis_env *env, tree expr, tree_code cmp, tree const_val);
+
 /* The relational-fact analogue of oa_env_check_comparison above: is
    SUBSTITUTED_PARAM (already positionally substituted at the plugin's
    own call site, the same way SUBSTITUTED_PARAM is for that function)

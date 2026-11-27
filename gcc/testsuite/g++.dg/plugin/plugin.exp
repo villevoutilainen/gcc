@@ -123,7 +123,9 @@ set plugin_test_list [list \
 	  conveyor-proof-assert-exemptions.C \
 	  conveyor-proof-postcondition-ok.C \
 	  conveyor-proof-postcondition-bad.C \
-	  conveyor-proof-postcondition-unknown.C } \
+	  conveyor-proof-postcondition-unknown.C \
+	  conveyor-proof-float-literal-ok.C \
+	  conveyor-proof-float-literal-bad.C } \
     { symbolic_proof_plugin.cc \
 	  symbolic-proof-predicate-ok.C \
 	  symbolic-proof-predicate-bad.C \
