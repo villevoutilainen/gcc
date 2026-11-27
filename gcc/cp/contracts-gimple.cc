@@ -9284,6 +9284,9 @@ cg_frange_requirement_verdict (const frange &have, const frange &need)
 static bool
 cg_proof_checks_p (tree contract, tree callee, bool conveyor)
 {
+  /* A plugin's (-fcontract-analysis-proofs=plugin).  */
+  if (flag_contract_analysis_proofs)
+    return false;
   if (flag_contract_analysis_engine == 0)
     return true;
   if (conveyor
@@ -21689,6 +21692,10 @@ cg_remove_contract_marks (function *fun)
     }
 }
 
+/* The function checkers GIMPLE analysis plugins registered.  */
+struct cg_plugin_check { cg_plugin_function_check fn; void *data; };
+static auto_vec<cg_plugin_check> cg_plugin_checks;
+
 namespace {
 
 const pass_data pass_data_contracts_gimple =
@@ -22182,11 +22189,36 @@ pass_contracts_gimple::execute_1 (function *fun)
       loop_optimizer_finalize ();
     }
 
+  /* The registered plugins' checks (cg_register_function_check).  */
+  for (const cg_plugin_check &check : cg_plugin_checks)
+    check.fn (fun, check.data);
+
   cg_remove_contract_marks (fun);
   return 0;
 }
 
 } // anon namespace
+
+void
+cg_register_function_check (cg_plugin_function_check fn, void *data)
+{
+  contract_register_analysis_plugin ();
+  cg_plugin_checks.safe_push ({ fn, data });
+}
+
+tree
+cg_contract_check_call_public (gcall *call, tree *struct_var, tree *cond,
+			       tree *decls)
+{
+  return cg_contract_check_call_p (call, struct_var, cond, decls);
+}
+
+tree
+cg_contract_check_decl_value_public (gcall *call, tree struct_var,
+				     tree decls, tree decl)
+{
+  return cg_contract_check_decl_value (call, struct_var, decls, decl);
+}
 
 gimple_opt_pass *
 make_pass_contracts_gimple (gcc::context *ctxt)

@@ -7195,6 +7195,10 @@ init_builtin_contract_violation_type ()
   return builtin_contract_violation_type;
 }
 
+/* Whether a contract analysis plugin registered itself
+   (contract_register_analysis_plugin).  */
+static bool contract_analysis_plugin_registered;
+
 /* Early initialisation of types and functions we will use.  */
 void
 init_contracts ()
@@ -7202,6 +7206,11 @@ init_contracts ()
   init_terminate_fn ();
   init_builtin_contract_violation_type ();
   lang_post_pch_load = contracts_post_pch_load;
+
+  /* The plugins are initialized (and register) before the front end.  */
+  if (flag_contract_analysis_proofs && !contract_analysis_plugin_registered)
+    error ("%<-fcontract-analysis-proofs=plugin%> needs a contract analysis "
+	   "plugin, but none is loaded");
 
   /* The experimental GIMPLE-pass contract-checking engine (-fcontract-
      conveyor-proofs-gimple / -fcontract-symbolic-proofs-gimple) is
@@ -23830,7 +23839,7 @@ oa_contract_symbolic_active_p (tree contract, tree owner_fn = NULL_TREE)
    traits as conveyor).  Symbolic mirror immediately below.  */
 
 static bool
-oa_contract_conveyor_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
+oa_contract_conveyor_analysis_forced_1 (tree contract, tree owner_fn)
 {
   /* The scope's static info (and assertion_declaration_info) needs the
      function, which a caller checking its own contracts leaves out.  */
@@ -23846,7 +23855,7 @@ oa_contract_conveyor_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE
 }
 
 static bool
-oa_contract_symbolic_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
+oa_contract_symbolic_analysis_forced_1 (tree contract, tree owner_fn)
 {
   /* The scope's static info (and assertion_declaration_info) needs the
      function, which a caller checking its own contracts leaves out.  */
@@ -23859,6 +23868,24 @@ oa_contract_symbolic_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE
   contract_check_side side = contract_side_of (contract, owner_fn);
   return contract_control_analyzed_symbolic (ctrl, side, owner_fn)
 	 || contract_control_proven_symbolic (ctrl, side, owner_fn);
+}
+
+/* Whether the engines check CONTRACT whatever the proof flags say:
+   forced (above), unless the proof checks are a plugin's
+   (-fcontract-analysis-proofs=plugin), forced ones included.  */
+
+static bool
+oa_contract_conveyor_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
+{
+  return (!flag_contract_analysis_proofs
+	  && oa_contract_conveyor_analysis_forced_1 (contract, owner_fn));
+}
+
+static bool
+oa_contract_symbolic_analysis_forced_p (tree contract, tree owner_fn = NULL_TREE)
+{
+  return (!flag_contract_analysis_proofs
+	  && oa_contract_symbolic_analysis_forced_1 (contract, owner_fn));
 }
 
 /* True if CONTRACT's control object is proven_conveyor specifically (not
@@ -42545,21 +42572,41 @@ oa_contract_symbolic_strict_public (tree contract, tree owner_fn)
    control object, which exempts it from being checked (it is trusted as
    written), as oa_handle_postcondition_stmt and its siblings do.  */
 
-/* For a plugin: whether the built-in engine checks CONTRACT (of
-   OWNER_FN) whatever the command line says -- its control object is
-   analyzed_ or proven_conveyor (resp. _symbolic) -- so that a plugin
-   checking it as well would repeat the built-in diagnostics.  */
+/* For a plugin: whether CONTRACT's (of OWNER_FN) control object forces
+   its analysis whatever the proof flags say -- analyzed_ or
+   proven_conveyor (resp. _symbolic).  Unless the proof checks are a
+   plugin's (contract_analysis_plugin_proofs_p), the built-in engine
+   checks such a contract, and a plugin checking it as well would repeat
+   the built-in diagnostics.  */
 
 bool
 oa_contract_conveyor_analysis_forced_public (tree contract, tree owner_fn)
 {
-  return oa_contract_conveyor_analysis_forced_p (contract, owner_fn);
+  return oa_contract_conveyor_analysis_forced_1 (contract, owner_fn);
 }
 
 bool
 oa_contract_symbolic_analysis_forced_public (tree contract, tree owner_fn)
 {
-  return oa_contract_symbolic_analysis_forced_p (contract, owner_fn);
+  return oa_contract_symbolic_analysis_forced_1 (contract, owner_fn);
+}
+
+/* See contracts.h.  */
+
+void
+contract_register_analysis_plugin ()
+{
+  contract_analysis_plugin_registered = true;
+}
+
+/* See contracts.h.  */
+
+bool
+contract_analysis_plugin_proofs_p (bool conveyor)
+{
+  return (flag_contract_analysis_proofs
+	  && (conveyor ? flag_contract_plugin_conveyor_proofs
+		       : flag_contract_plugin_symbolic_proofs));
 }
 
 bool

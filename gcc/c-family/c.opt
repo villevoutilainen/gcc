@@ -1966,6 +1966,26 @@ fcontract-analysis-engine=
 C++ ObjC++ Joined RejectNegative Enum(contract_analysis_engine) Var(flag_contract_analysis_engine) Init(0)
 -fcontract-analysis-engine=[ast|gimple|both]	Select which engine reports conveyor and symbolic contract analysis diagnostics (defaults to ast).  gimple and both turn on -fcontract-conveyor-proofs-gimple and -fcontract-symbolic-proofs-gimple; gimple also silences the AST engine's analysis diagnostics, though the AST walk still runs for the results other parts of the compiler need from it.
 
+Enum
+Name(contract_analysis_proofs) Type(int) UnknownError(unrecognized contract analysis proofs provider %qs)
+
+EnumValue
+Enum(contract_analysis_proofs) String(builtin) Value(0)
+
+EnumValue
+Enum(contract_analysis_proofs) String(plugin) Value(1)
+
+fcontract-analysis-proofs=
+C++ ObjC++ Joined RejectNegative Enum(contract_analysis_proofs) Var(flag_contract_analysis_proofs) Init(0)
+-fcontract-analysis-proofs=[builtin|plugin]	Select who makes the contract analysis proof checks (defaults to builtin).  With plugin, the analysis engines make none, for contracts whose control object forces analysis too, and leave them to a contract analysis plugin; -fcontract-conveyor-proofs and -fcontract-symbolic-proofs then select the flavors the plugin checks.  The engines still make the mandatory checks.
+
+; The proof flavors -fcontract-analysis-proofs=plugin leaves to a plugin.
+Variable
+int flag_contract_plugin_conveyor_proofs
+
+Variable
+int flag_contract_plugin_symbolic_proofs
+
 fcontract-symbolic-proofs
 C++ ObjC++ Var(flag_contract_symbolic_proofs) Init(0)
 Statically check that a symbolic contract's precondition is established

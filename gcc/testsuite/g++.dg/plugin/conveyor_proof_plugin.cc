@@ -1023,6 +1023,7 @@ plugin_init (struct plugin_name_args *plugin_info,
 {
   const char *plugin_name = plugin_info->base_name;
 
+  contract_register_analysis_plugin ();
   register_callback (plugin_name, PLUGIN_PRE_GENERICIZE,
 		     conveyor_proof_pre_genericize, NULL);
   return 0;

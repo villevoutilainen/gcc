@@ -248,6 +248,34 @@ public:
 extern vec<tree, va_gc> *&contracts_gimple_eager_check_queue (void);
 extern void contracts_gimple_eager_check_type_complete (tree type);
 
+/* GIMPLE analysis plugins.  A plugin registers a function checker with
+   cg_register_function_check; pass_contracts_gimple calls every
+   registered checker, in registration order, for each function it
+   checks, after its own checks: FUN is in SSA form and is cfun, its
+   dominance information is computed, no ranger is enabled, and the
+   symbolic contracts' IFN_CONTRACT_MARK markers are still in place.
+   The engine's own proof checks follow -fcontract-conveyor-proofs and
+   -fcontract-symbolic-proofs (or a control object that forces
+   analysis), so a plugin replacing them is run without those flags.  */
+/* A contract analysis plugin, AST or GIMPLE, registers itself from its
+   plugin_init (cg_register_function_check does it for a GIMPLE one):
+   -fcontract-analysis-proofs=plugin is an error without one.  */
+extern void contract_register_analysis_plugin ();
+/* Whether the proof checks in the conveyor flavor (CONVEYOR) or the
+   symbolic one are a plugin's: -fcontract-analysis-proofs=plugin, and
+   the proof flags ask for them.  */
+extern bool contract_analysis_plugin_proofs_p (bool conveyor);
+typedef void (*cg_plugin_function_check) (function *fun, void *data);
+extern void cg_register_function_check (cg_plugin_function_check, void *);
+/* Lowering readers for such plugins: whether CALL is a contract check
+   (or a symbolic contract's marker), returning its contract and setting
+   the check's capture struct variable, its condition as written and the
+   decls it captures; and the value a captured DECL had at the check.  */
+extern tree cg_contract_check_call_public (gcall *call, tree *struct_var,
+					   tree *cond, tree *decls);
+extern tree cg_contract_check_decl_value_public (gcall *call, tree struct_var,
+						 tree decls, tree decl);
+
 /* Drains every DECL_DECLARED_CONSTEXPR_P function whose own eager
    check (above) was deferred until genuine end-of-TU -- called from
    c_parse_final_cleanups (decl2.cc) right after at_eof is set to 3.

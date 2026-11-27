@@ -1331,6 +1331,24 @@ c_common_post_options (const char **pfilename)
 			   flag_contract_symbolic_proofs_gimple, 1);
     }
 
+  /* -fcontract-analysis-proofs=plugin: the proof checks the flags ask for
+     are a plugin's (contracts.cc, contract_analysis_plugin_proofs_p); the
+     engines see the flags off.  The older -fcontract-*-proofs-gimple
+     flags, given explicitly, ask for them too.  */
+  if (flag_contract_analysis_proofs == 1)
+    {
+      flag_contract_plugin_conveyor_proofs
+	= (flag_contract_conveyor_proofs
+	   || (OPTION_SET_P (flag_contract_conveyor_proofs_gimple)
+	       && flag_contract_conveyor_proofs_gimple));
+      flag_contract_plugin_symbolic_proofs
+	= (flag_contract_symbolic_proofs
+	   || (OPTION_SET_P (flag_contract_symbolic_proofs_gimple)
+	       && flag_contract_symbolic_proofs_gimple));
+      flag_contract_conveyor_proofs = 0;
+      flag_contract_symbolic_proofs = 0;
+    }
+
   /* The GIMPLE engine runs on the lowered function, which -fsyntax-only
      never builds (P4445 BUG-39).  */
   if (flag_syntax_only
