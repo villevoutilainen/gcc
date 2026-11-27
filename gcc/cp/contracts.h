@@ -485,14 +485,24 @@ extern const char *oa_unprovable_reason_text (oa_unprovable_reason reason);
    oa_env_check_predicate_fact, etc.), just without ever calling
    oa_substitute_call_arg/oa_substitute_call_expr first. Both new
    parameters default to NULL, so every existing caller wanting only
-   call-site observation is unaffected.  */
+   call-site observation is unaffected.
+
+   POST_CALLBACK, if non-NULL, fires once per postcondition (POSTCONDITION_
+   STMT) of FNDECL, with the environment at the function's exit -- merged
+   across every return, the postcondition's named result bound from each
+   returned value -- just before the built-in engine checks the
+   postcondition against it: a plugin checks its conjuncts the same way
+   as a contract_assert's (oa_check_assertion_conjunct_public).  */
 extern void oa_walk_function_calls
   (tree fndecl,
    void (*callback) (tree call, tree callee, oa_analysis_env *env, void *data),
    void *data,
    void (*assert_callback) (tree stmt, oa_analysis_env *env,
 			     void *data) = nullptr,
-   void *assert_data = nullptr);
+   void *assert_data = nullptr,
+   void (*post_callback) (tree contract, oa_analysis_env *env,
+			   void *data) = nullptr,
+   void *post_data = nullptr);
 
 /* Is EXPR, evaluated under ENV's current facts, provably CMP CONST_VAL
    for every value it could take, provably CMP CONST_VAL for no value it
@@ -846,6 +856,16 @@ extern bool oa_relational_literal_holds (tree_code code, tree a, tree b);
 /* Is CONTRACT (a PRECONDITION_STMT/POSTCONDITION_STMT belonging to
    OWNER_FN) currently conveyor-active (non-ignored)?  */
 extern bool oa_contract_conveyor_active_public (tree contract, tree owner_fn);
+
+/* Whether an unprovable conjunct of CONTRACT (of OWNER_FN) is an error
+   ("cannot prove") rather than a warning ("cannot verify"): its control
+   object is proven_conveyor (resp. proven_symbolic).  */
+extern bool oa_contract_conveyor_strict_public (tree contract, tree owner_fn);
+extern bool oa_contract_symbolic_strict_public (tree contract, tree owner_fn);
+
+/* Whether CONTRACT (of OWNER_FN) is never_proven: trusted as written,
+   exempt from being checked.  */
+extern bool oa_contract_never_proven_public (tree contract, tree owner_fn);
 
 /* oa_match_simple_comparison above, with its own "must be a bare
    PARM_DECL" restriction on the non-literal side dropped -- accepts

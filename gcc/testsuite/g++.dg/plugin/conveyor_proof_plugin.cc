@@ -585,10 +585,17 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
    exactly as check_call filters to conveyor-active preconditions.  */
 
 static void
-check_assert (tree stmt, oa_analysis_env *env, void * /*data*/)
+check_assert (tree stmt, oa_analysis_env *env, void *data)
 {
-  if (!oa_contract_conveyor_active_public (stmt, NULL_TREE))
+  tree fndecl = (tree) data;
+  /* As the built-in engine: a never_proven assertion is trusted as
+     written; a bare std::is_object_address conjunct is the mandatory
+     check's business; an unprovable conjunct is an error only for a
+     strict (proven_conveyor) assertion.  */
+  if (!oa_contract_conveyor_active_public (stmt, fndecl)
+      || oa_contract_never_proven_public (stmt, fndecl))
     return;
+  bool strict = oa_contract_conveyor_strict_public (stmt, fndecl);
 
   tree cond = CONTRACT_CONDITION (stmt);
   if (cond == NULL_TREE || cond == error_mark_node)
@@ -598,6 +605,9 @@ check_assert (tree stmt, oa_analysis_env *env, void * /*data*/)
   oa_collect_conjuncts_public (&cond, &conjuncts);
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
+      tree oa_arg;
+      if (is_object_address_call_p (*conjuncts[i], &oa_arg))
+	continue;
       auto_vec<tree *> disjuncts;
       oa_collect_disjuncts_public (conjuncts[i], &disjuncts);
 
@@ -643,9 +653,63 @@ check_assert (tree stmt, oa_analysis_env *env, void * /*data*/)
 		    diag_expr);
 	  break;
 	case OA_UNKNOWN:
-	  warning_at (EXPR_LOCATION (diag_expr), 0,
-		      "cannot verify %<contract_assert%> condition %qE",
+	  if (strict)
+	    error_at (EXPR_LOCATION (diag_expr),
+		      "cannot prove %<contract_assert%> condition %qE",
 		      diag_expr);
+	  else
+	    warning_at (EXPR_LOCATION (diag_expr), 0,
+			"cannot verify %<contract_assert%> condition %qE",
+			diag_expr);
+	  break;
+	}
+    }
+}
+
+/* POST_CALLBACK for oa_walk_function_calls: a function's own conveyor
+   postcondition, checked against ENV, the environment at the function's
+   exit (merged across every return), conjunct by conjunct, the same way
+   the built-in engine does it: a never_proven postcondition is trusted
+   as written; a bare std::is_object_address conjunct is the mandatory
+   check's business; an unprovable conjunct is an error only for a strict
+   (proven_conveyor) postcondition.  */
+
+static void
+check_post (tree contract, oa_analysis_env *env, void *data)
+{
+  tree fndecl = (tree) data;
+  if (!oa_contract_conveyor_active_public (contract, fndecl)
+      || oa_contract_never_proven_public (contract, fndecl))
+    return;
+  tree cond = CONTRACT_CONDITION (contract);
+  if (cond == NULL_TREE || cond == error_mark_node)
+    return;
+  bool strict = oa_contract_conveyor_strict_public (contract, fndecl);
+
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree conjunct = *conjuncts[i];
+      tree oa_arg;
+      if (is_object_address_call_p (conjunct, &oa_arg))
+	continue;
+      switch (oa_check_assertion_conjunct_public (env, conjunct,
+						   /*require_conveyor=*/true))
+	{
+	case OA_PROVEN_TRUE:
+	  break;
+	case OA_PROVEN_FALSE:
+	  error_at (EXPR_LOCATION (conjunct),
+		    "postcondition condition %qE is provably false", conjunct);
+	  break;
+	case OA_UNKNOWN:
+	  if (strict)
+	    error_at (EXPR_LOCATION (conjunct),
+		      "cannot prove postcondition condition %qE", conjunct);
+	  else
+	    warning_at (EXPR_LOCATION (conjunct), 0,
+			"cannot verify postcondition condition %qE", conjunct);
 	  break;
 	}
     }
@@ -661,7 +725,8 @@ conveyor_proof_pre_genericize (void *event_data, void * /*data*/)
   tree fndecl = (tree) event_data;
   if (TREE_CODE (fndecl) != FUNCTION_DECL)
     return;
-  oa_walk_function_calls (fndecl, check_call, NULL, check_assert, NULL);
+  oa_walk_function_calls (fndecl, check_call, NULL, check_assert, fndecl,
+			  check_post, fndecl);
 }
 
 int

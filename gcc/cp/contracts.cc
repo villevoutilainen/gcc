@@ -33823,6 +33823,17 @@ static void *oa_call_site_callback_data;
 static void (*oa_assert_site_callback) (tree, oa_env *, void *);
 static void *oa_assert_site_callback_data;
 
+/* The postcondition analogue of oa_assert_site_callback: fires once per
+   POSTCONDITION_STMT of the function being walked, with the environment
+   at its exit (merged across every return, oa_postcondition_merge_env),
+   just before oa_handle_postcondition_stmt checks the postcondition
+   against it -- so a plugin can check a function's own postconditions
+   against its body as the built-in engine does.  Set/cleared by
+   oa_walk_function_calls, like OA_CALL_SITE_CALLBACK.  */
+
+static void (*oa_post_site_callback) (tree, oa_env *, void *);
+static void *oa_post_site_callback_data;
+
 /* D4324 (see .claude/plans/lazy-stirring-pearl.md, Part 4): a callee-
    must-satisfy-its-own-precondition check (oa_handle_call_conveyor_
    proof_obligation and its symbolic/plain siblings, all reached from
@@ -40850,6 +40861,9 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
   if (oa_validating_declaration)
     return;
 
+  if (oa_post_site_callback && oa_diagnostics_active)
+    oa_post_site_callback (contract, &ret_env, oa_post_site_callback_data);
+
   if (!never_proven)
     {
       if (conveyor_ok)
@@ -42355,19 +42369,26 @@ validate_pending_contract_predicates ()
    stands *before* oa_handle_assertion_stmt processes that statement --
    see oa_assert_site_callback's own comment for why a contract_assert's
    own condition needs no positional substitution, unlike a call's.
-   Defaults to NULL (no plugin passing it is unaffected).  */
+   Defaults to NULL (no plugin passing it is unaffected).
+
+   POST_CALLBACK likewise fires once per postcondition of FNDECL, with
+   the environment at its exit -- see oa_post_site_callback.  */
 
 void
 oa_walk_function_calls (tree fndecl,
 			 void (*callback) (tree, tree, oa_analysis_env *, void *),
 			 void *data,
 			 void (*assert_callback) (tree, oa_analysis_env *, void *),
-			 void *assert_data)
+			 void *assert_data,
+			 void (*post_callback) (tree, oa_analysis_env *, void *),
+			 void *post_data)
 {
   void (*saved_callback) (tree, tree, oa_env *, void *) = oa_call_site_callback;
   void *saved_data = oa_call_site_callback_data;
   void (*saved_assert_callback) (tree, oa_env *, void *) = oa_assert_site_callback;
   void *saved_assert_data = oa_assert_site_callback_data;
+  void (*saved_post_callback) (tree, oa_env *, void *) = oa_post_site_callback;
+  void *saved_post_data = oa_post_site_callback_data;
 
   oa_call_site_callback
     = reinterpret_cast<void (*) (tree, tree, oa_env *, void *)> (callback);
@@ -42375,6 +42396,9 @@ oa_walk_function_calls (tree fndecl,
   oa_assert_site_callback
     = reinterpret_cast<void (*) (tree, oa_env *, void *)> (assert_callback);
   oa_assert_site_callback_data = assert_data;
+  oa_post_site_callback
+    = reinterpret_cast<void (*) (tree, oa_env *, void *)> (post_callback);
+  oa_post_site_callback_data = post_data;
 
   oa_resolve_object_address_in_function_1 (fndecl);
 
@@ -42382,6 +42406,8 @@ oa_walk_function_calls (tree fndecl,
   oa_call_site_callback_data = saved_data;
   oa_assert_site_callback = saved_assert_callback;
   oa_assert_site_callback_data = saved_assert_data;
+  oa_post_site_callback = saved_post_callback;
+  oa_post_site_callback_data = saved_post_data;
 }
 
 /* Thin wrapper over oa_collect_conjuncts, for a plugin (see
@@ -42439,6 +42465,37 @@ bool
 oa_contract_conveyor_active_public (tree contract, tree owner_fn)
 {
   return oa_contract_conveyor_active_p (contract, owner_fn);
+}
+
+/* Thin wrappers over oa_contract_conveyor_strict_p/oa_contract_symbolic_
+   strict_p, for a plugin: whether an unprovable conjunct of CONTRACT (of
+   OWNER_FN) is an error ("cannot prove") rather than a warning.  Unlike
+   the _cached_p pair, these don't depend on a walk having seen CONTRACT
+   first.  */
+
+bool
+oa_contract_conveyor_strict_public (tree contract, tree owner_fn)
+{
+  return oa_contract_conveyor_strict_p (contract, owner_fn);
+}
+
+bool
+oa_contract_symbolic_strict_public (tree contract, tree owner_fn)
+{
+  return oa_contract_symbolic_strict_p (contract, owner_fn);
+}
+
+/* For a plugin: whether CONTRACT (of OWNER_FN) has a never_proven
+   control object, which exempts it from being checked (it is trusted as
+   written), as oa_handle_postcondition_stmt and its siblings do.  */
+
+bool
+oa_contract_never_proven_public (tree contract, tree owner_fn)
+{
+  contract_config_scope ccs (contract, owner_fn);
+  return contract_control_never_proven (CONTRACT_CONTROL_OBJECT (contract),
+					contract_side_of (contract, owner_fn),
+					owner_fn, /*quiet=*/true);
 }
 
 /* Thin wrapper over oa_match_general_comparison, for a plugin. Every

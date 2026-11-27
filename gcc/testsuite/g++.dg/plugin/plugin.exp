@@ -119,7 +119,11 @@ set plugin_test_list [list \
 	  conveyor-proof-assert-unknown.C \
 	  conveyor-proof-assert-disjunct-ok.C \
 	  conveyor-proof-assert-disjunct-bad.C \
-	  conveyor-proof-assert-disjunct-unknown.C } \
+	  conveyor-proof-assert-disjunct-unknown.C \
+	  conveyor-proof-assert-exemptions.C \
+	  conveyor-proof-postcondition-ok.C \
+	  conveyor-proof-postcondition-bad.C \
+	  conveyor-proof-postcondition-unknown.C } \
     { symbolic_proof_plugin.cc \
 	  symbolic-proof-predicate-ok.C \
 	  symbolic-proof-predicate-bad.C \
