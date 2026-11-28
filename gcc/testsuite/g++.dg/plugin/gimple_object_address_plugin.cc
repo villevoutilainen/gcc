@@ -1904,21 +1904,37 @@ shifted_value (tree v, dom_fact_state &state, tree *base, widest_int *dlo,
       dr.has_lo = dr.has_hi = true;
       dr.lo = dr.hi = wi::to_widest (d);
     }
-  else if (!range_of (d, &dr) || !dr.has_lo || !dr.has_hi)
+  else if (!range_of (d, &dr) || (!dr.has_lo && !dr.has_hi))
     return false;
-  *dlo = plus ? dr.lo : -dr.hi;
-  *dhi = plus ? dr.hi : -dr.lo;
+  /* An unknown bound of D is infinite: what needs it isn't proven.  */
+  widest_int inf = wi::lshift (widest_int (1), 200);
+  widest_int lo = dr.has_lo ? dr.lo : -inf, hi = dr.has_hi ? dr.hi : inf;
+  *dlo = plus ? lo : -hi;
+  *dhi = plus ? hi : -lo;
   tree type = TREE_TYPE (v);
-  /* No result may leave the type: Y's range (an unknown bound is the
-     type's own).  For a type whose overflow is undefined a constant
+  /* No result may leave a wrapping type: Y's range (an unknown bound is
+     the type's own).  For a type whose overflow is undefined the shift
      moves the fact as the language has it.  */
-  if (!TYPE_OVERFLOW_UNDEFINED (type) || TREE_CODE (d) != INTEGER_CST)
+  if (!TYPE_OVERFLOW_UNDEFINED (type))
     {
       oa_range_lite r;
       widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
       widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
       if (!range_of (y, &r))
 	r = oa_range_lite ();
+      /* '(Y - A) < X', X an accessor's result, no greater than its
+	 type's maximum: so is Y below that plus A.  */
+      if (call_rel_fact *g = state.call_rel.get (value_key (y)))
+	if ((g->code == LT_EXPR || g->code == LE_EXPR)
+	    && INTEGRAL_TYPE_P (TREE_TYPE (TREE_TYPE (g->accessor))))
+	  {
+	    widest_int xmax
+	      = wi::to_widest (TYPE_MAX_VALUE (TREE_TYPE (TREE_TYPE
+							   (g->accessor))));
+	    widest_int h = xmax + g->offset - (g->code == LT_EXPR ? 1 : 0);
+	    if (!r.has_hi || h < r.hi)
+	      r.has_hi = true, r.hi = h;
+	  }
       widest_int ylo = r.has_lo ? r.lo : tmin, yhi = r.has_hi ? r.hi : tmax;
       if (ylo + *dlo < tmin || yhi + *dhi > tmax)
 	return false;
@@ -3595,6 +3611,8 @@ assertion_verdict (tree c, gcall *call, tree struct_var, tree decls,
 	      if (!v && (VAR_P (a) || TREE_CODE (a) == PARM_DECL)
 		  && AGGREGATE_TYPE_P (TREE_TYPE (a)))
 		v = a;
+	      if (!v && TREE_CODE (a) == COMPONENT_REF)
+		v = a;
 	      ids[i] = v ? relation_operand_identity (pred_fn, i, v) : NULL_TREE;
 	    }
 	  if (!ids[i])
@@ -3863,9 +3881,12 @@ establish_assertion_facts (gcall *call, dom_fact_state &state)
 	    {
 	      tree ra = oa_relation_strip_arg (rargs[a]);
 	      tree v = TREE_CODE (ra) == INTEGER_CST ? ra : value_of (ra);
-	      /* A variable whose value is in memory: itself.  */
+	      /* A variable whose value is in memory: itself; a member of one
+		 ('r.first'): its slot.  */
 	      if (!v && (VAR_P (ra) || TREE_CODE (ra) == PARM_DECL)
 		  && AGGREGATE_TYPE_P (TREE_TYPE (ra)))
+		v = ra;
+	      if (!v && TREE_CODE (ra) == COMPONENT_REF)
 		v = ra;
 	      all = v && (ids[a] = relation_operand_identity (pred_fn, a, v));
 	    }
