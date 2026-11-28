@@ -3345,6 +3345,14 @@ establish_assertion_facts (gcall *call, dom_fact_state &state)
 	    if (tree v = value_of (arg))
 	      if (TREE_CODE (v) == SSA_NAME)
 		state.voa.put (v, conveyor);
+	  /* A variable's own address ('&a', '__builtin_addressof (a)'): an
+	     object again if a call may have ended it.  */
+	  tree lv = (TREE_CODE (arg) == ADDR_EXPR ? TREE_OPERAND (arg, 0)
+		     : NULL_TREE);
+	  if (lv)
+	    if (tree base = get_base_address (tree_strip_any_location_wrapper (lv)))
+	      if (VAR_P (base) || TREE_CODE (base) == PARM_DECL)
+		state.ended.remove (base);
 	  continue;
 	}
       if (oa_nonzero_conjunct_p (c, &decl))
@@ -4488,6 +4496,16 @@ provable_object_address_p (tree val, hash_set<tree> &established,
 					  in_progress);
       return false;
     }
+
+  /* The function's return slot, a class returned by invisible reference:
+     the caller's storage of the object being returned.  */
+  {
+    tree r = (TREE_CODE (val) == SSA_NAME && SSA_NAME_IS_DEFAULT_DEF (val)
+	      ? SSA_NAME_VAR (val) : val);
+    if (r && TREE_CODE (r) == RESULT_DECL && DECL_BY_REFERENCE (r)
+	&& DECL_CONTEXT (r) == current_function_decl)
+      return true;
+  }
 
   /* An object a call may have ended since.  */
   if (current_ended && TREE_CODE (val) == SSA_NAME)
