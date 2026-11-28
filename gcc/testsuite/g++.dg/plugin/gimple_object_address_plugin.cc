@@ -900,6 +900,10 @@ collect_float_field_groups (tree cond, vec<float_field_group> *out,
 
 static tree scalar_value_origin (tree);
 
+/* The objects the walk's state says may have ended, at the call being
+   checked (check_call); NULL outside one.  */
+static hash_set<tree> *current_ended;
+
 /* The floating-point values parameters were trusted to have on entry
    (their own preconditions), keyed by the incoming SSA value.  */
 
@@ -994,6 +998,10 @@ struct dom_fact_state
   hash_map<tree, value_rel_fact> vrel;
   /* A floating-point member's range, keyed (identity, field).  */
   hash_map<oa_field_key_hash, frange> ffield;
+  /* The objects a call that may end lifetimes was given a route to: no
+     longer known to be objects (the call-ends-lifetime rule), until
+     constructed again.  On any path, so a union at joins.  */
+  hash_set<tree> ended;
 };
 
 /* The object pointer VAL points to: a variable whose address it is, or
@@ -3082,6 +3090,9 @@ copy_state (dom_fact_state &to, const dom_fact_state &from)
   to.ffield.empty ();
   for (auto it : from.ffield)
     to.ffield.put (it.first, it.second);
+  to.ended.empty ();
+  for (tree t : from.ended)
+    to.ended.add (t);
 }
 
 /* Meet B into A: what holds in both.  A field's ranges join to the
@@ -3241,6 +3252,8 @@ meet_state (dom_fact_state &a, const dom_fact_state &b)
     }
   for (auto &k : fdrop)
     a.ffield.remove (k);
+  for (tree t : const_cast<hash_set<tree> &> (b.ended))
+    a.ended.add (t);
 }
 
 /* Whether A and B hold the same facts.  */
@@ -3296,6 +3309,12 @@ same_state (const dom_fact_state &a, const dom_fact_state &b)
 	       (b.call);
   auto &bcr = const_cast<hash_map<tree, call_rel_fact> &> (b.call_rel);
   auto &bvr = const_cast<hash_map<tree, value_rel_fact> &> (b.vrel);
+  auto &bend = const_cast<hash_set<tree> &> (b.ended);
+  if (a.ended.elements () != b.ended.elements ())
+    return false;
+  for (tree t : a.ended)
+    if (!bend.contains (t))
+      return false;
   auto &bff = const_cast<hash_map<oa_field_key_hash, frange> &> (b.ffield);
   if (a.ffield.elements () != b.ffield.elements ())
     return false;
@@ -3494,6 +3513,101 @@ process_lifetime_call (gcall *call, dom_fact_state &state)
     }
 }
 
+/* Where pointer P points: the variable or the pointer value of the
+   object reached -- or NULL_TREE with *MEMBER set to the member lvalue
+   the route stops at: a member's address reaches the object it lies in
+   only where a callee given it may legally get there
+   (contract_member_reaches_enclosing_p), and, without CLIMB, never.  */
+
+static tree
+route_object (tree p, tree *member, bool climb = true)
+{
+  *member = NULL_TREE;
+  for (int i = 0; i < 16; ++i)
+    {
+      if (TREE_CODE (p) == ADDR_EXPR)
+	{
+	  tree ref = TREE_OPERAND (p, 0);
+	  while (climb && contract_member_reaches_enclosing_p (ref))
+	    ref = TREE_OPERAND (ref, 0);
+	  if (handled_component_p (ref))
+	    {
+	      *member = ref;
+	      return NULL_TREE;
+	    }
+	  if (TREE_CODE (ref) == MEM_REF)
+	    {
+	      p = TREE_OPERAND (ref, 0);
+	      continue;
+	    }
+	  return ref;
+	}
+      if (TREE_CODE (p) != SSA_NAME || SSA_NAME_IS_DEFAULT_DEF (p))
+	return p;
+      gimple *def = SSA_NAME_DEF_STMT (p);
+      if (!is_gimple_assign (def))
+	return p;
+      tree_code code = gimple_assign_rhs_code (def);
+      if (gimple_assign_single_p (def) || CONVERT_EXPR_CODE_P (code)
+	  || code == POINTER_PLUS_EXPR)
+	p = gimple_assign_rhs1 (def);
+      else
+	return p;
+    }
+  return p;
+}
+
+/* A call that may end lifetimes is given pointer ARG: what it routes to
+   is no longer known to be an object -- the pointer value, and the object
+   or member reached (route_object; a destructor, !CLIMB, reaches only the
+   subobject it runs on).  Not a compiler temporary or hidden variable,
+   which no user code can name, nor through a hidden variable (a
+   range-for's '__for_range').  */
+
+static void
+end_route (tree arg, dom_fact_state &state, bool climb)
+{
+  if (!POINTER_TYPE_P (TREE_TYPE (arg)) || TREE_CODE (arg) == INTEGER_CST)
+    return;
+  if (TREE_CODE (arg) == SSA_NAME && SSA_NAME_VAR (arg)
+      && contract_hidden_var_p (SSA_NAME_VAR (arg)))
+    return;
+  tree member;
+  tree root = route_object (arg, &member, climb);
+  if (!member && root
+      && (contract_hidden_var_p (root)
+	  || (VAR_P (root) && DECL_ARTIFICIAL (root) && !DECL_NAME (root))))
+    return;
+  if (TREE_CODE (arg) == SSA_NAME)
+    state.ended.add (arg);
+  if (member)
+    state.ended.add (member);
+  else if (root && (DECL_P (root) || TREE_CODE (root) == SSA_NAME))
+    state.ended.add (root);
+}
+
+/* A constructor run on what ARG points to: an object again.  */
+
+static void
+restore_route (tree arg, dom_fact_state &state)
+{
+  tree member;
+  tree root = route_object (arg, &member, false);
+  if (TREE_CODE (arg) == SSA_NAME)
+    state.ended.remove (arg);
+  if (member)
+    {
+      auto_vec<tree, 4> drop;
+      for (tree t : state.ended)
+	if (operand_equal_p (t, member, 0))
+	  drop.safe_push (t);
+      for (tree t : drop)
+	state.ended.remove (t);
+    }
+  else if (root)
+    state.ended.remove (root);
+}
+
 static void check_call (gcall *, hash_set<tree> &, hash_set<tree> &,
 			hash_map<tree, oa_range_lite> &,
 			hash_map<tree, rel_fact_lite> &, gimple_ranger *);
@@ -3535,13 +3649,27 @@ transfer_block (basic_block bb, function *fun, dom_fact_state &state,
       if (report)
 	{
 	  value_facts &vf = *current_value_facts;
+	  auto ended = make_temp_override (current_ended, &state.ended);
 	  check_call (call, *vf.established, *vf.established_nz,
 		      *vf.established_range, *vf.established_rel, vf.ranger);
 	  consult_persistent_facts (call, state);
 	  check_assertion (call, state);
 	}
       if (call_may_end_lifetimes_p (call))
-	process_lifetime_call (call, state);
+	{
+	  process_lifetime_call (call, state);
+	  tree named = contract_call_named_fn (gimple_call_fn (call));
+	  bool ctor = (named && TREE_CODE (named) == FUNCTION_DECL
+		       && DECL_CONSTRUCTOR_P (named));
+	  bool dtor = (named && TREE_CODE (named) == FUNCTION_DECL
+		       && DECL_DESTRUCTOR_P (named));
+	  for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
+	    if (i == 0 && ctor)
+	      /* A constructor begins a lifetime.  */
+	      restore_route (gimple_call_arg (call, 0), state);
+	    else
+	      end_route (gimple_call_arg (call, i), state, !(i == 0 && dtor));
+	}
       invalidate_persistent_facts_for_call_args (call, fun, state);
       establish_persistent_facts_for_call (call, state);
     }
@@ -3652,11 +3780,50 @@ provable_object_address_p (tree val, hash_set<tree> &established,
   if (val == NULL_TREE)
     return false;
 
-  /* Trivial case: taking the address of any decl is definitionally an
-     object address, regardless of any tracked fact -- mirrors
-     oa_provable_p's own ADDR_EXPR short-circuit.  */
+  /* An address: of a variable or a constant, or of what a pointer that
+     is an object address points to ('&p->m'); an array element only if
+     its index is within the array.  */
   if (TREE_CODE (val) == ADDR_EXPR)
-    return true;
+    {
+      tree base = get_base_address (TREE_OPERAND (val, 0));
+      if (!base)
+	return false;
+      for (tree ref = TREE_OPERAND (val, 0); handled_component_p (ref);
+	   ref = TREE_OPERAND (ref, 0))
+	if (TREE_CODE (ref) == ARRAY_REF)
+	  {
+	    tree idx = TREE_OPERAND (ref, 1);
+	    tree lo = array_ref_low_bound (ref), hi = array_ref_up_bound (ref);
+	    oa_range_lite r;
+	    if (!lo || !hi || TREE_CODE (lo) != INTEGER_CST
+		|| TREE_CODE (hi) != INTEGER_CST || !current_value_facts
+		|| !established_range_of (idx, *vfacts ().established_range,
+					  vfacts ().ranger, NULL, &r)
+		|| !r.has_lo || !r.has_hi || r.lo < wi::to_widest (lo)
+		|| r.hi > wi::to_widest (hi))
+	      return false;
+	  }
+      if (current_ended)
+	for (tree ref = TREE_OPERAND (val, 0); handled_component_p (ref);
+	     ref = TREE_OPERAND (ref, 0))
+	  for (tree t : *current_ended)
+	    if (handled_component_p (t) && operand_equal_p (t, ref, 0))
+	      return false;
+      if (DECL_P (base))
+	return !(current_ended && current_ended->contains (base));
+      if (CONSTANT_CLASS_P (base))
+	return true;
+      if (TREE_CODE (base) == MEM_REF)
+	return provable_object_address_p (TREE_OPERAND (base, 0), established,
+					  in_progress);
+      return false;
+    }
+
+  /* An object a call may have ended since.  */
+  if (current_ended && TREE_CODE (val) == SSA_NAME)
+    if (tree id = gimple_object_identity (val))
+      if (current_ended->contains (id))
+	return false;
 
   if (TREE_CODE (val) != SSA_NAME)
     return false;
@@ -3691,7 +3858,9 @@ provable_object_address_p (tree val, hash_set<tree> &established,
     {
       enum tree_code code = gimple_assign_rhs_code (def);
       if (code == ADDR_EXPR)
-	result = true;
+	/* As an address operand ('_1 = &this->h').  */
+	result = provable_object_address_p (gimple_assign_rhs1 (def),
+					    established, in_progress);
       else if (CONVERT_EXPR_CODE_P (code) || code == SSA_NAME)
 	/* A plain copy or a value-preserving conversion: whatever's
 	   true of the RHS is true here too.  */
@@ -3893,6 +4062,22 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 		  bool conveyor_only = false)
 {
   tree fndecl = fun->decl;
+  /* A constructor's or destructor's receiver is an object: each of its
+     callers proves it (check_call); so is a defaulted copy's source and
+     a defaulted assignment's destination (their implicit
+     preconditions).  */
+  auto trust = [&] (tree parm)
+    {
+      if (tree ssa = parm ? ssa_default_def (fun, parm) : NULL_TREE)
+	established.add (ssa);
+    };
+  if (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl))
+    trust (DECL_ARGUMENTS (fndecl));
+  tree implicit_parm;
+  if (oa_defaulted_copy_source_parm_public (fndecl, &implicit_parm))
+    trust (implicit_parm);
+  if (oa_defaulted_assign_dest_this_public (fndecl, &implicit_parm))
+    trust (implicit_parm);
   for (tree contract : fn_contracts (fndecl))
     {
       if (!PRECONDITION_P (contract))
@@ -4190,10 +4375,16 @@ check_call (gcall *call, hash_set<tree> &, hash_set<tree> &,
 	      continue;
 	    }
 	  int_range_max vr;
+	  oa_range_lite nzr;
 	  if (provable_nonzero_p (substituted, established_nz, in_progress)
 	      || (trusted_range_at (substituted, call, ranger, vr)
 		  && !vr.contains_p (wi::zero (TYPE_PRECISION
-						 (TREE_TYPE (substituted))))))
+						 (TREE_TYPE (substituted)))))
+	      /* A range excluding zero ('post (r: r > 0)').  */
+	      || (INTEGRAL_TYPE_P (TREE_TYPE (substituted))
+		  && established_range_of (substituted, established_range,
+					   ranger, call, &nzr)
+		  && range_verdict (nzr, NE_EXPR, 0) == VERDICT_TRUE))
 	    continue;
 	  /* Exactly zero where CALL is ('x == 0 && f (x)').  */
 	  tree zero_at;
@@ -4295,6 +4486,44 @@ check_call (gcall *call, hash_set<tree> &, hash_set<tree> &,
 				"precondition of %qD"), substituted, callee);
 	}
     }
+
+  /* A constructor's or destructor's receiver must be an object address
+     at every call (P2680), contract or not: in the conveyor flavor, an
+     error in conveyor code or when one of the callee's preconditions is
+     to be proven (proven_X), else a warning, not in a system header.
+     Under -fcontract-analysis-engine= it follows the proof flags, as the
+     engine's; with the older flags alone, those.  */
+  bool receiver_check
+    = (flag_contract_analysis_engine != 0
+       ? (contract_analysis_plugin_assertion_proofs_p (true)
+	  || contract_analysis_plugin_assertion_proofs_p (false))
+       : (contract_analysis_plugin_proofs_p (true)
+	  || contract_analysis_plugin_proofs_p (false)));
+  if (receiver_check && gimple_call_num_args (call) >= 1
+      && (DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee)))
+    {
+      bool strict = conveyor_code_p (current_function_decl);
+      for (tree contract : fn_contracts (callee))
+	strict |= (PRECONDITION_P (contract)
+		   && ((oa_contract_conveyor_active_public (contract, callee)
+			&& oa_contract_conveyor_strict_public (contract, callee))
+		       || (oa_contract_symbolic_active_public (contract, callee)
+			   && oa_contract_symbolic_strict_public (contract,
+								  callee))));
+      auto flavor = make_temp_override (require_conveyor_facts, true);
+      tree receiver = gimple_call_arg (call, 0);
+      location_t loc = gimple_location (call);
+      hash_set<tree> in_progress;
+      if ((strict || !in_system_header_at (loc))
+	  && !provable_object_address_p (receiver, *vfacts ().established,
+					 in_progress))
+	report_unproven (call, strict, strict
+			 ? "cannot prove %<is_object_address%> for %qE, as "
+			   "required by the precondition of %qD"
+			 : "cannot verify %<is_object_address%> for %qE, as "
+			   "required by the precondition of %qD",
+			 receiver, callee);
+    }
 }
 
 /* The function checker the engine calls (cg_register_function_check).  */
@@ -4302,12 +4531,12 @@ check_call (gcall *call, hash_set<tree> &, hash_set<tree> &,
 static void
 check_function (function *fun, void *)
 {
-  /* The engine's own proof checks run otherwise.  */
-  if (!flag_contract_analysis_proofs)
-    return;
   /* For debugging: the function as checked, with its virtual operands.  */
   if (getenv ("GIMPLE_OA_PLUGIN_DUMP"))
     dump_function_to_file (fun->decl, stderr, TDF_VOPS);
+  /* The engine's own proof checks run otherwise.  */
+  if (!flag_contract_analysis_proofs)
+    return;
 
   hash_set<tree> established;
   hash_set<tree> established_nz;
