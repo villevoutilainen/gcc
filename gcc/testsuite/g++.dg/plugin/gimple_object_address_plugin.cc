@@ -1002,6 +1002,10 @@ struct dom_fact_state
      longer known to be objects (the call-ends-lifetime rule), until
      constructed again.  On any path, so a union at joins.  */
   hash_set<tree> ended;
+  /* A value's range from the conditions on the way ('if (i <= 999)'),
+     keyed by the value (value_key) -- the ranger can't see one through
+     the PHI the gimplifier lowers '&&' to.  */
+  hash_map<tree, oa_range_lite> vrange;
 };
 
 /* The object pointer VAL points to: a variable whose address it is, or
@@ -1650,15 +1654,19 @@ get_call_rel (tree v, dom_fact_state &state, call_rel_fact *f)
     {
       oa_range_lite r;
       tree type = TREE_TYPE (v);
-      if (!current_value_facts
-	  || !established_range_of (y, *vfacts ().established_range,
-				    vfacts ().ranger, def, &r))
+      if (oa_range_lite *sr = state.vrange.get (value_key (y)))
+	r = *sr;
+      else if (!current_value_facts
+	       || !established_range_of (y, *vfacts ().established_range,
+					 vfacts ().ranger, def, &r))
 	return false;
-      widest_int lo = plus ? r.lo + k : r.lo - k;
-      widest_int hi = plus ? r.hi + k : r.hi - k;
-      if (!r.has_lo || !r.has_hi
-	  || lo < wi::to_widest (TYPE_MIN_VALUE (type))
-	  || hi > wi::to_widest (TYPE_MAX_VALUE (type)))
+      /* An unknown bound is the type's own.  */
+      widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
+      widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
+      widest_int ylo = r.has_lo ? r.lo : tmin, yhi = r.has_hi ? r.hi : tmax;
+      widest_int lo = plus ? ylo + k : ylo - k;
+      widest_int hi = plus ? yhi + k : yhi - k;
+      if (lo < tmin || hi > tmax)
 	return false;
     }
   *f = *g;
@@ -2230,9 +2238,11 @@ record_field_store (tree lhs, tree rhs, gimple *stmt, dom_fact_state &state)
 {
   /* What is stored is known to every flavor only from conveyor facts.  */
   auto flavor = make_temp_override (require_conveyor_facts, true);
-  /* A scalar in memory: its range is the stored value's.  */
-  if (tree sid = (current_value_facts ? scalar_memory_identity (lhs)
-		  : NULL_TREE))
+  /* A scalar in memory: its range is the stored value's -- for a store to
+     the variable itself, as the engine's (cg_memory_value_at); one through
+     a pointer only ends what was known.  */
+  if (tree sid = (current_value_facts && TREE_CODE (lhs) != MEM_REF
+		  ? scalar_memory_identity (lhs) : NULL_TREE))
     {
       oa_range_lite r;
       if (established_range_of (rhs, *conveyor_value_facts->established_range,
@@ -2606,7 +2616,17 @@ refine_comparison (tree lhs, tree rhs, tree_code code, bool asserted_true,
 	  tighten_range_bound (f.r, code, wi::to_widest (rhs));
 	  state.call.put ({id, accessor}, f);
 	}
-      else if (field_shape (lhs, &field, &base))
+      else if (!field_shape (lhs, &field, &base))
+	{
+	  if (TREE_CODE (lhs) != SSA_NAME || !INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+	    return;
+	  tree key = value_key (lhs);
+	  oa_range_lite *old = state.vrange.get (key);
+	  oa_range_lite r = old ? *old : oa_range_lite ();
+	  tighten_range_bound (r, code, wi::to_widest (rhs));
+	  state.vrange.put (key, r);
+	}
+      else
 	{
 	  tree id = gimple_object_identity (base);
 	  if (!id)
@@ -3093,6 +3113,9 @@ copy_state (dom_fact_state &to, const dom_fact_state &from)
   to.ended.empty ();
   for (tree t : from.ended)
     to.ended.add (t);
+  to.vrange.empty ();
+  for (auto it : from.vrange)
+    to.vrange.put (it.first, it.second);
 }
 
 /* Meet B into A: what holds in both.  A field's ranges join to the
@@ -3254,6 +3277,28 @@ meet_state (dom_fact_state &a, const dom_fact_state &b)
     a.ffield.remove (k);
   for (tree t : const_cast<hash_set<tree> &> (b.ended))
     a.ended.add (t);
+  drop.truncate (0);
+  for (auto it : a.vrange)
+    {
+      const oa_range_lite *o
+	= const_cast<hash_map<tree, oa_range_lite> &> (b.vrange).get (it.first);
+      oa_range_lite &r = it.second;
+      if (!o)
+	{
+	  drop.safe_push (it.first);
+	  continue;
+	}
+      r.has_lo = r.has_lo && o->has_lo;
+      if (r.has_lo)
+	r.lo = wi::smin (r.lo, o->lo);
+      r.has_hi = r.has_hi && o->has_hi;
+      if (r.has_hi)
+	r.hi = wi::smax (r.hi, o->hi);
+      if (!r.has_lo && !r.has_hi)
+	drop.safe_push (it.first);
+    }
+  for (tree k : drop)
+    a.vrange.remove (k);
 }
 
 /* Whether A and B hold the same facts.  */
@@ -3309,6 +3354,17 @@ same_state (const dom_fact_state &a, const dom_fact_state &b)
 	       (b.call);
   auto &bcr = const_cast<hash_map<tree, call_rel_fact> &> (b.call_rel);
   auto &bvr = const_cast<hash_map<tree, value_rel_fact> &> (b.vrel);
+  auto &bvg = const_cast<hash_map<tree, oa_range_lite> &> (b.vrange);
+  if (a.vrange.elements () != b.vrange.elements ())
+    return false;
+  for (auto it : a.vrange)
+    {
+      oa_range_lite *o = bvg.get (it.first);
+      const oa_range_lite &r = it.second;
+      if (!o || o->has_lo != r.has_lo || o->has_hi != r.has_hi
+	  || (r.has_lo && o->lo != r.lo) || (r.has_hi && o->hi != r.hi))
+	return false;
+    }
   auto &bend = const_cast<hash_set<tree> &> (b.ended);
   if (a.ended.elements () != b.ended.elements ())
     return false;
@@ -3679,6 +3735,73 @@ transfer_block (basic_block bb, function *fun, dom_fact_state &state,
    predecessors computed so far (SEED for the function's entry); false if
    none of them is computed yet.  */
 
+/* E is a condition's edge testing, against zero, a value that is (through
+   copies) a PHI in E's source block whose arguments are all constants --
+   the gimplifier's lowering of '&&'/'||': what holds on E is what holds on
+   the PHI's incoming edges whose constant E takes, each refined, rather
+   than the meet of all of them.  Into FROM; *SKIP if no incoming edge
+   takes E; false if E isn't one.  */
+
+static bool
+bool_phi_state (edge e, function *fun, const dom_fact_state &seed,
+		hash_map<basic_block, dom_fact_state *> &out,
+		dom_fact_state &from, bool *skip)
+{
+  *skip = false;
+  if (!(e->flags & (EDGE_TRUE_VALUE | EDGE_FALSE_VALUE)))
+    return false;
+  gcond *cond = safe_dyn_cast <gcond *> (*gsi_last_bb (e->src));
+  if (!cond)
+    return false;
+  tree_code code = gimple_cond_code (cond);
+  tree lhs = gimple_cond_lhs (cond);
+  if ((code != NE_EXPR && code != EQ_EXPR)
+      || !integer_zerop (gimple_cond_rhs (cond)) || TREE_CODE (lhs) != SSA_NAME)
+    return false;
+  bool want_nonzero = ((e->flags & EDGE_TRUE_VALUE) != 0) == (code == NE_EXPR);
+  gimple *def = SSA_NAME_DEF_STMT (lhs);
+  for (int i = 0; i < 4 && def && gimple_assign_ssa_name_copy_p (def); ++i)
+    def = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (def));
+  gphi *phi = def ? dyn_cast <gphi *> (def) : NULL;
+  if (!phi || gimple_bb (phi) != e->src)
+    return false;
+  auto_vec<edge, 4> sources;
+  for (unsigned i = 0; i < gimple_phi_num_args (phi); ++i)
+    {
+      tree arg = gimple_phi_arg_def (phi, i);
+      if (TREE_CODE (arg) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (arg))
+	{
+	  gimple *ad = SSA_NAME_DEF_STMT (arg);
+	  if (gimple_assign_single_p (ad)
+	      && TREE_CODE (gimple_assign_rhs1 (ad)) == INTEGER_CST)
+	    arg = gimple_assign_rhs1 (ad);
+	}
+      if (TREE_CODE (arg) != INTEGER_CST)
+	return false;
+      if (integer_zerop (arg) != want_nonzero)
+	sources.safe_push (gimple_phi_arg_edge (phi, i));
+    }
+  bool any = false;
+  for (edge se : sources)
+    {
+      dom_fact_state one;
+      if (se->src == ENTRY_BLOCK_PTR_FOR_FN (fun))
+	copy_state (one, seed);
+      else if (dom_fact_state **o = out.get (se->src))
+	copy_state (one, **o);
+      else
+	continue;
+      refine_edge (se, one);
+      if (!any)
+	copy_state (from, one);
+      else
+	meet_state (from, one);
+      any = true;
+    }
+  *skip = !any;
+  return true;
+}
+
 static bool
 entry_state (basic_block bb, function *fun, const dom_fact_state &seed,
 	     hash_map<basic_block, dom_fact_state *> &out,
@@ -3690,13 +3813,22 @@ entry_state (basic_block bb, function *fun, const dom_fact_state &seed,
   FOR_EACH_EDGE (e, ei, bb->preds)
     {
       dom_fact_state from;
-      if (e->src == ENTRY_BLOCK_PTR_FOR_FN (fun))
-	copy_state (from, seed);
-      else if (dom_fact_state **o = out.get (e->src))
-	copy_state (from, **o);
+      bool skip;
+      if (bool_phi_state (e, fun, seed, out, from, &skip))
+	{
+	  if (skip)
+	    continue;
+	}
       else
-	continue;
-      refine_edge (e, from);
+	{
+	  if (e->src == ENTRY_BLOCK_PTR_FOR_FN (fun))
+	    copy_state (from, seed);
+	  else if (dom_fact_state **o = out.get (e->src))
+	    copy_state (from, **o);
+	  else
+	    continue;
+	  refine_edge (e, from);
+	}
       if (!any)
 	copy_state (state, from);
       else
@@ -4473,11 +4605,21 @@ check_call (gcall *call, hash_set<tree> &, hash_set<tree> &,
 	  tree substituted = gimple_call_arg (call, argno);
 
 	  oa_range_lite have;
-	  if (established_range_of (substituted, established_range, ranger,
-				     call, &have)
+	  bool known = established_range_of (substituted, established_range,
+					     ranger, call, &have);
+	  if (known
 	      && (!required.has_lo || (have.has_lo && have.lo >= required.lo))
 	      && (!required.has_hi || (have.has_hi && have.hi <= required.hi)))
 	    continue;
+	  /* The ranges can't meet.  */
+	  if (known
+	      && ((required.has_lo && have.has_hi && have.hi < required.lo)
+		  || (required.has_hi && have.has_lo && have.lo > required.hi)))
+	    {
+	      error_at (gimple_location (call), "argument %qE provably "
+			"violates the precondition of %qD", substituted, callee);
+	      continue;
+	    }
 
 	  report_unproven (call, strict, strict
 			   ? ("cannot prove that %qE satisfies the "
