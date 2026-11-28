@@ -57,6 +57,9 @@
 
 int plugin_is_GPL_compatible;
 
+/* A conjunct holds, fails, or neither is known.  */
+enum verdict { VERDICT_UNKNOWN, VERDICT_TRUE, VERDICT_FALSE };
+
 /* Whether the function being checked is conveyor code: a conveyor
    function, or the core of a predicate (its condition, outlined).  */
 
@@ -687,6 +690,44 @@ struct relation_fact_lite
   bool conveyor;
 };
 
+struct rel_fact_lite { tree_code code; tree rhs; };
+static bool provable_nonzero_p (tree, hash_set<tree> &, hash_set<tree> &);
+static bool get_relational (tree, hash_map<tree, rel_fact_lite> &,
+			    tree_code *, tree *);
+
+/* The value facts of the function being checked, for the checks made
+   during the persistent-fact walk (check_assertion).  */
+
+struct value_facts
+{
+  hash_set<tree> *established, *established_nz;
+  hash_map<tree, oa_range_lite> *established_range;
+  hash_map<tree, rel_fact_lite> *established_rel;
+  gimple_ranger *ranger;
+};
+static value_facts *current_value_facts;
+
+/* What an accessor call on an object gives: a range; CONVEYOR if
+   established in the conveyor flavor.  */
+
+struct call_range_fact { oa_range_lite r; bool conveyor; };
+
+/* A value V related to an accessor call: '(V - OFFSET) CODE
+   RECEIVER.ACCESSOR ()', RECEIVER an object identity.  */
+
+struct call_rel_fact
+{
+  tree_code code;
+  tree receiver;
+  tree accessor;
+  widest_int offset;
+  bool conveyor;
+};
+
+/* A value V related to another value: 'V CODE OTHER'.  */
+
+struct value_rel_fact { tree_code code; tree other; bool conveyor; };
+
 /* The persistent-memory facts at one program point, threaded through the
    fact walk below.  Relations are keyed by relation_key.  */
 
@@ -705,6 +746,12 @@ struct dom_fact_state
      derived-value rule).  Absent: not known, so any call that may end
      lifetimes and is given a route does.  */
   hash_map<tree, tree> val_src;
+  /* An accessor's result on an object, keyed (identity, accessor).  */
+  hash_map<oa_field_key_hash, call_range_fact> call;
+  /* Values related to accessor calls and to other values, keyed by the
+     value (value_key); learned from branches and self-trust.  */
+  hash_map<tree, call_rel_fact> call_rel;
+  hash_map<tree, value_rel_fact> vrel;
 };
 
 /* The object pointer VAL points to: a variable whose address it is, or
@@ -781,6 +828,90 @@ scalar_value_origin (tree val)
       val = gimple_assign_rhs1 (def);
     }
   return val;
+}
+
+/* The value VAL stands for in a fact: VAL, or what a conversion of it
+   converts ('(size_t) idx' compared with 'v.size ()').  */
+
+static tree
+value_key (tree val)
+{
+  if (TREE_CODE (val) == SSA_NAME && !SSA_NAME_IS_DEFAULT_DEF (val))
+    {
+      gimple *def = SSA_NAME_DEF_STMT (val);
+      if (def && is_gimple_assign (def)
+	  && CONVERT_EXPR_CODE_P (gimple_assign_rhs_code (def))
+	  && TREE_CODE (gimple_assign_rhs1 (def)) == SSA_NAME)
+	val = gimple_assign_rhs1 (def);
+    }
+  return scalar_value_origin (val);
+}
+
+/* Whether VAL is the result of a call to a conveyor accessor (a member
+   function of one argument, the object), through a copy: *ACCESSOR and
+   *RECEIVER, the object pointer.  */
+
+static bool
+call_shape (tree val, tree *accessor, tree *receiver)
+{
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (def && gimple_assign_single_p (def)
+      && TREE_CODE (gimple_assign_rhs1 (def)) == SSA_NAME)
+    def = SSA_NAME_DEF_STMT (gimple_assign_rhs1 (def));
+  gcall *call = def ? dyn_cast <gcall *> (def) : NULL;
+  tree fn = call ? gimple_call_fndecl (call) : NULL_TREE;
+  if (!fn || !DECL_OBJECT_MEMBER_FUNCTION_P (fn)
+      || gimple_call_num_args (call) != 1 || !DECL_DECLARED_CONVEYOR_P (fn))
+    return false;
+  *accessor = fn;
+  *receiver = gimple_call_arg (call, 0);
+  return true;
+}
+
+/* Whether VAL is a load of a member: *FIELD of the object *BASE (a
+   pointer, or the object variable).  */
+
+static bool
+field_shape (tree val, tree *field, tree *base)
+{
+  if (TREE_CODE (val) != SSA_NAME)
+    return false;
+  gimple *def = SSA_NAME_DEF_STMT (val);
+  if (!def || !gimple_assign_single_p (def)
+      || TREE_CODE (gimple_assign_rhs1 (def)) != COMPONENT_REF)
+    return false;
+  tree rhs = gimple_assign_rhs1 (def);
+  if (TREE_CODE (TREE_OPERAND (rhs, 1)) != FIELD_DECL)
+    return false;
+  tree obj = TREE_OPERAND (rhs, 0);
+  *field = TREE_OPERAND (rhs, 1);
+  *base = (TREE_CODE (obj) == MEM_REF && integer_zerop (TREE_OPERAND (obj, 1))
+	   ? TREE_OPERAND (obj, 0) : obj);
+  return true;
+}
+
+/* CODE with its operands' roles exchanged, or (NEGATE) its negation;
+   ERROR_MARK if there is none to use ('!(a == b)').  */
+
+static tree_code
+swapped_code (tree_code code)
+{
+  return swap_tree_comparison (code);
+}
+
+static tree_code
+negated_code (tree_code code)
+{
+  switch (code)
+    {
+    case LT_EXPR: return GE_EXPR;
+    case LE_EXPR: return GT_EXPR;
+    case GT_EXPR: return LE_EXPR;
+    case GE_EXPR: return LT_EXPR;
+    default: return ERROR_MARK;
+    }
 }
 
 /* The key of relation PRED_FN (IDS[0..N)).  */
@@ -1091,6 +1222,42 @@ seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 			  conveyor);
 	}
 
+      /* A parameter related to an accessor call on another, and an
+	 accessor's result compared with a constant.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree param, recv, acc, cst;
+	  tree_code code;
+	  if (oa_match_comparison_against_call (*conjuncts[i], &param, &code,
+						&recv, &acc, !conveyor)
+	      && TREE_CODE (param) == PARM_DECL)
+	    {
+	      tree pv = ssa_default_def (fun, param);
+	      tree rb = oa_strip_symbolic_ptr_expr_public (recv);
+	      tree rv = (TREE_CODE (rb) == PARM_DECL
+			 ? ssa_default_def (fun, rb) : NULL_TREE);
+	      tree id = rv ? gimple_object_identity (rv) : NULL_TREE;
+	      if (pv && id)
+		seed.call_rel.put (value_key (pv),
+				   { code, id, acc, 0, conveyor });
+	    }
+	  else if (oa_match_call_range_comparison (*conjuncts[i], &recv, &acc,
+						   &code, &cst, !conveyor)
+		   && TREE_CODE (cst) == INTEGER_CST)
+	    {
+	      tree rb = oa_strip_symbolic_ptr_expr_public (recv);
+	      tree rv = (TREE_CODE (rb) == PARM_DECL
+			 ? ssa_default_def (fun, rb) : NULL_TREE);
+	      tree id = rv ? gimple_object_identity (rv) : NULL_TREE;
+	      if (!id)
+		continue;
+	      call_range_fact *old = seed.call.get ({id, acc});
+	      call_range_fact f = old ? *old : call_range_fact { {}, conveyor };
+	      tighten_range_bound (f.r, code, wi::to_widest (cst));
+	      seed.call.put ({id, acc}, f);
+	    }
+	}
+
       auto_vec<field_group_lite> field_groups;
       collect_field_range_groups (cond, &field_groups);
       for (unsigned g = 0; g < field_groups.length (); ++g)
@@ -1100,6 +1267,105 @@ seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 	    seed.field.put ({ssa, field_groups[g].field}, field_groups[g].range);
 	}
     }
+}
+
+/* Whether '(V - D) CODE X' entails 'V REQUIRED X' for the offset D, once
+   CODE implies REQUIRED.  */
+
+static bool
+offset_compatible_p (const widest_int &d, tree_code required)
+{
+  switch (required)
+    {
+    case LT_EXPR: case LE_EXPR: return d <= 0;
+    case GT_EXPR: case GE_EXPR: return d >= 0;
+    case EQ_EXPR: return d == 0;
+    default: return false;
+    }
+}
+
+/* Whether '(V - D) CODE X' contradicts 'V REQUIRED X': the ranges of
+   V - X they allow are disjoint.  */
+
+static bool
+offset_contradicts_p (tree_code code, const widest_int &d, tree_code required)
+{
+  oa_range_lite have, need;
+  if (code == NE_EXPR || required == NE_EXPR)
+    return false;
+  tighten_range_bound (have, code, d);
+  tighten_range_bound (need, required, 0);
+  return ((have.has_hi && need.has_lo && have.hi < need.lo)
+	  || (need.has_hi && have.has_lo && need.hi < have.lo));
+}
+
+/* Whether every pair of values from A and B satisfies 'a CODE b'
+   (VERDICT_TRUE), none does (VERDICT_FALSE), or neither is known.  */
+
+static verdict
+range_pair_verdict (const oa_range_lite &a, tree_code code,
+		    const oa_range_lite &b)
+{
+  switch (code)
+    {
+    case LT_EXPR:
+      if (a.has_hi && b.has_lo && a.hi < b.lo) return VERDICT_TRUE;
+      if (a.has_lo && b.has_hi && a.lo >= b.hi) return VERDICT_FALSE;
+      break;
+    case LE_EXPR:
+      if (a.has_hi && b.has_lo && a.hi <= b.lo) return VERDICT_TRUE;
+      if (a.has_lo && b.has_hi && a.lo > b.hi) return VERDICT_FALSE;
+      break;
+    case GT_EXPR:
+      if (a.has_lo && b.has_hi && a.lo > b.hi) return VERDICT_TRUE;
+      if (a.has_hi && b.has_lo && a.hi <= b.lo) return VERDICT_FALSE;
+      break;
+    case GE_EXPR:
+      if (a.has_lo && b.has_hi && a.lo >= b.hi) return VERDICT_TRUE;
+      if (a.has_hi && b.has_lo && a.hi < b.lo) return VERDICT_FALSE;
+      break;
+    case EQ_EXPR:
+      if (a.has_lo && a.has_hi && b.has_lo && b.has_hi && a.lo == a.hi
+	  && b.lo == b.hi && a.lo == b.lo)
+	return VERDICT_TRUE;
+      if ((a.has_hi && b.has_lo && a.hi < b.lo)
+	  || (a.has_lo && b.has_hi && a.lo > b.hi))
+	return VERDICT_FALSE;
+      break;
+    default:
+      break;
+    }
+  return VERDICT_UNKNOWN;
+}
+
+/* The fact relating value V to an accessor call: V's own, or, for 'Y + K'
+   or 'Y - K' of a signed type (no wrapping), Y's with the offset moved.
+   Into *F; false if none.  */
+
+static bool
+get_call_rel (tree v, dom_fact_state &state, call_rel_fact *f)
+{
+  v = value_key (v);
+  if (call_rel_fact *g = state.call_rel.get (v))
+    {
+      *f = *g;
+      return true;
+    }
+  gimple *def = TREE_CODE (v) == SSA_NAME ? SSA_NAME_DEF_STMT (v) : NULL;
+  if (!def || !is_gimple_assign (def)
+      || (gimple_assign_rhs_code (def) != PLUS_EXPR
+	  && gimple_assign_rhs_code (def) != MINUS_EXPR)
+      || TREE_CODE (gimple_assign_rhs2 (def)) != INTEGER_CST
+      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (v)))
+    return false;
+  call_rel_fact *g = state.call_rel.get (value_key (gimple_assign_rhs1 (def)));
+  if (!g)
+    return false;
+  *f = *g;
+  widest_int k = wi::to_widest (gimple_assign_rhs2 (def));
+  /* (Y - A) CODE X and V = Y + K: (V - (A + K)) CODE X.  */
+  f->offset += gimple_assign_rhs_code (def) == PLUS_EXPR ? k : -k;
+  return true;
 }
 
 /* CALL's own callee's declared precondition, checked against STATE as
@@ -1167,6 +1433,120 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	    report_unproven (call, false, "cannot verify that %qD (%qE) holds, "
 			     "as required by the precondition of %qD", pred_fn,
 			     substituted, callee);
+	}
+
+      /* A parameter related to an accessor call on another ('i <
+	 v.size ()', or shifted: 'i - v.size () < 10'): by a fact relating
+	 the argument to that call on that object, else by the argument's
+	 range against the accessor's.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree param, recv, acc;
+	  tree_code code;
+	  widest_int need_offset = 0;
+	  if (!oa_match_comparison_against_call (*conjuncts[i], &param, &code,
+						 &recv, &acc, !as_conveyor)
+	      && !oa_match_shifted_comparison_against_call_text
+		    (*conjuncts[i], &param, &code, &recv, &acc, &need_offset,
+		     !as_conveyor))
+	    continue;
+	  unsigned pn, rn;
+	  if (!find_param_position (callee, param, &pn)
+	      || !find_param_position (callee, recv, &rn)
+	      || pn >= gimple_call_num_args (call)
+	      || rn >= gimple_call_num_args (call))
+	    continue;
+	  tree sub_param = gimple_call_arg (call, pn);
+	  tree rid = gimple_object_identity (gimple_call_arg (call, rn));
+	  verdict v = VERDICT_UNKNOWN;
+	  call_rel_fact f;
+	  if (rid && get_call_rel (sub_param, state, &f) && f.receiver == rid
+	      && f.accessor == acc && (!as_conveyor || f.conveyor))
+	    {
+	      widest_int d = f.offset - need_offset;
+	      if (oa_relational_code_implies (f.code, code)
+		  && offset_compatible_p (d, code))
+		v = VERDICT_TRUE;
+	      else if (offset_contradicts_p (f.code, d, code))
+		v = VERDICT_FALSE;
+	    }
+	  oa_range_lite pr;
+	  call_range_fact *cr = rid ? state.call.get ({rid, acc}) : NULL;
+	  if (v == VERDICT_UNKNOWN && need_offset == 0 && cr
+	      && (!as_conveyor || cr->conveyor) && current_value_facts
+	      && established_range_of (sub_param,
+				       *current_value_facts->established_range,
+				       current_value_facts->ranger, call, &pr))
+	    v = range_pair_verdict (pr, code, cr->r);
+	  if (v == VERDICT_TRUE)
+	    continue;
+	  if (v == VERDICT_FALSE)
+	    error_at (gimple_location (call), "argument %qE provably violates "
+		      "the precondition of %qD", sub_param, callee);
+	  else
+	    report_unproven (call, strict, strict
+			     ? "cannot prove that %qE satisfies the "
+			       "precondition of %qD"
+			     : "cannot verify that %qE satisfies the "
+			       "precondition of %qD", sub_param, callee);
+	}
+
+      /* A parameter related to another ('x < q'): both literal, a
+	 self-trusted or branch-derived fact, or their ranges.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree rel_param, rel_other;
+	  tree_code rel_code;
+	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
+						   &rel_code, &rel_other))
+	    continue;
+	  unsigned pn, on;
+	  if (!find_param_position (callee, rel_param, &pn)
+	      || !find_param_position (callee, rel_other, &on)
+	      || pn >= gimple_call_num_args (call)
+	      || on >= gimple_call_num_args (call))
+	    continue;
+	  tree a = gimple_call_arg (call, pn), b = gimple_call_arg (call, on);
+	  verdict v = VERDICT_UNKNOWN;
+	  if (TREE_CODE (a) == INTEGER_CST && TREE_CODE (b) == INTEGER_CST)
+	    v = (oa_relational_literal_holds (rel_code, a, b)
+		 ? VERDICT_TRUE : VERDICT_FALSE);
+	  for (int side = 0; side < 2 && v == VERDICT_UNKNOWN; ++side)
+	    {
+	      tree from = value_key (side ? b : a), to = value_key (side ? a : b);
+	      tree_code need = side ? swapped_code (rel_code) : rel_code;
+	      value_rel_fact *g = state.vrel.get (from);
+	      if (g && g->other == to && (!as_conveyor || g->conveyor)
+		  && oa_relational_code_implies (g->code, need))
+		v = VERDICT_TRUE;
+	      tree_code fc;
+	      tree frhs;
+	      if (v == VERDICT_UNKNOWN && current_value_facts
+		  && get_relational (side ? b : a,
+				     *current_value_facts->established_rel,
+				     &fc, &frhs)
+		  && frhs == (side ? a : b)
+		  && oa_relational_code_implies (fc, need))
+		v = VERDICT_TRUE;
+	    }
+	  oa_range_lite ra, rb;
+	  if (v == VERDICT_UNKNOWN && current_value_facts
+	      && established_range_of (a, *current_value_facts->established_range,
+				       current_value_facts->ranger, call, &ra)
+	      && established_range_of (b, *current_value_facts->established_range,
+				       current_value_facts->ranger, call, &rb))
+	    v = range_pair_verdict (ra, rel_code, rb);
+	  if (v == VERDICT_TRUE)
+	    continue;
+	  if (v == VERDICT_FALSE)
+	    error_at (gimple_location (call), "argument %qE provably violates "
+		      "the precondition of %qD", a, callee);
+	  else
+	    report_unproven (call, strict, strict
+			     ? "cannot prove that %qE satisfies the "
+			       "precondition of %qD"
+			     : "cannot verify that %qE satisfies the "
+			       "precondition of %qD", a, callee);
 	}
 
       /* Relations: proven by a fact, refuted by one of the other
@@ -1249,22 +1629,6 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
     }
 }
 
-struct rel_fact_lite { tree_code code; tree rhs; };
-static bool provable_nonzero_p (tree, hash_set<tree> &, hash_set<tree> &);
-static bool get_relational (tree, hash_map<tree, rel_fact_lite> &,
-			    tree_code *, tree *);
-
-/* The value facts of the function being checked, for the checks made
-   during the persistent-fact walk (check_assertion).  */
-
-struct value_facts
-{
-  hash_set<tree> *established, *established_nz;
-  hash_map<tree, oa_range_lite> *established_range;
-  hash_map<tree, rel_fact_lite> *established_rel;
-  gimple_ranger *ranger;
-};
-static value_facts *current_value_facts;
 
 /* Whether CALL may end the lifetime of an object it is given a route to
    ('delete p', 'free (p)'): not an internal, const or pure function, a
@@ -1336,6 +1700,19 @@ forget_object (dom_fact_state &state, tree identity, tree field = NULL_TREE)
       drop.safe_push (it.first);
   for (auto &k : drop)
     state.field.remove (k);
+  /* What its accessors give may change with any of its fields.  */
+  drop.truncate (0);
+  for (auto it : state.call)
+    if (it.first.first == identity)
+      drop.safe_push (it.first);
+  for (auto &k : drop)
+    state.call.remove (k);
+  auto_vec<tree, 8> keys;
+  for (auto it : state.call_rel)
+    if (it.second.receiver == identity)
+      keys.safe_push (it.first);
+  for (tree k : keys)
+    state.call_rel.remove (k);
 }
 
 /* What STATE knows of every object ends.  */
@@ -1346,6 +1723,8 @@ forget_all (dom_fact_state &state)
   state.pred.empty ();
   state.field.empty ();
   state.rel.empty ();
+  state.call.empty ();
+  state.call_rel.empty ();
 }
 
 /* OBJ (an identity) may have changed: so may the objects of FUN's
@@ -1703,6 +2082,73 @@ tested_call (tree tested, bool *truth)
   return NULL;
 }
 
+/* The comparison 'LHS CODE RHS' holds (ASSERTED_TRUE) or not on an edge:
+   what it establishes, into STATE -- a range of a member or of an
+   accessor's result compared with a constant, a value related to an
+   accessor call, or to another value.  */
+
+static void
+refine_comparison (tree lhs, tree rhs, tree_code code, bool asserted_true,
+		   dom_fact_state &state)
+{
+  if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
+      && code != GE_EXPR && code != EQ_EXPR)
+    return;
+  if (!asserted_true && (code = negated_code (code)) == ERROR_MARK)
+    return;
+  if (TREE_CODE (lhs) == INTEGER_CST && TREE_CODE (rhs) != INTEGER_CST)
+    {
+      std::swap (lhs, rhs);
+      code = swapped_code (code);
+    }
+  tree accessor, receiver, field, base;
+  if (TREE_CODE (rhs) == INTEGER_CST)
+    {
+      if (call_shape (lhs, &accessor, &receiver))
+	{
+	  tree id = gimple_object_identity (receiver);
+	  if (!id)
+	    return;
+	  call_range_fact *old = state.call.get ({id, accessor});
+	  call_range_fact f = old ? *old : call_range_fact { {}, true };
+	  tighten_range_bound (f.r, code, wi::to_widest (rhs));
+	  state.call.put ({id, accessor}, f);
+	}
+      else if (field_shape (lhs, &field, &base))
+	{
+	  tree id = gimple_object_identity (base);
+	  if (!id)
+	    return;
+	  oa_range_lite *old = state.field.get ({id, field});
+	  oa_range_lite r = old ? *old : oa_range_lite ();
+	  tighten_range_bound (r, code, wi::to_widest (rhs));
+	  state.field.put ({id, field}, r);
+	}
+      return;
+    }
+  if (TREE_CODE (lhs) != SSA_NAME || TREE_CODE (rhs) != SSA_NAME)
+    return;
+  tree l_acc, l_recv, r_acc, r_recv;
+  bool l_call = call_shape (lhs, &l_acc, &l_recv);
+  bool r_call = call_shape (rhs, &r_acc, &r_recv);
+  if (l_call && r_call)
+    return;
+  if (l_call || r_call)
+    {
+      tree value = l_call ? rhs : lhs;
+      tree_code c = l_call ? swapped_code (code) : code;
+      tree id = gimple_object_identity (l_call ? l_recv : r_recv);
+      if (id)
+	state.call_rel.put (value_key (value),
+			    { c, id, l_call ? l_acc : r_acc, 0, true });
+      return;
+    }
+  state.vrel.put (value_key (lhs), { code, value_key (rhs), true });
+  if (code != EQ_EXPR)
+    state.vrel.put (value_key (rhs),
+		    { swapped_code (code), value_key (lhs), true });
+}
+
 /* The facts taking edge E establishes, into STATE: E is a true or false
    edge of a condition testing a value against zero, the result of a call
    to a one-argument predicate that gives the same result again
@@ -1719,13 +2165,25 @@ refine_edge (edge e, dom_fact_state &state)
   tree_code code = gimple_cond_code (cond);
   tree lhs = gimple_cond_lhs (cond);
   tree rhs = gimple_cond_rhs (cond);
+  bool edge_true = (e->flags & EDGE_TRUE_VALUE) != 0;
   if ((code != NE_EXPR && code != EQ_EXPR) || !integer_zerop (rhs)
       || TREE_CODE (lhs) != SSA_NAME)
-    return;
-  bool truth = ((e->flags & EDGE_TRUE_VALUE) != 0) == (code == NE_EXPR);
+    {
+      refine_comparison (lhs, rhs, code, edge_true, state);
+      return;
+    }
+  bool truth = edge_true == (code == NE_EXPR);
   gcall *call = tested_call (lhs, &truth);
   if (!call)
-    return;
+    {
+      /* A comparison computed into the tested value ('_2 = _1 > 3').  */
+      gimple *def = SSA_NAME_DEF_STMT (lhs);
+      if (def && is_gimple_assign (def)
+	  && TREE_CODE_CLASS (gimple_assign_rhs_code (def)) == tcc_comparison)
+	refine_comparison (gimple_assign_rhs1 (def), gimple_assign_rhs2 (def),
+			   gimple_assign_rhs_code (def), truth, state);
+      return;
+    }
   tree callee = gimple_call_fndecl (call);
   if (!callee || gimple_call_num_args (call) != 1
       || !oa_call_repeatable_p (callee))
@@ -1740,7 +2198,6 @@ refine_edge (edge e, dom_fact_state &state)
 
 
 
-enum verdict { VERDICT_UNKNOWN, VERDICT_TRUE, VERDICT_FALSE };
 
 /* Whether every value of R satisfies 'v CODE C' (true), none does
    (false), or neither is known.  */
@@ -2151,6 +2608,15 @@ copy_state (dom_fact_state &to, const dom_fact_state &from)
   to.val_src.empty ();
   for (auto it : from.val_src)
     to.val_src.put (it.first, it.second);
+  to.call.empty ();
+  for (auto it : from.call)
+    to.call.put (it.first, it.second);
+  to.call_rel.empty ();
+  for (auto it : from.call_rel)
+    to.call_rel.put (it.first, it.second);
+  to.vrel.empty ();
+  for (auto it : from.vrel)
+    to.vrel.put (it.first, it.second);
 }
 
 /* Meet B into A: what holds in both.  A field's ranges join to the
@@ -2241,6 +2707,57 @@ meet_state (dom_fact_state &a, const dom_fact_state &b)
     }
   for (tree k : drop)
     a.val_src.remove (k);
+
+  fdrop.truncate (0);
+  for (auto it : a.call)
+    {
+      const call_range_fact *o
+	= const_cast<hash_map<oa_field_key_hash, call_range_fact> &>
+	    (b.call).get (it.first);
+      oa_range_lite &r = it.second.r;
+      if (!o)
+	{
+	  fdrop.safe_push (it.first);
+	  continue;
+	}
+      r.has_lo = r.has_lo && o->r.has_lo;
+      if (r.has_lo)
+	r.lo = wi::smin (r.lo, o->r.lo);
+      r.has_hi = r.has_hi && o->r.has_hi;
+      if (r.has_hi)
+	r.hi = wi::smax (r.hi, o->r.hi);
+      it.second.conveyor &= o->conveyor;
+      if (!r.has_lo && !r.has_hi)
+	fdrop.safe_push (it.first);
+    }
+  for (auto &k : fdrop)
+    a.call.remove (k);
+  drop.truncate (0);
+  for (auto it : a.call_rel)
+    {
+      const call_rel_fact *o
+	= const_cast<hash_map<tree, call_rel_fact> &> (b.call_rel)
+	    .get (it.first);
+      if (!o || o->code != it.second.code || o->receiver != it.second.receiver
+	  || o->accessor != it.second.accessor || o->offset != it.second.offset)
+	drop.safe_push (it.first);
+      else
+	it.second.conveyor &= o->conveyor;
+    }
+  for (tree k : drop)
+    a.call_rel.remove (k);
+  drop.truncate (0);
+  for (auto it : a.vrel)
+    {
+      const value_rel_fact *o
+	= const_cast<hash_map<tree, value_rel_fact> &> (b.vrel).get (it.first);
+      if (!o || o->code != it.second.code || o->other != it.second.other)
+	drop.safe_push (it.first);
+      else
+	it.second.conveyor &= o->conveyor;
+    }
+  for (tree k : drop)
+    a.vrel.remove (k);
 }
 
 /* Whether A and B hold the same facts.  */
@@ -2291,6 +2808,38 @@ same_state (const dom_fact_state &a, const dom_fact_state &b)
   for (tree t : a.escaped)
     if (!be.contains (t))
       return false;
+  auto &bc = const_cast<hash_map<oa_field_key_hash, call_range_fact> &>
+	       (b.call);
+  auto &bcr = const_cast<hash_map<tree, call_rel_fact> &> (b.call_rel);
+  auto &bvr = const_cast<hash_map<tree, value_rel_fact> &> (b.vrel);
+  if (a.call.elements () != b.call.elements ()
+      || a.call_rel.elements () != b.call_rel.elements ()
+      || a.vrel.elements () != b.vrel.elements ())
+    return false;
+  for (auto it : a.call)
+    {
+      call_range_fact *o = bc.get (it.first);
+      const oa_range_lite &r = it.second.r;
+      if (!o || o->conveyor != it.second.conveyor
+	  || o->r.has_lo != r.has_lo || o->r.has_hi != r.has_hi
+	  || (r.has_lo && o->r.lo != r.lo) || (r.has_hi && o->r.hi != r.hi))
+	return false;
+    }
+  for (auto it : a.call_rel)
+    {
+      call_rel_fact *o = bcr.get (it.first);
+      if (!o || o->code != it.second.code || o->receiver != it.second.receiver
+	  || o->accessor != it.second.accessor || o->offset != it.second.offset
+	  || o->conveyor != it.second.conveyor)
+	return false;
+    }
+  for (auto it : a.vrel)
+    {
+      value_rel_fact *o = bvr.get (it.first);
+      if (!o || o->code != it.second.code || o->other != it.second.other
+	  || o->conveyor != it.second.conveyor)
+	return false;
+    }
   for (auto it : a.val_src)
     {
       tree *o = bv.get (it.first);
@@ -2910,10 +3459,19 @@ conjunct_covered_p (tree conjunct)
   tree a, b, c;
   tree_code code;
   bool negated;
+  widest_int offset;
+  tree d;
   if (is_object_address_call_p (conjunct, &a)
       || oa_match_comparison_against_param (conjunct, &a, &code, &b)
       || relation_conjunct_p (conjunct))
     return true;
+  /* Both flavors' shapes: the rule itself rejects a symbolic accessor in a
+     conveyor obligation, reporting it.  */
+  if (oa_match_comparison_against_call (conjunct, &a, &code, &b, &c, true)
+      || oa_match_shifted_comparison_against_call_text (conjunct, &a, &code,
+							&b, &c, &offset, true))
+    return true;
+  (void) d;
   if (oa_nonzero_conjunct_p (conjunct, &a))
     return true;
   if (oa_match_simple_comparison (conjunct, &a, &code, &b))
@@ -3136,51 +3694,6 @@ check_call (gcall *call, hash_set<tree> &established,
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	if (!conjunct_covered_p (*conjuncts[i]))
 	  report_uncovered (*conjuncts[i], call, callee, strict);
-
-      /* Relational obligations against another of the callee's own
-	 parameters ('pre (x < q)'): both substituted positionally.  */
-      for (unsigned i = 0; i < conjuncts.length (); ++i)
-	{
-	  tree rel_param, rel_other;
-	  tree_code rel_code;
-	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
-						   &rel_code, &rel_other))
-	    continue;
-
-	  unsigned param_argno, other_argno;
-	  if (!find_param_position (callee, rel_param, &param_argno)
-	      || !find_param_position (callee, rel_other, &other_argno)
-	      || param_argno >= gimple_call_num_args (call)
-	      || other_argno >= gimple_call_num_args (call))
-	    continue;
-
-	  tree sub_param = gimple_call_arg (call, param_argno);
-	  tree sub_other = gimple_call_arg (call, other_argno);
-
-	  /* Both literals: plain constant folding.  */
-	  if (TREE_CODE (sub_param) == INTEGER_CST
-	      && TREE_CODE (sub_other) == INTEGER_CST)
-	    {
-	      if (!oa_relational_literal_holds (rel_code, sub_param, sub_other))
-		error_at (gimple_location (call), "argument %qE provably "
-			  "violates the precondition of %qD", sub_param,
-			  callee);
-	      continue;
-	    }
-
-	  tree_code fact_code;
-	  tree fact_rhs;
-	  if (get_relational (sub_param, established_rel, &fact_code, &fact_rhs)
-	      && oa_relational_code_implies (fact_code, rel_code)
-	      && fact_rhs == sub_other)
-	    continue;
-
-	  report_unproven (call, strict, strict
-			   ? ("cannot prove that %qE satisfies the "
-				"precondition of %qD")
-			   : ("cannot verify that %qE satisfies the "
-				"precondition of %qD"), sub_param, callee);
-	}
 
       /* Range obligations ('pre (x >= 20 && x < 100)'), grouped per
 	 parameter, since one precondition can constrain several, each
