@@ -1821,54 +1821,88 @@ range_pair_verdict (const oa_range_lite &a, tree_code code,
   return VERDICT_UNKNOWN;
 }
 
-/* The fact relating value V to an accessor call: V's own, or, for 'Y + K'
-   or 'Y - K' of a signed type (no wrapping), Y's with the offset moved.
-   Into *F; false if none.  */
+/* Whether V is 'Y + D' or 'Y - D', D a constant or a value whose range is
+   known, without overflow or wrapping: *BASE is Y (value_key), and the
+   amount added lies in [*DLO, *DHI].  */
 
 static bool
-get_call_rel (tree v, dom_fact_state &state, call_rel_fact *f)
+shifted_value (tree v, dom_fact_state &state, tree *base, widest_int *dlo,
+	       widest_int *dhi)
+{
+  gimple *def = TREE_CODE (v) == SSA_NAME ? SSA_NAME_DEF_STMT (v) : NULL;
+  if (!def || !is_gimple_assign (def)
+      || (gimple_assign_rhs_code (def) != PLUS_EXPR
+	  && gimple_assign_rhs_code (def) != MINUS_EXPR)
+      || !INTEGRAL_TYPE_P (TREE_TYPE (v)))
+    return false;
+  bool plus = gimple_assign_rhs_code (def) == PLUS_EXPR;
+  tree y = gimple_assign_rhs1 (def), d = gimple_assign_rhs2 (def);
+  auto range_of = [&] (tree x, oa_range_lite *r) -> bool
+    {
+      if (oa_range_lite *sr = state.vrange.get (value_key (x)))
+	{
+	  *r = *sr;
+	  return true;
+	}
+      return (current_value_facts
+	      && established_range_of (x, *vfacts ().established_range,
+				       vfacts ().ranger, def, r));
+    };
+  oa_range_lite dr;
+  if (TREE_CODE (d) == INTEGER_CST)
+    {
+      dr.has_lo = dr.has_hi = true;
+      dr.lo = dr.hi = wi::to_widest (d);
+    }
+  else if (!range_of (d, &dr) || !dr.has_lo || !dr.has_hi)
+    return false;
+  *dlo = plus ? dr.lo : -dr.hi;
+  *dhi = plus ? dr.hi : -dr.lo;
+  tree type = TREE_TYPE (v);
+  /* No result may leave the type: Y's range (an unknown bound is the
+     type's own).  For a type whose overflow is undefined a constant
+     moves the fact as the language has it.  */
+  if (!TYPE_OVERFLOW_UNDEFINED (type) || TREE_CODE (d) != INTEGER_CST)
+    {
+      oa_range_lite r;
+      widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
+      widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
+      if (!range_of (y, &r))
+	r = oa_range_lite ();
+      widest_int ylo = r.has_lo ? r.lo : tmin, yhi = r.has_hi ? r.hi : tmax;
+      if (ylo + *dlo < tmin || yhi + *dhi > tmax)
+	return false;
+    }
+  *base = value_key (y);
+  return true;
+}
+
+/* The fact relating value V to an accessor call: V's own, or, for 'Y + D'
+   or 'Y - D' (shifted_value), Y's with its offset moved: '(V - OFFSET)
+   CODE X' for every OFFSET in [*OLO, *OHI].  Into *F; false if none.  */
+
+static bool
+get_call_rel (tree v, dom_fact_state &state, call_rel_fact *f,
+	      widest_int *olo, widest_int *ohi)
 {
   v = value_key (v);
   if (call_rel_fact *g = state.call_rel.get (v))
     {
       *f = *g;
+      *olo = *ohi = g->offset;
       return true;
     }
-  gimple *def = TREE_CODE (v) == SSA_NAME ? SSA_NAME_DEF_STMT (v) : NULL;
-  if (!def || !is_gimple_assign (def)
-      || (gimple_assign_rhs_code (def) != PLUS_EXPR
-	  && gimple_assign_rhs_code (def) != MINUS_EXPR)
-      || TREE_CODE (gimple_assign_rhs2 (def)) != INTEGER_CST)
+  tree y;
+  widest_int dlo, dhi;
+  if (!shifted_value (v, state, &y, &dlo, &dhi))
     return false;
-  tree y = gimple_assign_rhs1 (def);
-  call_rel_fact *g = state.call_rel.get (value_key (y));
+  call_rel_fact *g = state.call_rel.get (y);
   if (!g)
     return false;
-  widest_int k = wi::to_widest (gimple_assign_rhs2 (def));
-  bool plus = gimple_assign_rhs_code (def) == PLUS_EXPR;
-  /* A wrapping type: only if Y's range keeps the result in it.  */
-  if (!TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (v)))
-    {
-      oa_range_lite r;
-      tree type = TREE_TYPE (v);
-      if (oa_range_lite *sr = state.vrange.get (value_key (y)))
-	r = *sr;
-      else if (!current_value_facts
-	       || !established_range_of (y, *vfacts ().established_range,
-					 vfacts ().ranger, def, &r))
-	return false;
-      /* An unknown bound is the type's own.  */
-      widest_int tmin = wi::to_widest (TYPE_MIN_VALUE (type));
-      widest_int tmax = wi::to_widest (TYPE_MAX_VALUE (type));
-      widest_int ylo = r.has_lo ? r.lo : tmin, yhi = r.has_hi ? r.hi : tmax;
-      widest_int lo = plus ? ylo + k : ylo - k;
-      widest_int hi = plus ? yhi + k : yhi - k;
-      if (lo < tmin || hi > tmax)
-	return false;
-    }
   *f = *g;
-  /* (Y - A) CODE X and V = Y + K: (V - (A + K)) CODE X.  */
-  f->offset += plus ? k : -k;
+  /* (Y - A) CODE X and V = Y + D: (V - (A + D)) CODE X.  */
+  *olo = g->offset + dlo;
+  *ohi = g->offset + dhi;
   return true;
 }
 
@@ -1977,14 +2011,18 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	  tree rid = gimple_object_identity (gimple_call_arg (call, rn));
 	  verdict v = VERDICT_UNKNOWN;
 	  call_rel_fact f;
-	  if (rid && get_call_rel (sub_param, state, &f) && f.receiver == rid
-	      && f.accessor == acc && (!as_conveyor || f.conveyor))
+	  widest_int olo, ohi;
+	  if (rid && get_call_rel (sub_param, state, &f, &olo, &ohi)
+	      && f.receiver == rid && f.accessor == acc
+	      && (!as_conveyor || f.conveyor))
 	    {
-	      widest_int d = f.offset - need_offset;
+	      widest_int dlo = olo - need_offset, dhi = ohi - need_offset;
 	      if (oa_relational_code_implies (f.code, code)
-		  && offset_compatible_p (d, code))
+		  && offset_compatible_p (dlo, code)
+		  && offset_compatible_p (dhi, code))
 		v = VERDICT_TRUE;
-	      else if (offset_contradicts_p (f.code, d, code))
+	      else if (offset_contradicts_p (f.code, dlo, code)
+		       && offset_contradicts_p (f.code, dhi, code))
 		v = VERDICT_FALSE;
 	    }
 	  oa_range_lite pr;
@@ -2130,6 +2168,30 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	  if (TREE_CODE (a) == INTEGER_CST && TREE_CODE (b) == INTEGER_CST)
 	    v = (oa_relational_literal_holds (rel_code, a, b)
 		 ? VERDICT_TRUE : VERDICT_FALSE);
+	  /* 'a = y + d' with a fact 'y CODE b': '(a - d) CODE b'.  */
+	  {
+	    tree y;
+	    widest_int dlo, dhi;
+	    if (v == VERDICT_UNKNOWN
+		&& shifted_value (value_key (a), state, &y, &dlo, &dhi))
+	      {
+		tree_code fc = ERROR_MARK;
+		tree frhs = NULL_TREE;
+		if (value_rel_fact *g = state.vrel.get (y))
+		  if (!as_conveyor || g->conveyor)
+		    fc = g->code, frhs = g->other;
+		if (fc == ERROR_MARK && current_value_facts
+		    && !get_relational (y, *vfacts ().established_rel, &fc,
+					&frhs))
+		  fc = ERROR_MARK;
+		if (fc != ERROR_MARK
+		    && (frhs == value_key (b) || frhs == b)
+		    && oa_relational_code_implies (fc, rel_code)
+		    && offset_compatible_p (dlo, rel_code)
+		    && offset_compatible_p (dhi, rel_code))
+		  v = VERDICT_TRUE;
+	      }
+	  }
 	  for (int side = 0; side < 2 && v == VERDICT_UNKNOWN; ++side)
 	    {
 	      tree from = value_key (side ? b : a), to = value_key (side ? a : b);
