@@ -3849,7 +3849,11 @@ maybe_contract_wrap_call (tree fndecl, tree call)
 	 direct testing) wrongly forced a full oa_* walk, and consequently
 	 a real is_object_address(this) proof obligation, onto plain C++
 	 code that never opted into any of this checking at all.  */
-      if ((flag_contract_conveyor_proofs || flag_contract_symbolic_proofs)
+      /* Proof checks a plugin makes (-fcontract-analysis-proofs=plugin)
+	 need the function walked as well.  */
+      if ((flag_contract_conveyor_proofs || flag_contract_symbolic_proofs
+	   || flag_contract_plugin_conveyor_proofs
+	   || flag_contract_plugin_symbolic_proofs)
 	  && (DECL_CONSTRUCTOR_P (fndecl) || DECL_DESTRUCTOR_P (fndecl)))
 	SET_DECL_MIGHT_NEED_OA_SCAN_P (current_function_decl);
       /* A defaulted copy or move member's implicit precondition.  */
@@ -34586,6 +34590,8 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
 	 comment).  */
       bool tracking = (flag_contract_symbolic_proofs
 		       || flag_contract_conveyor_proofs
+		       || flag_contract_plugin_conveyor_proofs
+		       || flag_contract_plugin_symbolic_proofs
 		       || oa_call_site_callback || conveyor_forced
 		       || symbolic_forced
 		       || oa_function_has_forced_obligation_p ());
