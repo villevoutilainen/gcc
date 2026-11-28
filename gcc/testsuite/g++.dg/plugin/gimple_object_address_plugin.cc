@@ -707,6 +707,176 @@ struct value_facts
 };
 static value_facts *current_value_facts;
 
+/* The values of TYPE satisfying 'V CODE CST', a fact (NaN excluded: it
+   satisfies no comparison but '!='), over-approximated by closed bounds;
+   false if CODE isn't one of '<', '<=', '>', '>=', '=='.  */
+
+static bool
+frange_for_comparison (tree type, tree_code code, tree cst, frange *out)
+{
+  REAL_VALUE_TYPE inf, ninf;
+  real_inf (&inf);
+  real_inf (&ninf, true);
+  const REAL_VALUE_TYPE &k = *TREE_REAL_CST_PTR (cst);
+  switch (code)
+    {
+    case LT_EXPR: case LE_EXPR: *out = frange (type, ninf, k); break;
+    case GT_EXPR: case GE_EXPR: *out = frange (type, k, inf); break;
+    case EQ_EXPR: *out = frange (type, k, k); break;
+    default: return false;
+    }
+  out->clear_nan ();
+  return true;
+}
+
+/* Whether every value in FR satisfies 'v CODE CST' (VERDICT_TRUE), none
+   does (VERDICT_FALSE), or neither is known: a NaN makes the comparison
+   false, so all only if none can be one.  */
+
+static verdict
+frange_verdict (const frange &fr, tree_code code, tree cst)
+{
+  if (fr.undefined_p () || fr.varying_p ())
+    return VERDICT_UNKNOWN;
+  if (fr.known_isnan ())
+    return code == NE_EXPR ? VERDICT_TRUE : VERDICT_FALSE;
+  const REAL_VALUE_TYPE &lb = fr.lower_bound (), &ub = fr.upper_bound ();
+  const REAL_VALUE_TYPE *k = TREE_REAL_CST_PTR (cst);
+  bool all = false, none = false;
+  switch (code)
+    {
+    case LT_EXPR:
+      all = real_less (&ub, k);
+      none = !real_less (&lb, k);
+      break;
+    case LE_EXPR:
+      all = !real_less (k, &ub);
+      none = real_less (k, &lb);
+      break;
+    case GT_EXPR:
+      all = real_less (k, &lb);
+      none = !real_less (k, &ub);
+      break;
+    case GE_EXPR:
+      all = !real_less (&lb, k);
+      none = real_less (&ub, k);
+      break;
+    case EQ_EXPR:
+      all = real_equal (&lb, k) && real_equal (&ub, k);
+      none = real_less (&ub, k) || real_less (k, &lb);
+      break;
+    default:
+      return VERDICT_UNKNOWN;
+    }
+  if (all && !fr.maybe_isnan ())
+    return VERDICT_TRUE;
+  return none ? VERDICT_FALSE : VERDICT_UNKNOWN;
+}
+
+/* Whether HAVE lies within NEED (no NaN possible, NEED excluding it):
+   VERDICT_TRUE; whether they can't meet: VERDICT_FALSE.  */
+
+static verdict
+frange_requirement_verdict (const frange &have, const frange &need)
+{
+  if (have.undefined_p ())
+    return VERDICT_UNKNOWN;
+  if (have.known_isnan ())
+    return VERDICT_FALSE;
+  frange both = have;
+  both.intersect (need);
+  if (both.undefined_p ())
+    return VERDICT_FALSE;
+  if (!have.maybe_isnan ()
+      && !real_less (&have.lower_bound (), &need.lower_bound ())
+      && !real_less (&need.upper_bound (), &have.upper_bound ()))
+    return VERDICT_TRUE;
+  return VERDICT_UNKNOWN;
+}
+
+/* Each 'ptr->field CODE C' conjunct of COND with C a floating-point
+   constant, grouped by (pointer, field) and intersected; the pointer a
+   parameter (or with ALLOW_VAR a variable).  */
+
+struct float_field_group { tree field; tree ptr_expr; frange range; };
+
+static void
+collect_float_field_groups (tree cond, vec<float_field_group> *out,
+			    bool allow_var = false)
+{
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree field, ptr_expr, cst;
+      tree_code code;
+      if (!oa_match_field_range_comparison (*conjuncts[i], &field, &ptr_expr,
+					     &code, &cst)
+	  || TREE_CODE (cst) != REAL_CST
+	  || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (field)))
+	continue;
+      ptr_expr = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+      if (TREE_CODE (ptr_expr) != PARM_DECL
+	  && !(allow_var && VAR_P (ptr_expr)))
+	continue;
+      frange r;
+      if (!frange_for_comparison (TREE_TYPE (field), code, cst, &r))
+	continue;
+      float_field_group *found = NULL;
+      for (unsigned j = 0; j < out->length () && !found; ++j)
+	if ((*out)[j].field == field && (*out)[j].ptr_expr == ptr_expr)
+	  found = &(*out)[j];
+      if (found)
+	found->range.intersect (r);
+      else
+	out->safe_push ({ field, ptr_expr, r });
+    }
+}
+
+static tree scalar_value_origin (tree);
+
+/* The floating-point values parameters were trusted to have on entry
+   (their own preconditions), keyed by the incoming SSA value.  */
+
+static hash_map<tree, frange> *established_frange;
+
+/* The range of floating-point value V at AT: a constant's, or the
+   ranger's, narrowed by what V was trusted to be.  False if unknown.  */
+
+static bool
+float_range_at (tree v, gimple *at, gimple_ranger *ranger, frange &fr)
+{
+  if (TREE_CODE (v) == REAL_CST)
+    {
+      fr = frange (v, v);
+      if (!real_isnan (TREE_REAL_CST_PTR (v)))
+	fr.clear_nan ();
+      return true;
+    }
+  if (TREE_CODE (v) != SSA_NAME || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (v)))
+    return false;
+  if (!ranger || !ranger->range_of_expr (fr, v, at) || fr.undefined_p ())
+    fr.set_varying (TREE_TYPE (v));
+  if (established_frange)
+    if (frange *t = established_frange->get (scalar_value_origin (v)))
+      fr.intersect (*t);
+  return !fr.varying_p () && !fr.undefined_p ();
+}
+
+/* Whether floating-point value V satisfies 'V CODE CST' at AT, by the
+   ranger's range: for all values only if none can be a NaN (a NaN makes
+   the comparison false), for none if the bounds rule it out.  */
+
+static verdict
+float_verdict (tree v, tree_code code, tree cst, gimple *at,
+	       gimple_ranger *ranger)
+{
+  frange fr;
+  if (!float_range_at (v, at, ranger, fr))
+    return VERDICT_UNKNOWN;
+  return frange_verdict (fr, code, cst);
+}
+
 /* What an accessor call on an object gives: a range; CONVEYOR if
    established in the conveyor flavor.  */
 
@@ -752,6 +922,8 @@ struct dom_fact_state
      value (value_key); learned from branches and self-trust.  */
   hash_map<tree, call_rel_fact> call_rel;
   hash_map<tree, value_rel_fact> vrel;
+  /* A floating-point member's range, keyed (identity, field).  */
+  hash_map<oa_field_key_hash, frange> ffield;
 };
 
 /* The object pointer VAL points to: a variable whose address it is, or
@@ -1258,6 +1430,12 @@ seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 	    }
 	}
 
+      auto_vec<float_field_group> float_groups;
+      collect_float_field_groups (cond, &float_groups);
+      for (auto &g : float_groups)
+	if (tree ssa = ssa_default_def (fun, g.ptr_expr))
+	  seed.ffield.put ({ssa, g.field}, g.range);
+
       auto_vec<field_group_lite> field_groups;
       collect_field_range_groups (cond, &field_groups);
       for (unsigned g = 0; g < field_groups.length (); ++g)
@@ -1355,16 +1533,33 @@ get_call_rel (tree v, dom_fact_state &state, call_rel_fact *f)
   if (!def || !is_gimple_assign (def)
       || (gimple_assign_rhs_code (def) != PLUS_EXPR
 	  && gimple_assign_rhs_code (def) != MINUS_EXPR)
-      || TREE_CODE (gimple_assign_rhs2 (def)) != INTEGER_CST
-      || !TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (v)))
+      || TREE_CODE (gimple_assign_rhs2 (def)) != INTEGER_CST)
     return false;
-  call_rel_fact *g = state.call_rel.get (value_key (gimple_assign_rhs1 (def)));
+  tree y = gimple_assign_rhs1 (def);
+  call_rel_fact *g = state.call_rel.get (value_key (y));
   if (!g)
     return false;
-  *f = *g;
   widest_int k = wi::to_widest (gimple_assign_rhs2 (def));
+  bool plus = gimple_assign_rhs_code (def) == PLUS_EXPR;
+  /* A wrapping type: only if Y's range keeps the result in it.  */
+  if (!TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (v)))
+    {
+      oa_range_lite r;
+      tree type = TREE_TYPE (v);
+      if (!current_value_facts
+	  || !established_range_of (y, *current_value_facts->established_range,
+				    current_value_facts->ranger, def, &r))
+	return false;
+      widest_int lo = plus ? r.lo + k : r.lo - k;
+      widest_int hi = plus ? r.hi + k : r.hi - k;
+      if (!r.has_lo || !r.has_hi
+	  || lo < wi::to_widest (TYPE_MIN_VALUE (type))
+	  || hi > wi::to_widest (TYPE_MAX_VALUE (type)))
+	return false;
+    }
+  *f = *g;
   /* (Y - A) CODE X and V = Y + K: (V - (A + K)) CODE X.  */
-  f->offset += gimple_assign_rhs_code (def) == PLUS_EXPR ? k : -k;
+  f->offset += plus ? k : -k;
   return true;
 }
 
@@ -1586,6 +1781,33 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 			     callee);
 	}
 
+      auto_vec<float_field_group> float_groups;
+      collect_float_field_groups (cond, &float_groups);
+      for (auto &g : float_groups)
+	{
+	  unsigned argno;
+	  if (!find_param_position (callee, g.ptr_expr, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree substituted = gimple_call_arg (call, argno);
+	  tree id = gimple_object_identity (substituted);
+	  frange *have = id ? state.ffield.get ({id, g.field}) : NULL;
+	  verdict v = (have ? frange_requirement_verdict (*have, g.range)
+		       : VERDICT_UNKNOWN);
+	  if (v == VERDICT_TRUE)
+	    continue;
+	  if (v == VERDICT_FALSE)
+	    error_at (gimple_location (call), "argument %qE provably violates "
+		      "the precondition of %qD", substituted, callee);
+	  else
+	    report_unproven (call, strict, strict
+			     ? "cannot prove that field %qD of %qE satisfies "
+			       "the precondition of %qD"
+			     : "cannot verify that field %qD of %qE satisfies "
+			       "the precondition of %qD",
+			     g.field, substituted, callee);
+	}
+
       auto_vec<field_group_lite> field_groups;
       collect_field_range_groups (cond, &field_groups);
       for (unsigned g = 0; g < field_groups.length (); ++g)
@@ -1700,6 +1922,12 @@ forget_object (dom_fact_state &state, tree identity, tree field = NULL_TREE)
       drop.safe_push (it.first);
   for (auto &k : drop)
     state.field.remove (k);
+  drop.truncate (0);
+  for (auto it : state.ffield)
+    if (it.first.first == identity && (!field || it.first.second == field))
+      drop.safe_push (it.first);
+  for (auto &k : drop)
+    state.ffield.remove (k);
   /* What its accessors give may change with any of its fields.  */
   drop.truncate (0);
   for (auto it : state.call)
@@ -1725,6 +1953,7 @@ forget_all (dom_fact_state &state)
   state.rel.empty ();
   state.call.empty ();
   state.call_rel.empty ();
+  state.ffield.empty ();
 }
 
 /* OBJ (an identity) may have changed: so may the objects of FUN's
@@ -1854,7 +2083,8 @@ static void
 record_field_store (tree lhs, tree rhs, gimple *stmt, dom_fact_state &state)
 {
   if (TREE_CODE (lhs) != COMPONENT_REF || !current_value_facts
-      || !INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+      || !(INTEGRAL_TYPE_P (TREE_TYPE (lhs))
+	   || SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs))))
     return;
   tree field = TREE_OPERAND (lhs, 1);
   tree obj = TREE_OPERAND (lhs, 0);
@@ -1865,10 +2095,18 @@ record_field_store (tree lhs, tree rhs, gimple *stmt, dom_fact_state &state)
     id = obj;
   else
     return;
+  if (!id)
+    return;
+  if (SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs)))
+    {
+      frange fr;
+      if (float_range_at (rhs, stmt, current_value_facts->ranger, fr))
+	state.ffield.put ({id, field}, fr);
+      return;
+    }
   oa_range_lite r;
-  if (id
-      && established_range_of (rhs, *current_value_facts->established_range,
-			       current_value_facts->ranger, stmt, &r))
+  if (established_range_of (rhs, *current_value_facts->established_range,
+			    current_value_facts->ranger, stmt, &r))
     state.field.put ({id, field}, r);
 }
 
@@ -1951,6 +2189,18 @@ establish_persistent_facts_for_call (gcall *call, dom_fact_state &state)
 	  if (identity)
 	    state.field.put ({identity, field_groups[g].field},
 			      field_groups[g].range);
+	}
+
+      auto_vec<float_field_group> float_groups;
+      collect_float_field_groups (cond, &float_groups);
+      for (auto &g : float_groups)
+	{
+	  unsigned argno;
+	  if (!find_param_position (callee, g.ptr_expr, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  if (tree id = gimple_object_identity (gimple_call_arg (call, argno)))
+	    state.ffield.put ({id, g.field}, g.range);
 	}
     }
 }
@@ -2102,6 +2352,53 @@ refine_comparison (tree lhs, tree rhs, tree_code code, bool asserted_true,
       code = swapped_code (code);
     }
   tree accessor, receiver, field, base;
+  /* 'v.size () - x CODE K' or 'x - v.size () CODE K': x related to the
+     call, shifted.  An unsigned subtraction can wrap: trusted only with
+     the fact that it doesn't ('x <= v.size ()', resp. '>=').  */
+  if (TREE_CODE (rhs) == INTEGER_CST && TREE_CODE (lhs) == SSA_NAME)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (lhs);
+      if (def && is_gimple_assign (def)
+	  && gimple_assign_rhs_code (def) == MINUS_EXPR
+	  && TREE_CODE (gimple_assign_rhs1 (def)) == SSA_NAME
+	  && TREE_CODE (gimple_assign_rhs2 (def)) == SSA_NAME)
+	{
+	  tree a = gimple_assign_rhs1 (def), b = gimple_assign_rhs2 (def);
+	  bool call_first = call_shape (a, &accessor, &receiver);
+	  tree acc2, recv2;
+	  if (call_first != call_shape (b, &acc2, &recv2))
+	    {
+	      if (!call_first)
+		{
+		  accessor = acc2;
+		  receiver = recv2;
+		}
+	      tree x = value_key (call_first ? b : a);
+	      tree id = gimple_object_identity (receiver);
+	      if (!id || call_shape (x, &acc2, &recv2))
+		return;
+	      if (!TYPE_OVERFLOW_UNDEFINED (TREE_TYPE (lhs)))
+		{
+		  call_rel_fact *g = state.call_rel.get (x);
+		  bool no_wrap
+		    = (g && g->receiver == id && g->accessor == accessor
+		       && g->offset == 0
+		       && (call_first
+			   ? g->code == LT_EXPR || g->code == LE_EXPR
+			   : g->code == GT_EXPR || g->code == GE_EXPR));
+		  if (!no_wrap)
+		    return;
+		}
+	      widest_int k = wi::to_widest (rhs);
+	      /* call - x CODE K: (x - -K) CODE' call, CODE' swapped;
+		 x - call CODE K: (x - K) CODE call.  */
+	      tree_code c = call_first ? swapped_code (code) : code;
+	      state.call_rel.put (x, { c, id, accessor,
+				       call_first ? -k : k, true });
+	      return;
+	    }
+	}
+    }
   if (TREE_CODE (rhs) == INTEGER_CST)
     {
       if (call_shape (lhs, &accessor, &receiver))
@@ -2351,53 +2648,15 @@ assertion_verdict (tree c, gcall *call, tree struct_var, tree decls,
       return VERDICT_UNKNOWN;
     }
   /* A floating-point variable compared with a constant: the ranger's
-     range at the check.  A NaN makes the comparison false, so it holds
-     for all values only if none can be a NaN.  */
+     range at the check.  */
   if (oa_match_simple_comparison_var_public (c, &decl, &code, &cst)
       && TREE_CODE (cst) == REAL_CST)
     {
       decl = tree_strip_any_location_wrapper (decl);
       tree v = (TYPE_REF_P (TREE_TYPE (decl)) && !DECL_BY_REFERENCE (decl)
 		? NULL_TREE : value_of (decl));
-      frange fr;
-      if (!v || TREE_CODE (v) != SSA_NAME
-	  || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (v))
-	  || !vf.ranger->range_of_expr (fr, v, call) || fr.undefined_p ()
-	  || fr.varying_p ())
-	return VERDICT_UNKNOWN;
-      if (fr.known_isnan ())
-	return code == NE_EXPR ? VERDICT_TRUE : VERDICT_FALSE;
-      const REAL_VALUE_TYPE &lb = fr.lower_bound (), &ub = fr.upper_bound ();
-      const REAL_VALUE_TYPE *k = TREE_REAL_CST_PTR (cst);
-      bool all = false, none = false;
-      switch (code)
-	{
-	case LT_EXPR:
-	  all = real_less (&ub, k);
-	  none = !real_less (&lb, k);
-	  break;
-	case LE_EXPR:
-	  all = !real_less (k, &ub);
-	  none = real_less (k, &lb);
-	  break;
-	case GT_EXPR:
-	  all = real_less (k, &lb);
-	  none = !real_less (k, &ub);
-	  break;
-	case GE_EXPR:
-	  all = !real_less (&lb, k);
-	  none = real_less (&ub, k);
-	  break;
-	case EQ_EXPR:
-	  all = real_equal (&lb, k) && real_equal (&ub, k);
-	  none = real_less (&ub, k) || real_less (k, &lb);
-	  break;
-	default:
-	  return VERDICT_UNKNOWN;
-	}
-      if (all && !fr.maybe_isnan ())
-	return VERDICT_TRUE;
-      return none ? VERDICT_FALSE : VERDICT_UNKNOWN;
+      return v ? float_verdict (v, code, cst, call, vf.ranger)
+	       : VERDICT_UNKNOWN;
     }
   if (oa_match_comparison_against_param (c, &decl, &code, &other, true))
     {
@@ -2426,9 +2685,19 @@ assertion_verdict (tree c, gcall *call, tree struct_var, tree decls,
 	}
       return VERDICT_UNKNOWN;
     }
+  tree field, ptr_expr;
+  if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code, &cst)
+      && TREE_CODE (cst) == REAL_CST)
+    {
+      tree base = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+      tree p = (VAR_P (base) || TREE_CODE (base) == PARM_DECL
+		? value_of (base) : NULL_TREE);
+      tree id = p ? gimple_object_identity (p) : NULL_TREE;
+      frange *have = id ? state.ffield.get ({id, field}) : NULL;
+      return have ? frange_verdict (*have, code, cst) : VERDICT_UNKNOWN;
+    }
   /* A member compared with a constant ('v > 0'): the value last stored
      to it, else what the facts say of the object's field.  */
-  tree field, ptr_expr;
   if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code, &cst)
       && TREE_CODE (cst) == INTEGER_CST)
     {
@@ -2617,6 +2886,9 @@ copy_state (dom_fact_state &to, const dom_fact_state &from)
   to.vrel.empty ();
   for (auto it : from.vrel)
     to.vrel.put (it.first, it.second);
+  to.ffield.empty ();
+  for (auto it : from.ffield)
+    to.ffield.put (it.first, it.second);
 }
 
 /* Meet B into A: what holds in both.  A field's ranges join to the
@@ -2758,6 +3030,22 @@ meet_state (dom_fact_state &a, const dom_fact_state &b)
     }
   for (tree k : drop)
     a.vrel.remove (k);
+  fdrop.truncate (0);
+  for (auto it : a.ffield)
+    {
+      const frange *o = const_cast<hash_map<oa_field_key_hash, frange> &>
+			  (b.ffield).get (it.first);
+      if (!o)
+	fdrop.safe_push (it.first);
+      else
+	{
+	  it.second.union_ (*o);
+	  if (it.second.varying_p ())
+	    fdrop.safe_push (it.first);
+	}
+    }
+  for (auto &k : fdrop)
+    a.ffield.remove (k);
 }
 
 /* Whether A and B hold the same facts.  */
@@ -2812,6 +3100,15 @@ same_state (const dom_fact_state &a, const dom_fact_state &b)
 	       (b.call);
   auto &bcr = const_cast<hash_map<tree, call_rel_fact> &> (b.call_rel);
   auto &bvr = const_cast<hash_map<tree, value_rel_fact> &> (b.vrel);
+  auto &bff = const_cast<hash_map<oa_field_key_hash, frange> &> (b.ffield);
+  if (a.ffield.elements () != b.ffield.elements ())
+    return false;
+  for (auto it : a.ffield)
+    {
+      frange *o = bff.get (it.first);
+      if (!o || !(*o == it.second))
+	return false;
+    }
   if (a.call.elements () != b.call.elements ()
       || a.call_rel.elements () != b.call_rel.elements ()
       || a.vrel.elements () != b.vrel.elements ())
@@ -3475,11 +3772,15 @@ conjunct_covered_p (tree conjunct)
   if (oa_nonzero_conjunct_p (conjunct, &a))
     return true;
   if (oa_match_simple_comparison (conjunct, &a, &code, &b))
-    return TREE_CODE (a) == PARM_DECL && TREE_CODE (b) == INTEGER_CST;
+    return (TREE_CODE (a) == PARM_DECL
+	    && (TREE_CODE (b) == INTEGER_CST
+		|| (TREE_CODE (b) == REAL_CST
+		    && SCALAR_FLOAT_TYPE_P (TREE_TYPE (a)))));
   if (oa_match_predicate_conjunct (conjunct, &a, &b, &negated))
     return true;
   if (oa_match_field_range_comparison (conjunct, &a, &b, &code, &c))
-    return (TREE_CODE (c) == INTEGER_CST
+    return ((TREE_CODE (c) == INTEGER_CST
+	     || (TREE_CODE (c) == REAL_CST && SCALAR_FLOAT_TYPE_P (TREE_TYPE (a))))
 	    && TREE_CODE (oa_strip_symbolic_ptr_expr_public (b)) == PARM_DECL);
   return false;
 }
@@ -3695,6 +3996,34 @@ check_call (gcall *call, hash_set<tree> &established,
 	if (!conjunct_covered_p (*conjuncts[i]))
 	  report_uncovered (*conjuncts[i], call, callee, strict);
 
+      /* A floating-point parameter compared with a constant ('pre (x <=
+	 100.0)'): the argument's range.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree parm, cst;
+	  tree_code code;
+	  unsigned argno;
+	  if (!oa_match_simple_comparison (*conjuncts[i], &parm, &code, &cst)
+	      || TREE_CODE (cst) != REAL_CST || TREE_CODE (parm) != PARM_DECL
+	      || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (parm))
+	      || !find_param_position (callee, parm, &argno)
+	      || argno >= gimple_call_num_args (call))
+	    continue;
+	  tree arg = gimple_call_arg (call, argno);
+	  verdict v = float_verdict (arg, code, cst, call, ranger);
+	  if (v == VERDICT_TRUE)
+	    continue;
+	  if (v == VERDICT_FALSE)
+	    error_at (gimple_location (call), "argument %qE provably violates "
+		      "the precondition of %qD", arg, callee);
+	  else
+	    report_unproven (call, strict, strict
+			     ? "cannot prove that %qE satisfies the "
+			       "precondition of %qD"
+			     : "cannot verify that %qE satisfies the "
+			       "precondition of %qD", arg, callee);
+	}
+
       /* Range obligations ('pre (x >= 20 && x < 100)'), grouped per
 	 parameter, since one precondition can constrain several, each
 	 through more than one conjunct.  */
@@ -3756,6 +4085,37 @@ check_function (function *fun, void *)
   seed_self_trust (fun, established, established_nz, established_range,
 		    established_rel);
 
+  /* A floating-point parameter compared with a constant in the
+     function's own preconditions.  */
+  hash_map<tree, frange> trusted_frange;
+  for (tree contract : fn_contracts (fun->decl))
+    {
+      tree cond = CONTRACT_CONDITION (contract);
+      if (!PRECONDITION_P (contract) || !cond || cond == error_mark_node)
+	continue;
+      auto_vec<tree *> conjuncts;
+      oa_collect_conjuncts_public (&cond, &conjuncts);
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree parm, cst;
+	  tree_code code;
+	  frange r;
+	  tree ssa;
+	  if (oa_match_simple_comparison (*conjuncts[i], &parm, &code, &cst)
+	      && TREE_CODE (cst) == REAL_CST && TREE_CODE (parm) == PARM_DECL
+	      && SCALAR_FLOAT_TYPE_P (TREE_TYPE (parm))
+	      && (ssa = ssa_default_def (fun, parm))
+	      && frange_for_comparison (TREE_TYPE (parm), code, cst, &r))
+	    {
+	      if (frange *old = trusted_frange.get (ssa))
+		old->intersect (r);
+	      else
+		trusted_frange.put (ssa, r);
+	    }
+	}
+    }
+  established_frange = &trusted_frange;
+
   gimple_ranger *ranger = enable_ranger (fun, false);
   basic_block bb;
   FOR_EACH_BB_FN (bb, fun)
@@ -3767,6 +4127,7 @@ check_function (function *fun, void *)
 
   /* Facts about persistent memory (named predicates, field ranges) are
      per program point: a forward analysis of their own.  */
+
   value_facts vf = { &established, &established_nz, &established_range,
 		     &established_rel, ranger };
   current_value_facts = &vf;
@@ -3774,6 +4135,7 @@ check_function (function *fun, void *)
   seed_predicate_self_trust (fun, predicate_seed);
   persistent_facts_walk (fun, predicate_seed);
   current_value_facts = NULL;
+  established_frange = NULL;
   disable_ranger (fun);
 }
 
