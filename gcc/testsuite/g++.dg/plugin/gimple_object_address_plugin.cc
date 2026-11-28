@@ -1152,6 +1152,9 @@ struct dom_fact_state
   hash_set<tree> reach_escaped;
   /* Accessor results compared with each other ('v.size () < w.size ()').  */
   hash_map<oa_field_key_hash, call_call_fact> ccall;
+  /* A pointer member's value, keyed (object, field): the identity of what
+     was stored there.  */
+  hash_map<oa_field_key_hash, tree> slot;
 };
 
 /* The object pointer VAL points to: a variable whose address it is, or
@@ -1159,17 +1162,64 @@ struct dom_fact_state
    arguments all point to the same one.  NULL_TREE if VAL isn't a
    pointer.  */
 
+/* For a member's address's identity (field_identity), the identity of
+   the object it lies in.  */
+
+static hash_map<tree, tree> *field_identity_base;
+
+static tree gimple_object_identity_1 (tree, hash_set<tree> &);
+
+/* The identity of the member REF ('h->f', 'o.f'): one per object and
+   field, so that facts about it are kept apart from the object's and
+   end with them.  NULL_TREE if the object has none.  */
+
+static tree
+field_identity (tree ref, hash_set<tree> &visiting)
+{
+  if (TREE_CODE (ref) != COMPONENT_REF
+      || TREE_CODE (TREE_OPERAND (ref, 1)) != FIELD_DECL)
+    return NULL_TREE;
+  tree obj = TREE_OPERAND (ref, 0);
+  tree base;
+  if (TREE_CODE (obj) == MEM_REF && integer_zerop (TREE_OPERAND (obj, 1)))
+    base = gimple_object_identity_1 (TREE_OPERAND (obj, 0), visiting);
+  else if (TREE_CODE (obj) == COMPONENT_REF)
+    base = field_identity (obj, visiting);
+  else if (VAR_P (obj) || TREE_CODE (obj) == PARM_DECL)
+    base = obj;
+  else
+    return NULL_TREE;
+  if (!base)
+    return NULL_TREE;
+  char buf[64];
+  snprintf (buf, sizeof buf, "field:%p:%p", (void *) base,
+	    (void *) TREE_OPERAND (ref, 1));
+  tree key = get_identifier (buf);
+  if (!field_identity_base)
+    field_identity_base = new hash_map<tree, tree>;
+  field_identity_base->put (key, base);
+  return key;
+}
+
+/* The identity a pointer loaded from a member slot has: what was stored
+   there (state.slot), by the walk; keyed by the SSA value loaded.  */
+
+static hash_map<tree, tree> *slot_load_identity;
+
 static tree
 gimple_object_identity_1 (tree val, hash_set<tree> &visiting)
 {
   if (val == NULL_TREE)
     return NULL_TREE;
+  if (slot_load_identity && TREE_CODE (val) == SSA_NAME)
+    if (tree *id = slot_load_identity->get (val))
+      return *id;
   if (TREE_CODE (val) == ADDR_EXPR)
     {
       tree op = TREE_OPERAND (val, 0);
       if (DECL_P (op) && (VAR_P (op) || TREE_CODE (op) == PARM_DECL))
 	return op;
-      return NULL_TREE;
+      return field_identity (op, visiting);
     }
   if (TREE_CODE (val) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (val)))
     {
@@ -2404,6 +2454,17 @@ unnamed_pointer_p (tree arg, tree identity)
 static void
 forget_object (dom_fact_state &state, tree identity, tree field = NULL_TREE)
 {
+  /* Its members' identities' facts too.  */
+  if (!field && field_identity_base && state.pred.elements ())
+    {
+      auto_vec<tree, 4> members;
+      for (auto it : state.pred)
+	if (tree *b = field_identity_base->get (it.first))
+	  if (*b == identity)
+	    members.safe_push (it.first);
+      for (tree m : members)
+	forget_object (state, m);
+    }
   state.pred.remove (identity);
   relation_drop (state, identity);
   auto_vec<std::pair<tree, tree>> drop;
@@ -2437,6 +2498,12 @@ forget_object (dom_fact_state &state, tree identity, tree field = NULL_TREE)
       drop.safe_push (it.first);
   for (auto &k : drop)
     state.ccall.remove (k);
+  drop.truncate (0);
+  for (auto it : state.slot)
+    if (it.first.first == identity && (!field || it.first.second == field))
+      drop.safe_push (it.first);
+  for (auto &k : drop)
+    state.slot.remove (k);
 }
 
 /* What STATE knows of every object ends.  */
@@ -2451,6 +2518,7 @@ forget_all (dom_fact_state &state)
   state.call_rel.empty ();
   state.ffield.empty ();
   state.ccall.empty ();
+  state.slot.empty ();
 }
 
 /* OBJ (an identity) may have changed: so may the objects of FUN's
@@ -3417,6 +3485,40 @@ assertion_verdict (tree c, gcall *call, tree struct_var, tree decls,
       return v ? float_verdict (v, code, cst, call, vf.ranger)
 	       : VERDICT_UNKNOWN;
     }
+  /* A value compared with an accessor call ('x < v.size ()'): a fact
+     relating them, or the value's range against the accessor's.  */
+  {
+    tree recv, acc;
+    if (oa_match_comparison_against_call (c, &decl, &code, &recv, &acc,
+					  !require_conveyor, true))
+      {
+	tree v = scalar_value_of (decl);
+	tree rb = oa_strip_symbolic_ptr_expr_public (recv);
+	tree rp = (VAR_P (rb) || TREE_CODE (rb) == PARM_DECL
+		   ? value_of (rb) : NULL_TREE);
+	tree rid = rp ? gimple_object_identity (rp) : NULL_TREE;
+	if (!v || !rid)
+	  return VERDICT_UNKNOWN;
+	call_rel_fact f;
+	widest_int olo, ohi;
+	if (get_call_rel (v, state, &f, &olo, &ohi) && f.receiver == rid
+	    && f.accessor == acc && (!require_conveyor || f.conveyor))
+	  {
+	    if (oa_relational_code_implies (f.code, code)
+		&& offset_compatible_p (olo, code)
+		&& offset_compatible_p (ohi, code))
+	      return VERDICT_TRUE;
+	    if (offset_contradicts_p (f.code, olo, code)
+		&& offset_contradicts_p (f.code, ohi, code))
+	      return VERDICT_FALSE;
+	  }
+	oa_range_lite r;
+	call_range_fact *cr = state.call.get ({rid, acc});
+	if (cr && (!require_conveyor || cr->conveyor) && range_of (v, &r))
+	  return range_pair_verdict (r, code, cr->r);
+	return VERDICT_UNKNOWN;
+      }
+  }
   if (oa_match_comparison_against_param (c, &decl, &code, &other, true))
     {
       tree va = scalar_value_of (decl), vb = scalar_value_of (other);
@@ -3696,6 +3798,20 @@ establish_assertion_facts (gcall *call, dom_fact_state &state)
 		state.vnz.put (value_key (v), conveyor);
 	  continue;
 	}
+      tree recv, acc;
+      if (oa_match_comparison_against_call (c, &decl, &code, &recv, &acc,
+					    !conveyor, true)
+	  && scalar_decl_p (decl))
+	{
+	  tree v = value_of (decl);
+	  tree rb = oa_strip_symbolic_ptr_expr_public (recv);
+	  tree rp = (VAR_P (rb) || TREE_CODE (rb) == PARM_DECL
+		     ? value_of (rb) : NULL_TREE);
+	  tree rid = rp ? gimple_object_identity (rp) : NULL_TREE;
+	  if (v && TREE_CODE (v) == SSA_NAME && rid)
+	    state.call_rel.put (value_key (v), { code, rid, acc, 0, conveyor });
+	  continue;
+	}
       if (oa_match_simple_comparison_var_public (c, &decl, &code, &cst)
 	  && TREE_CODE (cst) == INTEGER_CST && scalar_decl_p (decl))
 	{
@@ -3910,6 +4026,9 @@ copy_state (dom_fact_state &to, const dom_fact_state &from)
   to.ccall.empty ();
   for (auto it : from.ccall)
     to.ccall.put (it.first, it.second);
+  to.slot.empty ();
+  for (auto it : from.slot)
+    to.slot.put (it.first, it.second);
 }
 
 /* Meet B into A: what holds in both.  A field's ranges join to the
@@ -4132,6 +4251,16 @@ meet_state (dom_fact_state &a, const dom_fact_state &b)
       }
     for (auto &k : cdrop)
       a.ccall.remove (k);
+    cdrop.truncate (0);
+    for (auto it : a.slot)
+      {
+	tree *o = const_cast<hash_map<oa_field_key_hash, tree> &> (b.slot)
+		    .get (it.first);
+	if (!o || *o != it.second)
+	  cdrop.safe_push (it.first);
+      }
+    for (auto &k : cdrop)
+      a.slot.remove (k);
   }
   for (auto it : const_cast<hash_map<tree, tree> &> (b.reach_src))
     {
@@ -4225,6 +4354,15 @@ same_state (const dom_fact_state &a, const dom_fact_state &b)
 	}
       return true;
     };
+  if (a.slot.elements () != b.slot.elements ())
+    return false;
+  for (auto it : a.slot)
+    {
+      tree *o = const_cast<hash_map<oa_field_key_hash, tree> &> (b.slot)
+		  .get (it.first);
+      if (!o || *o != it.second)
+	return false;
+    }
   if (a.ccall.elements () != b.ccall.elements ())
     return false;
   for (auto it : a.ccall)
@@ -4642,6 +4780,37 @@ transfer_block (basic_block bb, function *fun, dom_fact_state &state,
 	 are the fixed point's; the walk's order puts it before the uses.  */
       if (report && gimple_assign_load_p (stmt))
 	record_load_range (stmt, state);
+      /* A pointer member: the identity stored ('h->ptr = p'), and what a
+	 load of it is (in every pass, as below).  */
+      if (gimple_assign_single_p (stmt))
+	{
+	  tree lhs = gimple_assign_lhs (stmt), rhs = gimple_assign_rhs1 (stmt);
+	  tree field, base;
+	  if (TREE_CODE (lhs) == COMPONENT_REF
+	      && POINTER_TYPE_P (TREE_TYPE (lhs))
+	      && TREE_CODE (TREE_OPERAND (lhs, 1)) == FIELD_DECL)
+	    {
+	      tree obj = TREE_OPERAND (lhs, 0);
+	      tree id = (TREE_CODE (obj) == MEM_REF
+			 ? gimple_object_identity (TREE_OPERAND (obj, 0))
+			 : (VAR_P (obj) || TREE_CODE (obj) == PARM_DECL ? obj
+			    : NULL_TREE));
+	      tree vid = gimple_object_identity (rhs);
+	      if (id && vid)
+		state.slot.put ({id, TREE_OPERAND (lhs, 1)}, vid);
+	    }
+	  else if (slot_load_identity && TREE_CODE (lhs) == SSA_NAME
+		   && POINTER_TYPE_P (TREE_TYPE (lhs))
+		   && field_shape (lhs, &field, &base))
+	    {
+	      tree id = gimple_object_identity (base);
+	      tree *v = id ? state.slot.get ({id, field}) : NULL;
+	      if (v)
+		slot_load_identity->put (lhs, *v);
+	      else
+		slot_load_identity->remove (lhs);
+	    }
+	}
       /* A floating-point member's load: in every pass, the last one's
 	 facts being the fixed point's.  */
       if (float_load_ranges && gimple_assign_load_p (stmt))
@@ -5900,6 +6069,8 @@ check_function (function *fun, void *)
   established_frange = &trusted_frange;
   hash_map<tree, frange> load_ranges;
   float_load_ranges = &load_ranges;
+  hash_map<tree, tree> slot_loads;
+  slot_load_identity = &slot_loads;
 
   gimple_ranger *ranger = enable_ranger (fun, false);
 
@@ -5919,6 +6090,7 @@ check_function (function *fun, void *)
   conveyor_value_facts = NULL;
   established_frange = NULL;
   float_load_ranges = NULL;
+  slot_load_identity = NULL;
   disable_ranger (fun);
 }
 
