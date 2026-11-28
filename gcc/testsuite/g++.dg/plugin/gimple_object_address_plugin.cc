@@ -57,6 +57,11 @@
 
 int plugin_is_GPL_compatible;
 
+/* While an obligation is checked in the conveyor flavor: only conveyor
+   facts may prove it -- the value facts of conveyor contracts
+   (vfacts) and a callee's conveyor postconditions (item 6).  */
+static bool require_conveyor_facts;
+
 /* A conjunct holds, fails, or neither is known.  */
 enum verdict { VERDICT_UNKNOWN, VERDICT_TRUE, VERDICT_FALSE };
 
@@ -87,6 +92,9 @@ postcondition_establishes_p (tree contract, tree callee,
   bool s = oa_contract_symbolic_active_public (contract, callee);
   if (conveyor)
     *conveyor = c;
+  /* Asked for a fact a conveyor obligation may use (item 6).  */
+  if (require_conveyor_facts && !conveyor)
+    return c;
   return c || s;
 }
 
@@ -753,6 +761,16 @@ struct value_facts
   gimple_ranger *ranger;
 };
 static value_facts *current_value_facts;
+/* The same, from conveyor contracts only: what a conveyor obligation may
+   use (one-way trust).  */
+static value_facts *conveyor_value_facts;
+
+
+static value_facts &
+vfacts ()
+{
+  return require_conveyor_facts ? *conveyor_value_facts : *current_value_facts;
+}
 
 /* The values of TYPE satisfying 'V CODE CST', a fact (NaN excluded: it
    satisfies no comparison but '!='), over-approximated by closed bounds;
@@ -929,6 +947,11 @@ float_verdict (tree v, tree_code code, tree cst, gimple *at,
 
 struct call_range_fact { oa_range_lite r; bool conveyor; };
 
+/* A member's range (FIELD of an object; NULL_TREE: a scalar in memory,
+   the object itself); CONVEYOR if established in the conveyor flavor.  */
+
+struct field_fact { oa_range_lite r; bool conveyor; };
+
 /* A value V related to an accessor call: '(V - OFFSET) CODE
    RECEIVER.ACCESSOR ()', RECEIVER an object identity.  */
 
@@ -951,7 +974,7 @@ struct value_rel_fact { tree_code code; tree other; bool conveyor; };
 struct dom_fact_state
 {
   hash_map<tree, pred_facts> pred;
-  hash_map<oa_field_key_hash, oa_range_lite> field;
+  hash_map<oa_field_key_hash, field_fact> field;
   hash_map<tree, relation_fact_lite> rel;
   /* The locals whose address a call that may end lifetimes was given: it
      may have kept it, so any later such call may change them.  On any
@@ -1496,7 +1519,7 @@ seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 	  tree ssa = ssa_default_def (fun, param);
 	  tree id = ssa ? gimple_object_identity (ssa) : NULL_TREE;
 	  if (id && extract_conjunct_range (conjuncts, param, &r))
-	    seed.field.put ({id, NULL_TREE}, r);
+	    seed.field.put ({id, NULL_TREE}, { r, conveyor });
 	}
 
       auto_vec<float_field_group> float_groups;
@@ -1514,7 +1537,8 @@ seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 	  tree id = (POINTER_TYPE_P (TREE_TYPE (pe)) || TYPE_REF_P (TREE_TYPE (pe))
 		     ? ssa_default_def (fun, pe) : pe);
 	  if (id)
-	    seed.field.put ({id, field_groups[g].field}, field_groups[g].range);
+	    seed.field.put ({id, field_groups[g].field},
+			    { field_groups[g].range, conveyor });
 	}
     }
 }
@@ -1619,8 +1643,8 @@ get_call_rel (tree v, dom_fact_state &state, call_rel_fact *f)
       oa_range_lite r;
       tree type = TREE_TYPE (v);
       if (!current_value_facts
-	  || !established_range_of (y, *current_value_facts->established_range,
-				    current_value_facts->ranger, def, &r))
+	  || !established_range_of (y, *vfacts ().established_range,
+				    vfacts ().ranger, def, &r))
 	return false;
       widest_int lo = plus ? r.lo + k : r.lo - k;
       widest_int hi = plus ? r.hi + k : r.hi - k;
@@ -1651,6 +1675,7 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
       bool as_conveyor, strict;
       if (!call_obligation_p (contract, callee, &as_conveyor, &strict))
 	continue;
+      auto flavor = make_temp_override (require_conveyor_facts, as_conveyor);
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
 	continue;
@@ -1741,9 +1766,8 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	  call_range_fact *cr = rid ? state.call.get ({rid, acc}) : NULL;
 	  if (v == VERDICT_UNKNOWN && need_offset == 0 && cr
 	      && (!as_conveyor || cr->conveyor) && current_value_facts
-	      && established_range_of (sub_param,
-				       *current_value_facts->established_range,
-				       current_value_facts->ranger, call, &pr))
+	      && established_range_of (sub_param, *vfacts ().established_range,
+				       vfacts ().ranger, call, &pr))
 	    v = range_pair_verdict (pr, code, cr->r);
 	  if (v == VERDICT_TRUE)
 	    continue;
@@ -1790,7 +1814,7 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	      tree frhs;
 	      if (v == VERDICT_UNKNOWN && current_value_facts
 		  && get_relational (side ? b : a,
-				     *current_value_facts->established_rel,
+				     *vfacts ().established_rel,
 				     &fc, &frhs)
 		  && frhs == (side ? a : b)
 		  && oa_relational_code_implies (fc, need))
@@ -1798,10 +1822,10 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	    }
 	  oa_range_lite ra, rb;
 	  if (v == VERDICT_UNKNOWN && current_value_facts
-	      && established_range_of (a, *current_value_facts->established_range,
-				       current_value_facts->ranger, call, &ra)
-	      && established_range_of (b, *current_value_facts->established_range,
-				       current_value_facts->ranger, call, &rb))
+	      && established_range_of (a, *vfacts ().established_range,
+				       vfacts ().ranger, call, &ra)
+	      && established_range_of (b, *vfacts ().established_range,
+				       vfacts ().ranger, call, &rb))
 	    v = range_pair_verdict (ra, rel_code, rb);
 	  if (v == VERDICT_TRUE)
 	    continue;
@@ -1892,9 +1916,12 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	  tree identity = gimple_object_identity (substituted);
 	  oa_range_lite &required = field_groups[g].range;
 
-	  oa_range_lite *have
+	  field_fact *ff
 	    = identity ? state.field.get ({identity, field_groups[g].field})
 		       : NULL;
+	  if (ff && as_conveyor && !ff->conveyor)
+	    ff = NULL;
+	  oa_range_lite *have = ff ? &ff->r : NULL;
 	  if (have
 	      && (!required.has_lo || (have->has_lo && have->lo >= required.lo))
 	      && (!required.has_hi || (have->has_hi && have->hi <= required.hi)))
@@ -2179,8 +2206,12 @@ record_load_range (gimple *stmt, dom_fact_state &state)
   tree base;
   if (!id && field_shape (lhs, &field, &base) && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
     id = gimple_object_identity (base);
-  if (oa_range_lite *r = id ? state.field.get ({id, field}) : NULL)
-    current_value_facts->established_range->put (lhs, *r);
+  if (field_fact *f = id ? state.field.get ({id, field}) : NULL)
+    {
+      current_value_facts->established_range->put (lhs, f->r);
+      if (f->conveyor)
+	conveyor_value_facts->established_range->put (lhs, f->r);
+    }
 }
 
 /* After a store of RHS to LHS at STMT: a member's range is the stored
@@ -2189,14 +2220,16 @@ record_load_range (gimple *stmt, dom_fact_state &state)
 static void
 record_field_store (tree lhs, tree rhs, gimple *stmt, dom_fact_state &state)
 {
+  /* What is stored is known to every flavor only from conveyor facts.  */
+  auto flavor = make_temp_override (require_conveyor_facts, true);
   /* A scalar in memory: its range is the stored value's.  */
   if (tree sid = (current_value_facts ? scalar_memory_identity (lhs)
 		  : NULL_TREE))
     {
       oa_range_lite r;
-      if (established_range_of (rhs, *current_value_facts->established_range,
-				current_value_facts->ranger, stmt, &r))
-	state.field.put ({sid, NULL_TREE}, r);
+      if (established_range_of (rhs, *conveyor_value_facts->established_range,
+				conveyor_value_facts->ranger, stmt, &r))
+	state.field.put ({sid, NULL_TREE}, { r, true });
       return;
     }
   if (TREE_CODE (lhs) != COMPONENT_REF || !current_value_facts
@@ -2222,9 +2255,9 @@ record_field_store (tree lhs, tree rhs, gimple *stmt, dom_fact_state &state)
       return;
     }
   oa_range_lite r;
-  if (established_range_of (rhs, *current_value_facts->established_range,
-			    current_value_facts->ranger, stmt, &r))
-    state.field.put ({id, field}, r);
+  if (established_range_of (rhs, *conveyor_value_facts->established_range,
+			    conveyor_value_facts->ranger, stmt, &r))
+    state.field.put ({id, field}, { r, true });
 }
 
 /* CALL's own callee's declared postcondition establishing a fact about
@@ -2303,9 +2336,11 @@ establish_persistent_facts_for_call (gcall *call, dom_fact_state &state)
 	    continue;
 	  tree substituted = gimple_call_arg (call, argno);
 	  tree identity = gimple_object_identity (substituted);
+	  bool conv = false;
+	  postcondition_establishes_p (contract, callee, &conv);
 	  if (identity)
 	    state.field.put ({identity, field_groups[g].field},
-			      field_groups[g].range);
+			      { field_groups[g].range, conv });
 	}
 
       auto_vec<float_field_group> float_groups;
@@ -2475,7 +2510,8 @@ refine_comparison (tree lhs, tree rhs, tree_code code, bool asserted_true,
       if (field_shape (e, &fld, &bas))
 	{
 	  tree id = gimple_object_identity (bas);
-	  r = id ? state.field.get ({id, fld}) : NULL;
+	  field_fact *ff = id ? state.field.get ({id, fld}) : NULL;
+	  r = ff ? &ff->r : NULL;
 	}
       else if (call_shape (e, &acc, &recv))
 	{
@@ -2567,10 +2603,10 @@ refine_comparison (tree lhs, tree rhs, tree_code code, bool asserted_true,
 	  tree id = gimple_object_identity (base);
 	  if (!id)
 	    return;
-	  oa_range_lite *old = state.field.get ({id, field});
-	  oa_range_lite r = old ? *old : oa_range_lite ();
-	  tighten_range_bound (r, code, wi::to_widest (rhs));
-	  state.field.put ({id, field}, r);
+	  field_fact *old = state.field.get ({id, field});
+	  field_fact f = old ? *old : field_fact { oa_range_lite (), true };
+	  tighten_range_bound (f.r, code, wi::to_widest (rhs));
+	  state.field.put ({id, field}, f);
 	}
       return;
     }
@@ -2751,7 +2787,7 @@ static verdict
 assertion_verdict (tree c, gcall *call, tree struct_var, tree decls,
 		   bool require_conveyor, dom_fact_state &state)
 {
-  value_facts &vf = *current_value_facts;
+  value_facts &vf = vfacts ();
   auto value_of = [&] (tree decl) -> tree
     {
       decl = tree_strip_any_location_wrapper (decl);
@@ -2866,8 +2902,9 @@ assertion_verdict (tree c, gcall *call, tree struct_var, tree decls,
 	if (range_of (v, &r))
 	  return range_verdict (r, code, wi::to_widest (cst));
       if (tree id = gimple_object_identity (p))
-	if (oa_range_lite *f = state.field.get ({id, field}))
-	  return range_verdict (*f, code, wi::to_widest (cst));
+	if (field_fact *f = state.field.get ({id, field}))
+	  if (!require_conveyor || f->conveyor)
+	    return range_verdict (f->r, code, wi::to_widest (cst));
       return VERDICT_UNKNOWN;
     }
   tree pred_fn, pred_arg;
@@ -2944,10 +2981,10 @@ check_assertion (gcall *call, dom_fact_state &state)
       bool analysis
 	= (conveyor
 	   ? conveyor_ok
-	     && (contract_analysis_plugin_proofs_p (true)
+	     && (contract_analysis_plugin_assertion_proofs_p (true)
 		 || oa_contract_conveyor_analysis_forced_public (contract, owner))
 	   : symbolic_ok
-	     && (contract_analysis_plugin_proofs_p (false)
+	     && (contract_analysis_plugin_assertion_proofs_p (false)
 		 || oa_contract_symbolic_analysis_forced_public (contract,
 								 owner)));
       if (!analysis)
@@ -2955,6 +2992,8 @@ check_assertion (gcall *call, dom_fact_state &state)
       bool strict = (conveyor
 		     ? oa_contract_conveyor_strict_public (contract, owner)
 		     : oa_contract_symbolic_strict_public (contract, owner));
+      auto flavor_scope = make_temp_override (require_conveyor_facts,
+					      conveyor);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree c = *conjuncts[i];
@@ -3080,15 +3119,17 @@ meet_state (dom_fact_state &a, const dom_fact_state &b)
   auto_vec<std::pair<tree, tree>, 8> fdrop;
   for (auto it : a.field)
     {
-      const oa_range_lite *o
-	= const_cast<hash_map<oa_field_key_hash, oa_range_lite> &>
+      const field_fact *of
+	= const_cast<hash_map<oa_field_key_hash, field_fact> &>
 	    (b.field).get (it.first);
-      if (!o)
+      if (!of)
 	{
 	  fdrop.safe_push (it.first);
 	  continue;
 	}
-      oa_range_lite &r = it.second;
+      const oa_range_lite *o = &of->r;
+      it.second.conveyor &= of->conveyor;
+      oa_range_lite &r = it.second.r;
       r.has_lo = r.has_lo && o->has_lo;
       if (r.has_lo)
 	r.lo = wi::smin (r.lo, o->lo);
@@ -3208,7 +3249,7 @@ static bool
 same_state (const dom_fact_state &a, const dom_fact_state &b)
 {
   auto &bp = const_cast<hash_map<tree, pred_facts> &> (b.pred);
-  auto &bf = const_cast<hash_map<oa_field_key_hash, oa_range_lite> &> (b.field);
+  auto &bf = const_cast<hash_map<oa_field_key_hash, field_fact> &> (b.field);
   auto &br = const_cast<hash_map<tree, relation_fact_lite> &> (b.rel);
   if (a.pred.elements () != b.pred.elements ()
       || a.field.elements () != b.field.elements ()
@@ -3229,10 +3270,11 @@ same_state (const dom_fact_state &a, const dom_fact_state &b)
     }
   for (auto it : a.field)
     {
-      oa_range_lite *o = bf.get (it.first);
-      if (!o || o->has_lo != it.second.has_lo || o->has_hi != it.second.has_hi
-	  || (o->has_lo && o->lo != it.second.lo)
-	  || (o->has_hi && o->hi != it.second.hi))
+      field_fact *of = bf.get (it.first);
+      const oa_range_lite &r = it.second.r;
+      if (!of || of->conveyor != it.second.conveyor
+	  || of->r.has_lo != r.has_lo || of->r.has_hi != r.has_hi
+	  || (r.has_lo && of->r.lo != r.lo) || (r.has_hi && of->r.hi != r.hi))
 	return false;
     }
   for (auto it : a.rel)
@@ -3847,12 +3889,17 @@ static void
 seed_self_trust (function *fun, hash_set<tree> &established,
 		  hash_set<tree> &established_nz,
 		  hash_map<tree, oa_range_lite> &established_range,
-		  hash_map<tree, rel_fact_lite> &established_rel)
+		  hash_map<tree, rel_fact_lite> &established_rel,
+		  bool conveyor_only = false)
 {
   tree fndecl = fun->decl;
   for (tree contract : fn_contracts (fndecl))
     {
       if (!PRECONDITION_P (contract))
+	continue;
+      /* A conveyor obligation may trust only a conveyor precondition.  */
+      if (conveyor_only && !oa_contract_conveyor_active_public (contract,
+								 fndecl))
 	continue;
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
@@ -4034,11 +4081,9 @@ report_uncovered (tree conjunct, gcall *call, tree callee, bool strict)
    arguments for the parameters.  */
 
 static void
-check_call (gcall *call, hash_set<tree> &established,
-	     hash_set<tree> &established_nz,
-	     hash_map<tree, oa_range_lite> &established_range,
-	     hash_map<tree, rel_fact_lite> &established_rel,
-	     gimple_ranger *ranger)
+check_call (gcall *call, hash_set<tree> &, hash_set<tree> &,
+	    hash_map<tree, oa_range_lite> &, hash_map<tree, rel_fact_lite> &,
+	    gimple_ranger *ranger)
 {
   tree callee = gimple_call_fndecl (call);
   if (!callee)
@@ -4051,6 +4096,13 @@ check_call (gcall *call, hash_set<tree> &established,
       bool as_conveyor, strict;
       if (!call_obligation_p (contract, callee, &as_conveyor, &strict))
 	continue;
+      /* The facts this obligation may use: one-way trust.  */
+      auto flavor = make_temp_override (require_conveyor_facts, as_conveyor);
+      hash_set<tree> &established = *vfacts ().established;
+      hash_set<tree> &established_nz = *vfacts ().established_nz;
+      hash_map<tree, oa_range_lite> &established_range
+	= *vfacts ().established_range;
+      (void) established;
       tree cond = CONTRACT_CONDITION (contract);
       if (cond == NULL_TREE || cond == error_mark_node)
 	continue;
@@ -4263,6 +4315,11 @@ check_function (function *fun, void *)
   hash_map<tree, rel_fact_lite> established_rel;
   seed_self_trust (fun, established, established_nz, established_range,
 		    established_rel);
+  hash_set<tree> c_established, c_established_nz;
+  hash_map<tree, oa_range_lite> c_established_range;
+  hash_map<tree, rel_fact_lite> c_established_rel;
+  seed_self_trust (fun, c_established, c_established_nz, c_established_range,
+		   c_established_rel, /*conveyor_only=*/true);
 
   /* A floating-point parameter compared with a constant in the
      function's own preconditions.  */
@@ -4302,11 +4359,15 @@ check_function (function *fun, void *)
 
   value_facts vf = { &established, &established_nz, &established_range,
 		     &established_rel, ranger };
+  value_facts cvf = { &c_established, &c_established_nz,
+		      &c_established_range, &c_established_rel, ranger };
   current_value_facts = &vf;
+  conveyor_value_facts = &cvf;
   dom_fact_state predicate_seed;
   seed_predicate_self_trust (fun, predicate_seed);
   persistent_facts_walk (fun, predicate_seed);
   current_value_facts = NULL;
+  conveyor_value_facts = NULL;
   established_frange = NULL;
   disable_ranger (fun);
 }
