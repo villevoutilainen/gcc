@@ -105,6 +105,37 @@
 
 int plugin_is_GPL_compatible;
 
+/* Whether this plugin checks CONTRACT (of OWNER) in its flavor.  Under
+   -fcontract-analysis-proofs=plugin: when the proof flags ask for the
+   flavor, or the control object forces analysis.  Otherwise (the
+   built-in engine checks): when the flavor is active and the engine
+   doesn't check it already (a forcing control object).  */
+
+static bool
+plugin_checks_p (tree contract, tree owner)
+{
+  if (!oa_contract_conveyor_active_public (contract, owner))
+    return false;
+  bool forced = oa_contract_conveyor_analysis_forced_public (contract, owner);
+  if (flag_contract_analysis_proofs)
+    return contract_analysis_plugin_proofs_p (true) || forced;
+  return !forced;
+}
+
+/* The same for a contract_assert's or postcondition's check, which only
+   the -fcontract-X-proofs flag asks for (not the older -gimple one).  */
+
+static bool
+plugin_checks_assertion_p (tree contract, tree owner)
+{
+  if (!oa_contract_conveyor_active_public (contract, owner))
+    return false;
+  bool forced = oa_contract_conveyor_analysis_forced_public (contract, owner);
+  if (flag_contract_analysis_proofs)
+    return contract_analysis_plugin_assertion_proofs_p (true) || forced;
+  return !forced;
+}
+
 /* Context oa_precondition_field_range_obligations's own callback below
    needs: CALL/CALLEE identify the call site check_call is examining;
    ENV is that same call site's own environment, passed straight
@@ -130,8 +161,7 @@ field_range_callback (tree contract, tree field, tree base_parm,
   range_ctx *ctx = (range_ctx *) data;
   /* An analyzed_/proven_ precondition is the built-in engine's to check
      (oa_contract_conveyor_analysis_forced_public).  */
-  if (!oa_contract_conveyor_active_public (contract, ctx->callee)
-      || oa_contract_conveyor_analysis_forced_public (contract, ctx->callee))
+  if (!plugin_checks_p (contract, ctx->callee))
     return;
   tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, base_parm);
   if (!substituted)
@@ -177,8 +207,7 @@ float_field_range_callback (tree contract, tree field, tree base_parm,
   range_ctx *ctx = (range_ctx *) data;
   /* An analyzed_/proven_ precondition is the built-in engine's to check
      (oa_contract_conveyor_analysis_forced_public).  */
-  if (!oa_contract_conveyor_active_public (contract, ctx->callee)
-      || oa_contract_conveyor_analysis_forced_public (contract, ctx->callee))
+  if (!plugin_checks_p (contract, ctx->callee))
     return;
   tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, base_parm);
   if (!substituted)
@@ -221,8 +250,7 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
   range_ctx *ctx = (range_ctx *) data;
   /* An analyzed_/proven_ precondition is the built-in engine's to check
      (oa_contract_conveyor_analysis_forced_public).  */
-  if (!oa_contract_conveyor_active_public (contract, ctx->callee)
-      || oa_contract_conveyor_analysis_forced_public (contract, ctx->callee))
+  if (!plugin_checks_p (contract, ctx->callee))
     return;
   tree substituted = oa_substitute_call_arg_public (ctx->callee, ctx->call, receiver_parm);
   if (!substituted)
@@ -471,11 +499,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
     {
       if (!PRECONDITION_P (contract))
 	continue;
-      if (!oa_contract_conveyor_active_public (contract, callee))
-	continue;
-      /* An analyzed_/proven_conveyor precondition is the built-in
-	 engine's to check, whatever the command line says.  */
-      if (oa_contract_conveyor_analysis_forced_public (contract, callee))
+      if (!plugin_checks_p (contract, callee))
 	continue;
 
       tree cond = CONTRACT_CONDITION (contract);
@@ -878,9 +902,8 @@ check_assert (tree stmt, oa_analysis_env *env, void *data)
      written; a bare std::is_object_address conjunct is the mandatory
      check's business; an unprovable conjunct is an error only for a
      strict (proven_conveyor) assertion.  */
-  if (!oa_contract_conveyor_active_public (stmt, fndecl)
-      || oa_contract_never_proven_public (stmt, fndecl)
-      || oa_contract_conveyor_analysis_forced_public (stmt, fndecl))
+  if (!plugin_checks_assertion_p (stmt, fndecl)
+      || oa_contract_never_proven_public (stmt, fndecl))
     return;
   bool strict = oa_contract_conveyor_strict_public (stmt, fndecl);
 
@@ -965,9 +988,8 @@ static void
 check_post (tree contract, oa_analysis_env *env, void *data)
 {
   tree fndecl = (tree) data;
-  if (!oa_contract_conveyor_active_public (contract, fndecl)
-      || oa_contract_never_proven_public (contract, fndecl)
-      || oa_contract_conveyor_analysis_forced_public (contract, fndecl))
+  if (!plugin_checks_assertion_p (contract, fndecl)
+      || oa_contract_never_proven_public (contract, fndecl))
     return;
   tree cond = CONTRACT_CONDITION (contract);
   if (cond == NULL_TREE || cond == error_mark_node)
