@@ -799,6 +799,8 @@ struct relation_fact_lite
 
 struct rel_fact_lite { tree_code code; tree rhs; };
 static bool provable_nonzero_p (tree, hash_set<tree> &, hash_set<tree> &);
+static bool provable_object_address_p (tree, hash_set<tree> &,
+				       hash_set<tree> &);
 static bool get_relational (tree, hash_map<tree, rel_fact_lite> &,
 			    tree_code *, tree *);
 
@@ -3936,6 +3938,153 @@ establish_assertion_facts (gcall *call, dom_fact_state &state)
     }
 }
 
+/* What a contract check knew about each value it captures, for its
+   predicate core function (the condition, outlined), checked later: as
+   the engine's cg_record_predicate_site_facts.  */
+
+struct site_fact
+{
+  bool has_range, nonzero, oa, has_ref;
+  oa_range_lite range, ref_range;
+};
+static hash_map<tree, vec<site_fact> *> *site_facts;
+/* The core functions of preconditions checked at their own function's
+   entry: their callers' values are not the check's.  */
+static hash_set<tree> *site_entry_checked;
+
+/* At CALL, a contract check: record the facts about its captured values
+   for its core function, joined with another check's of the same
+   contract (a constructor's clones).  In the conveyor flavor, which
+   holds for both.  */
+
+static void
+record_site_facts (gcall *call, dom_fact_state &state)
+{
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_public (call, &struct_var, &cond,
+						 &decls);
+  if (!contract || !current_value_facts)
+    return;
+  tree core = contract_predicate_core_function (contract);
+  if (!core)
+    return;
+  tree owner = NULL_TREE;
+  if (PRECONDITION_P (contract)
+      && predicate_core_function_contract (core, &owner) && owner
+      && (current_function_decl == owner
+	  || (DECL_CLONED_FUNCTION_P (current_function_decl)
+	      && DECL_CLONED_FUNCTION (current_function_decl) == owner)))
+    {
+      if (!site_entry_checked)
+	site_entry_checked = new hash_set<tree>;
+      site_entry_checked->add (core);
+      return;
+    }
+  auto flavor = make_temp_override (require_conveyor_facts, true);
+  value_facts &vf = vfacts ();
+  auto_vec<site_fact> here;
+  for (int i = 2; i < TREE_VEC_LENGTH (decls); ++i)
+    {
+      site_fact f = {};
+      tree decl = TREE_VEC_ELT (decls, i);
+      tree v = cg_contract_check_decl_value_public (call, struct_var, decls,
+						    decl);
+      if (v && TREE_CODE (v) == SSA_NAME && INTEGRAL_TYPE_P (TREE_TYPE (v)))
+	{
+	  f.has_range = established_range_of (v, *vf.established_range,
+					      vf.ranger, call, &f.range);
+	  hash_set<tree> ip;
+	  f.nonzero = (provable_nonzero_p (v, *vf.established_nz, ip)
+		       || (f.has_range
+			   && range_verdict (f.range, NE_EXPR, 0)
+			      == VERDICT_TRUE));
+	}
+      else if (v && TREE_CODE (v) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (v)))
+	{
+	  hash_set<tree> ip;
+	  auto ended = make_temp_override (current_ended, &state.ended);
+	  f.oa = provable_object_address_p (v, *vf.established, ip);
+	  if (tree id = gimple_object_identity (v))
+	    if (field_fact *ff = state.field.get ({id, NULL_TREE}))
+	      if (ff->conveyor)
+		{
+		  f.has_ref = true;
+		  f.ref_range = ff->r;
+		}
+	}
+      here.safe_push (f);
+    }
+  if (!site_facts)
+    site_facts = new hash_map<tree, vec<site_fact> *>;
+  bool existed;
+  vec<site_fact> *&facts = site_facts->get_or_insert (core, &existed);
+  if (!existed)
+    {
+      facts = new vec<site_fact> ();
+      facts->safe_splice (here);
+      return;
+    }
+  auto hull = [] (bool &ha, oa_range_lite &a, bool hb, const oa_range_lite &b)
+    {
+      if (!ha || !hb)
+	{
+	  ha = false;
+	  return;
+	}
+      a.has_lo = a.has_lo && b.has_lo;
+      if (a.has_lo)
+	a.lo = wi::smin (a.lo, b.lo);
+      a.has_hi = a.has_hi && b.has_hi;
+      if (a.has_hi)
+	a.hi = wi::smax (a.hi, b.hi);
+    };
+  for (unsigned i = 0; i < here.length () && i < facts->length (); ++i)
+    {
+      site_fact &a = (*facts)[i];
+      const site_fact &b = here[i];
+      a.nonzero &= b.nonzero;
+      a.oa &= b.oa;
+      hull (a.has_range, a.range, b.has_range, b.range);
+      hull (a.has_ref, a.ref_range, b.has_ref, b.ref_range);
+    }
+}
+
+/* FUN, a predicate core function: seed its parameters with what the
+   checks of its contract recorded about the values passed to them -- into
+   both value fact sets (recorded from conveyor facts) and, a referent's
+   range, into SEED.  */
+
+static void
+seed_site_facts (function *fun, value_facts &all, value_facts &conv,
+		 dom_fact_state &seed)
+{
+  vec<site_fact> **facts = site_facts ? site_facts->get (fun->decl) : NULL;
+  if (!facts
+      || (site_entry_checked && site_entry_checked->contains (fun->decl)))
+    return;
+  unsigned i = 0;
+  for (tree parm = DECL_ARGUMENTS (fun->decl);
+       parm && i < (*facts)->length (); parm = DECL_CHAIN (parm), ++i)
+    {
+      tree ssa = ssa_default_def (fun, parm);
+      if (!ssa)
+	continue;
+      const site_fact &f = (**facts)[i];
+      for (value_facts *vf : { &all, &conv })
+	{
+	  if (f.has_range)
+	    vf->established_range->put (ssa, f.range);
+	  if (f.nonzero)
+	    vf->established_nz->add (ssa);
+	  if (f.oa)
+	    vf->established->add (ssa);
+	}
+      if (f.has_ref)
+	if (tree id = gimple_object_identity (ssa))
+	  seed.field.put ({id, NULL_TREE}, { f.ref_range, true });
+    }
+}
+
 /* The persistent-memory facts are a forward must-analysis: what holds
    on entry to a block is what holds on every edge into it -- the meet of
    its predecessors' exit facts, each refined by what taking its edge
@@ -4884,6 +5033,8 @@ transfer_block (basic_block bb, function *fun, dom_fact_state &state,
 		      *vf.established_range, *vf.established_rel, vf.ranger);
 	  consult_persistent_facts (call, state);
 	}
+      if (report)
+	record_site_facts (call, state);
       /* An assertion's check: diagnosed in the reporting pass; what it
 	 establishes, in every pass.  */
       {
@@ -6140,6 +6291,8 @@ check_function (function *fun, void *)
   conveyor_value_facts = &cvf;
   dom_fact_state predicate_seed;
   seed_predicate_self_trust (fun, predicate_seed);
+  if (CONTRACT_HELPER (fun->decl) == ldf_contract_predicate_helper)
+    seed_site_facts (fun, vf, cvf, predicate_seed);
   persistent_facts_walk (fun, predicate_seed);
   current_value_facts = NULL;
   conveyor_value_facts = NULL;
