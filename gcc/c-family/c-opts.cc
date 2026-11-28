@@ -2032,7 +2032,7 @@ parse_contract_configuration (const char *text, const char *source)
 	    e.dynamic_name += 2;
 	  if (e.control)
 	    {
-	      error ("contract configuration %qs: an %<output%> can't have "
+	      error ("contract configuration %qs: an %<output%> cannot have "
 		     "both a %<control%> and a %<dynamic%>: %<dynamic%> "
 		     "chooses the control object", source);
 	      continue;
@@ -2177,14 +2177,14 @@ parse_contract_configuration (const char *text, const char *source)
 	  if (e.out_group && (e.constexpr_eval != -1 || e.caller))
 	    {
 	      error ("contract configuration %qs: an entry with a %<group%> "
-		     "output can't match %<constexpr%> or %<caller%>: a group "
+		     "output cannot match %<constexpr%> or %<caller%>: a group "
 		     "belongs to an assertion, not to an evaluation or a "
 		     "check", source);
 	      continue;
 	    }
 	  if ((e.control || e.dynamic_name) && e.constexpr_eval != -1)
 	    {
-	      error ("contract configuration %qs: an entry with a %qs can't "
+	      error ("contract configuration %qs: an entry with a %qs cannot "
 		     "match %<constexpr%>: the control object is chosen for an "
 		     "assertion, not for each evaluation", source,
 		     e.control ? "control" : "dynamic");

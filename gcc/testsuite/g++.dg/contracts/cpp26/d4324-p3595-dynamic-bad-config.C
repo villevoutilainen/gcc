@@ -3,8 +3,8 @@
 // { dg-additional-options "-fcontracts -fcontract-control-objects" }
 // { dg-additional-options {-fcontract-configuration=\[{"match":{},"output":{"control":"x::v","dynamic":{"name":"f"}}},{"match":{"constexpr":false},"output":{"dynamic":{"name":"f"}}},{"match":{},"output":{"dynamic":{}}},{"match":{},"output":{"dynamic":{"name":"f","linkage":"Ada"}}},{"match":{},"output":{"dynamic":{"name":"f","provideweak":1}}},{"match":{},"output":{"dynamic":"f"}},{"match":{"kind":"pre"},"output":{"dynamic":{"name":"g"}}},{"match":{"kind":"post"},"output":{"semantic":"observe","dynamic":{"name":"g"}}}\]} }
 // { dg-skip-if "requires hosted libstdc++ for stdc++exp" { ! hostedlib } }
-// { dg-error "an 'output' can't have both a 'control' and a 'dynamic'" "" { target *-*-* } 0 }
-// { dg-error "an entry with a 'dynamic' can't match 'constexpr'" "" { target *-*-* } 0 }
+// { dg-error "an 'output' cannot have both a 'control' and a 'dynamic'" "" { target *-*-* } 0 }
+// { dg-error "an entry with a 'dynamic' cannot match 'constexpr'" "" { target *-*-* } 0 }
 // { dg-error "'dynamic' needs a 'name'" "" { target *-*-* } 0 }
 // { dg-error "'linkage' must be 'C' or 'C\\+\\+'" "" { target *-*-* } 0 }
 // { dg-error "'provideweak' must be a boolean" "" { target *-*-* } 0 }
