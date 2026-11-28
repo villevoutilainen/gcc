@@ -13498,7 +13498,7 @@ public:
      conveyor-active *or* symbolic-active (oa_contract_fact_tracking_
      active_p), so it's always empty -- and therefore free -- unless at
      least one of -fcontract-conveyor-proofs/-fcontract-symbolic-proofs
-     is active, or a plugin is driving oa_walk_function_calls.
+     is active.
      predicate_fact_merge_with mirrors range_merge_with's own "keep only if
      both sides agree" shape, but requires full agreement (same
      PRED_FN, same POLARITY), not partial-bound combination -- there is
@@ -16119,17 +16119,6 @@ public:
   }
 };
 
-/* An empty, no-added-members subclass, purely so a plugin (which only
-   ever sees the opaque forward declaration in contracts.h) can hold an
-   oa_analysis_env* without oa_env's own definition being plugin-visible
-   at all -- see .claude/plans/stateless-jumping-shore.md. Never
-   separately instantiated: oa_walk_function_calls always actually hands
-   a plugin callback a real oa_env's address, reinterpreted, which is
-   safe here since there is no vtable and not one added byte of layout
-   to diverge on.  */
-
-struct oa_analysis_env : public oa_env {};
-
 /* -fcontract-conveyor-proof-provenance: a *why*, alongside the numeric
    *what* oa_range_fact already tracks -- see
    .claude/plans/stateless-jumping-shore.md.
@@ -16252,8 +16241,7 @@ private:
    a no-op, so this feature has zero effect on anything unless both
    -fcontract-conveyor-proofs and -fcontract-conveyor-proof-provenance
    are on.  Set/cleared by oa_resolve_object_address_in_function_1
-   around one function's own walk, mirroring oa_call_site_callback's
-   own save/restore discipline.  */
+   around one function's own walk, saved and restored.  */
 
 static oa_provenance_env *oa_active_provenance;
 
@@ -24177,7 +24165,7 @@ oa_contract_fact_tracking_active_p (tree contract, tree owner_fn = NULL_TREE)
 
    Deliberately unconditional, always true: unlike the two flags this
    replaced (flag_contract_conveyor_proofs/flag_contract_symbolic_
-   proofs) plus oa_call_site_callback, every actual *consultation* of
+   proofs), every actual *consultation* of
    these maps is already, independently gated at its own use site --
    oa_handle_assertion_stmt's own conveyor_analysis/symbolic_analysis
    (itself flag-or-forced), and the call-obligation family's own
@@ -25911,15 +25899,9 @@ oa_scan_item7_in_expr (tree *expr, oa_env &env)
     }, &env, NULL);
 }
 
-/* Forward-declared: defined later, alongside its public, plugin-facing
-   wrapper oa_env_check_comparison; oa_handle_call_conveyor_proof_obligation
-   below needs it before that point in the file.  */
-static oa_proof_result oa_env_check_comparison_1
-  (oa_env &env, tree expr, tree_code cmp, tree const_val);
 
-/* Forward-declared: defined later, right after oa_env_check_comparison_1;
-   oa_handle_call_conveyor_proof_obligation below needs it before that
-   point in the file.  */
+/* Forward-declared: defined later; oa_handle_call_conveyor_proof_obligation
+   below needs it before that point in the file.  */
 static oa_proof_result oa_env_check_range_subsumption
   (oa_env &env, tree expr, oa_range_fact &req,
    oa_unprovable_reason *reason_out = nullptr,
@@ -26627,9 +26609,7 @@ oa_strip_predicate_arg (tree arg)
 }
 
 /* Shared consult helper for both -fcontract-conveyor-proofs's and
-   -fcontract-symbolic-proofs's own predicate obligations (and the
-   exported oa_env_check_predicate_fact a plugin uses for the same job):
-   is SUBSTITUTED (the caller's actual argument expression) established
+   -fcontract-symbolic-proofs's own predicate obligations: is SUBSTITUTED (the caller's actual argument expression) established
    by ENV's current facts to have PRED_FN hold at REQUIRED_POLARITY,
    established at the opposite polarity, or unknown?  Resolves
    SUBSTITUTED to its own object identity (oa_object_identity_decl) and
@@ -26665,10 +26645,7 @@ oa_env_predicate_result (oa_env &env, tree substituted, tree pred_fn,
 {
   /* Consult-only copy-construction lookthrough -- see oa_handle_call_
      symbolic_precondition_obligation's own predicate block for why
-     it's sound specifically at a consult site.  Shared by both the
-     built-in engine's own conveyor predicate obligation and the
-     plugin-facing oa_env_check_predicate_fact below, so both benefit
-     from a single fix here.  */
+     it's sound specifically at a consult site.  */
   substituted = oa_strip_conversion_call (substituted);
   tree identity;
   if (!oa_object_identity_decl (substituted, &identity)
@@ -27173,8 +27150,7 @@ static bool oa_match_general_comparison (tree conjunct, tree *expr_out,
 					  tree_code *code_out,
 					  tree *const_val_out);
 
-/* Forward-declared: full definition is much further below, near
-   oa_env_check_comparison_1 (its own non-relational sibling), but both
+/* Forward-declared: full definition is much further below, but both
    oa_handle_call_conveyor_proof_obligation here and oa_handle_call_
    symbolic_precondition_obligation need it before that point in the
    file.  */
@@ -32854,194 +32830,6 @@ oa_strip_symbolic_ptr_expr_public (tree ptr_expr)
   return oa_strip_symbolic_ptr_expr (ptr_expr);
 }
 
-/* Public, plugin-facing wrapper over oa_env_predicate_result.  ENV's
-   dynamic type is always really oa_env (the same reinterpret_cast idiom
-   oa_env_check_comparison already uses further below).  REQUIRE_CONVEYOR:
-   see oa_env_predicate_result's own comment -- the conveyor plugin
-   passes true, the symbolic plugin passes false.  */
-
-oa_proof_result
-oa_env_check_predicate_fact (oa_analysis_env *env, tree obj_expr, tree pred_fn,
-			      bool required_polarity, bool require_conveyor)
-{
-  return oa_env_predicate_result (*reinterpret_cast<oa_env *> (env), obj_expr,
-				   pred_fn, required_polarity, require_conveyor);
-}
-
-/* Build a plain-tree-bounds REQUIRED oa_range_fact from a plugin's own
-   has_lo/lo/has_hi/hi arguments, for the two range-fact query wrappers
-   below.  */
-
-static oa_range_fact
-oa_range_fact_from_bounds (bool has_lo, tree lo, bool has_hi, tree hi)
-{
-  oa_range_fact required;
-  required.base = NULL_TREE;
-  required.has_lo = has_lo;
-  required.has_hi = has_hi;
-  if (has_lo)
-    required.lo = wi::to_widest (lo);
-  if (has_hi)
-    required.hi = wi::to_widest (hi);
-  return required;
-}
-
-/* Public, plugin-facing wrapper: does ENV's own contract-established
-   range for EXPR (m_contract_scalar_range_map) subsume, is disjoint
-   from, or only partially overlap the required [lo,hi]?  EXPR (a
-   plugin's own substituted call argument, never stripped by the
-   plugin itself) can arrive wrapped in a plain conversion node (a
-   by-value int argument found wrapped in a VIEW_CONVERT_EXPR by direct
-   testing), or reach a class-typed decl via its own conversion
-   operator, or arrive as a by-value copy-construction materialization
-   -- oa_strip_conversion_call handles all three (consult-only lookthrough
-   is sound here: a scalar range, like nonzero-ness, is copy-invariant),
-   so the bare decl m_contract_scalar_range_map is actually keyed on
-   isn't silently missed as "no fact".  */
-
-oa_proof_result
-oa_env_check_scalar_range_fact (oa_analysis_env *env, tree expr, bool has_lo,
-				 tree lo, bool has_hi, tree hi)
-{
-  oa_env &e = *reinterpret_cast<oa_env *> (env);
-  tree value = expr;
-  expr = oa_strip_conversion_call (STRIP_ANY_LOCATION_WRAPPER (expr));
-  oa_range_fact required = oa_range_fact_from_bounds (has_lo, lo, has_hi, hi);
-  oa_range_fact established;
-  /* As the built-in check (oa_handle_precondition_simple_range_
-     obligation, symbolic flavor): the range a symbolic postcondition or
-     precondition established, else the general range -- conveyor's
-     facts satisfy a symbolic obligation (the allowed direction).  */
-  if (!((VAR_P (expr) || TREE_CODE (expr) == PARM_DECL)
-	&& e.contract_scalar_range_get (expr, &established)))
-    return oa_env_check_range_subsumption (e, value, required, NULL);
-  switch (oa_range_subsumption (established, required))
-    {
-    case OA_RANGE_SUBSUMED: return OA_PROVEN_TRUE;
-    case OA_RANGE_DISJOINT: return OA_PROVEN_FALSE;
-    default: return OA_UNKNOWN;
-    }
-}
-
-/* Same, for FIELD of the object identified by BASE_EXPR
-   (m_contract_field_range_map).  REQUIRE_CONVEYOR: see oa_env_check_
-   predicate_fact's own comment -- the conveyor plugin passes true, the
-   symbolic plugin passes false.  */
-
-oa_proof_result
-oa_env_check_field_range_fact (oa_analysis_env *env, tree base_expr,
-				tree field, bool has_lo, tree lo, bool has_hi,
-				tree hi, bool require_conveyor)
-{
-  oa_env &e = *reinterpret_cast<oa_env *> (env);
-  /* Consult-only copy-construction lookthrough -- see oa_handle_call_
-     symbolic_precondition_obligation's own field-range block for why
-     it's sound specifically at a consult site.  */
-  base_expr = oa_strip_conversion_call (base_expr);
-  tree identity;
-  if (!oa_object_identity_decl (base_expr, &identity)
-      && !oa_field_slot_identity (base_expr, e, &identity)
-      && !oa_array_slot_identity (base_expr, e, &identity)
-      && !oa_field_object_identity (base_expr, e, &identity))
-    return OA_UNKNOWN;
-  identity = e.alias_find (identity);
-  oa_contract_field_range_fact established;
-  if (!e.contract_field_range_get (identity, field, &established)
-      || (require_conveyor && !established.conveyor_established))
-    return OA_UNKNOWN;
-  oa_range_fact required = oa_range_fact_from_bounds (has_lo, lo, has_hi, hi);
-  switch (oa_range_subsumption (established.range, required))
-    {
-    case OA_RANGE_SUBSUMED: return OA_PROVEN_TRUE;
-    case OA_RANGE_DISJOINT: return OA_PROVEN_FALSE;
-    default: return OA_UNKNOWN;
-    }
-}
-
-/* The floating-point analogue of oa_env_check_field_range_fact
-   immediately above, for a float-typed FIELD (m_contract_float_field_
-   range_map) -- previously missing entirely from the plugin-facing
-   surface: oa_precondition_field_range_obligations only ever collects
-   INTEGER_CST-bounded field conjuncts (oa_collect_contract_field_ranges
-   itself filters to that), so a float-bounded field precondition (e.g.
-   'pre<ctrl>(this->value >= 0.0)') was silently unchecked by any
-   existing plugin, exactly the gap the built-in checker's own separate
-   float loop exists to close (see oa_handle_call_conveyor_field_range_
-   obligation's own comment). LO/HI are REAL_CST trees, matching what
-   oa_precondition_float_field_range_obligations below now hands a
-   plugin.  */
-
-oa_proof_result
-oa_env_check_float_field_range_fact (oa_analysis_env *env, tree base_expr,
-				      tree field, bool has_lo, tree lo,
-				      bool has_hi, tree hi,
-				      bool require_conveyor)
-{
-  oa_env &e = *reinterpret_cast<oa_env *> (env);
-  base_expr = oa_strip_conversion_call (base_expr);
-  tree identity;
-  if (!oa_object_identity_decl (base_expr, &identity)
-      && !oa_field_slot_identity (base_expr, e, &identity)
-      && !oa_array_slot_identity (base_expr, e, &identity)
-      && !oa_field_object_identity (base_expr, e, &identity))
-    return OA_UNKNOWN;
-  identity = e.alias_find (identity);
-  oa_contract_float_field_range_fact established;
-  if (!e.contract_float_field_range_get (identity, field, &established)
-      || (require_conveyor && !established.conveyor_established))
-    return OA_UNKNOWN;
-  oa_float_range_fact required;
-  required.has_lo = has_lo;
-  required.has_hi = has_hi;
-  if (has_lo)
-    required.lo = TREE_REAL_CST (lo);
-  if (has_hi)
-    required.hi = TREE_REAL_CST (hi);
-  switch (oa_float_range_subsumption (established.range, required))
-    {
-    case OA_RANGE_SUBSUMED: return OA_PROVEN_TRUE;
-    case OA_RANGE_DISJOINT: return OA_PROVEN_FALSE;
-    default: return OA_UNKNOWN;
-    }
-}
-
-/* The call-range analogue of oa_env_check_field_range_fact immediately
-   above, for a call to CALLEE_FN (a DECL_DECLARED_CONVEYOR_P accessor)
-   on the object identified by RECEIVER_EXPR (m_contract_call_range_map)
-   rather than a ptr->field access.  REQUIRE_CONVEYOR: see oa_env_check_
-   predicate_fact's own comment -- the conveyor plugin passes true, the
-   symbolic plugin passes false.  */
-
-oa_proof_result
-oa_env_check_call_range_fact (oa_analysis_env *env, tree receiver_expr,
-				tree callee_fn, bool has_lo, tree lo,
-				bool has_hi, tree hi, bool require_conveyor)
-{
-  oa_env &e = *reinterpret_cast<oa_env *> (env);
-  /* Consult-only copy-construction lookthrough -- see oa_handle_call_
-     symbolic_precondition_obligation's own call-range block for why
-     it's sound specifically at a consult site.  */
-  receiver_expr = oa_strip_conversion_call (receiver_expr);
-  tree identity;
-  if (!oa_object_identity_decl (receiver_expr, &identity)
-      && !oa_field_slot_identity (receiver_expr, e, &identity)
-      && !oa_array_slot_identity (receiver_expr, e, &identity)
-      && !oa_field_object_identity (receiver_expr, e, &identity))
-    return OA_UNKNOWN;
-  identity = e.alias_find (identity);
-  oa_contract_field_range_fact established;
-  if (!e.contract_call_range_get (identity, callee_fn, &established)
-      || (require_conveyor && !established.conveyor_established))
-    return OA_UNKNOWN;
-  oa_range_fact required = oa_range_fact_from_bounds (has_lo, lo, has_hi, hi);
-  switch (oa_range_subsumption (established.range, required))
-    {
-    case OA_RANGE_SUBSUMED: return OA_PROVEN_TRUE;
-    case OA_RANGE_DISJOINT: return OA_PROVEN_FALSE;
-    default: return OA_UNKNOWN;
-    }
-}
-
 /* Public, plugin-facing wrapper over oa_precondition_symbolic_ranges --
    hides oa_range_fact/oa_symbolic_precondition_match behind plain tree
    bounds, invoking CALLBACK once per (contract, param) match found.  */
@@ -33797,52 +33585,6 @@ oa_get_range_derivation (tree expr, oa_env &env)
   return NULL;
 }
 
-/* A standalone plugin's own call-site fact-tracing (see
-   .claude/plans/stateless-jumping-shore.md and oa_walk_function_calls
-   further below) needs to observe every call site oa_scan_calls_in_expr
-   already finds, with the environment as it stands at that exact point
-   -- set/cleared by oa_walk_function_calls around a single function's
-   walk, the same save/restore discipline as OA_RETURN_TRACKING uses
-   elsewhere in this file.  NULL (the default) means "no plugin callback
-   active," so resolve_object_address_in_function's own, unrelated
-   callers are completely unaffected.  */
-
-static void (*oa_call_site_callback) (tree, tree, oa_env *, void *);
-static void *oa_call_site_callback_data;
-
-/* D4324 (see .claude/plans/lazy-stirring-pearl.md, Tier 3b): the
-   contract_assert analogue of oa_call_site_callback immediately above
-   -- a standalone plugin has no way to observe a plain contract_assert
-   statement at all (oa_call_site_callback only ever fires for a
-   CALL_EXPR/AGGR_INIT_EXPR, never an ASSERTION_STMT), even though the
-   built-in engine's own oa_handle_assertion_stmt performs real,
-   substitution-free static checking of its condition using exactly the
-   same fact-consulting primitives (oa_match_simple_comparison/oa_env_
-   check_comparison/etc.) already exported for call-site obligations --
-   a contract_assert's own condition needs no positional-argument
-   substitution at all, since it already refers directly to the
-   enclosing function's own live decls, unlike a callee's precondition.
-   Set/cleared by oa_walk_function_calls around a single function's
-   walk, the same discipline as OA_CALL_SITE_CALLBACK.  Fires with ENV
-   exactly as it stands *before* oa_handle_assertion_stmt processes
-   STMT (establishes facts, resolves is_object_address calls in place),
-   mirroring oa_call_site_callback's own "before this call's own
-   invalidation" ordering.  */
-
-static void (*oa_assert_site_callback) (tree, oa_env *, void *);
-static void *oa_assert_site_callback_data;
-
-/* The postcondition analogue of oa_assert_site_callback: fires once per
-   POSTCONDITION_STMT of the function being walked, with the environment
-   at its exit (merged across every return, oa_postcondition_merge_env),
-   just before oa_handle_postcondition_stmt checks the postcondition
-   against it -- so a plugin can check a function's own postconditions
-   against its body as the built-in engine does.  Set/cleared by
-   oa_walk_function_calls, like OA_CALL_SITE_CALLBACK.  */
-
-static void (*oa_post_site_callback) (tree, oa_env *, void *);
-static void *oa_post_site_callback_data;
-
 /* D4324 (see .claude/plans/lazy-stirring-pearl.md, Part 4): a callee-
    must-satisfy-its-own-precondition check (oa_handle_call_conveyor_
    proof_obligation and its symbolic/plain siblings, all reached from
@@ -34561,30 +34303,9 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
 	{
 	  oa_handle_call_symbolic_precondition_obligation (t, *e);
 	}
-      /* A plugin's own consult runs here, at the same relative position
-	 as the built-in diagnostics just above -- *before* this call's
-	 own arguments get invalidated/re-established below.  A method
-	 call's own receiver (e.g. 'f.write_data()', implicitly passing
-	 '&f') is itself one of this call's own arguments, so consulting
-	 after invalidation would see the fact this very call is about to
-	 wipe (and possibly re-establish from its own postcondition)
-	 before the plugin ever got to read it -- exactly the ordering
-	 the built-in's own consult calls above already avoid by running
-	 first.  */
-      /* Only on the walk that diagnoses: not on a speculative loop
-	 re-walk, nor a condition re-scanned for its facts -- the built-in
-	 consults above are silent there too -- or a plugin reports each
-	 call of a loop body once per walk of it.  */
-      if (oa_call_site_callback && oa_diagnostics_active)
-	{
-	  tree callee = cp_get_callee_fndecl_nofold (t);
-	  if (callee && TREE_CODE (callee) == FUNCTION_DECL)
-	    oa_call_site_callback (t, callee, e, oa_call_site_callback_data);
-	}
       /* Establishing facts from a callee's postconditions, for the
 	 shared predicate/field-range substrate, runs whenever *either*
-	 built-in feature or a plugin driving oa_walk_function_calls might
-	 consult it --
+	 built-in feature might consult it --
 	 unlike the diagnostics above, which stay specific to each flag's
 	 own feature (see oa_contract_fact_tracking_active_p's own
 	 comment).  */
@@ -34592,7 +34313,7 @@ oa_scan_calls_visitor (tree *tp, int *walk_subtrees, void *data_)
 		       || flag_contract_conveyor_proofs
 		       || flag_contract_plugin_conveyor_proofs
 		       || flag_contract_plugin_symbolic_proofs
-		       || oa_call_site_callback || conveyor_forced
+		       || conveyor_forced
 		       || symbolic_forced
 		       || oa_function_has_forced_obligation_p ());
       /* Invalidation, though, always runs: the mandatory item 8 checks
@@ -40337,9 +40058,6 @@ oa_walk_stmt_1 (tree *stmt, oa_env &env)
       }
 
     case ASSERTION_STMT:
-      /* See the call-site callback: once, on the diagnosing walk.  */
-      if (oa_assert_site_callback && oa_diagnostics_active)
-	oa_assert_site_callback (t, &env, oa_assert_site_callback_data);
       oa_handle_assertion_stmt (t, env);
       return;
 
@@ -40876,9 +40594,6 @@ oa_handle_postcondition_stmt (tree contract, oa_env &env)
   if (oa_validating_declaration)
     return;
 
-  if (oa_post_site_callback && oa_diagnostics_active)
-    oa_post_site_callback (contract, &ret_env, oa_post_site_callback_data);
-
   if (!never_proven)
     {
       if (conveyor_ok)
@@ -41234,16 +40949,10 @@ oa_ensure_contract_flavors_cached (tree fndecl)
 bool
 oa_function_needs_walk_p (tree fndecl)
 {
-  /* Both orthogonal to per-function contract activity -- never skip
-     when either could observe/mutate this function's own walk (see
-     oa_symbolic_codegen_active's/oa_call_site_callback's own
-     comments). OA_ASSERT_SITE_CALLBACK is the same "always walk"
-     trigger for a plugin that only wants contract_assert observation
-     (CALLBACK NULL, ASSERT_CALLBACK set) -- without this, such a
-     plugin would silently see nothing in a function with a
-     contract_assert but no calls and no contracts of its own.  */
-  if (flag_contract_symbolic_runtime_checks || oa_call_site_callback
-      || oa_assert_site_callback)
+  /* Orthogonal to per-function contract activity -- never skip when
+     it could mutate this function's own walk (see
+     oa_symbolic_codegen_active's own comment).  */
+  if (flag_contract_symbolic_runtime_checks)
     return true;
 
   if (get_fn_contract_specifiers (fndecl))
@@ -41321,34 +41030,6 @@ oa_contract_symbolic_strict_cached_p (tree contract)
    later conjunct/item-8 check in that same second walk might depend
    on -- see the "double-invocation" gap this guards against, below.  */
 static GTY(()) hash_set<tree> *oa_resolved_functions;
-
-/* Shared body for resolve_object_address_in_function and
-   oa_walk_function_calls below: both need exactly the same early exits
-   and the same fresh, freshly-tracked oa_env walk over FNDECL's own
-   pre-genericize body -- they differ only in whether a plugin's own
-   call-site callback is armed (via oa_call_site_callback) around the
-   walk, which is oa_walk_function_calls's own, sole addition.
-
-   D4324/P2680: a testsuite plugin using oa_walk_function_calls (e.g.
-   conveyor_proof_plugin.cc, symbolic_proof_plugin.cc,
-   gimple_object_address_plugin.cc) registers a PLUGIN_PRE_GENERICIZE
-   callback, which finish_function (decl.cc) invokes *before* its own,
-   official resolve_object_address_in_function call for the very same
-   FNDECL -- so, under such a plugin, this function would otherwise run
-   twice for the same function: once via the plugin's own callback, once
-   via the official pass. Whichever run happens first does the complete,
-   correct job (resolving/establishing every fact, emitting every
-   diagnostic, and invoking any armed call-site/assert-site callback);
-   the second is not merely redundant but actively broken, since the
-   first run's in-place CONTRACT_CONDITION mutation means the second can
-   no longer recognize an already-resolved is_object_address call to
-   re-establish it. Guarding here (rather than, say, only in the
-   official, callback-free path) keeps a plugin's own callback ordering
-   and observations completely unaffected either way -- the plugin
-   simply "wins" the race by construction (PLUGIN_PRE_GENERICIZE always
-   fires first), and the official call becomes the redundant no-op
-   instead, matching the pre-existing behavior for every other caller
-   (which was already, in practice, calling this exactly once).  */
 
 /* walk_tree callback: *TP matches and stops the walk (returning the
    found proxy, per walk_tree_1's own "non-null callback return"
@@ -41851,9 +41532,8 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   oa_symbolic_codegen_active = flag_contract_symbolic_runtime_checks;
 
   /* -fcontract-conveyor-proof-provenance: arm the provenance side-table
-     for this one function's walk, mirroring oa_walk_function_calls's own
-     save/restore of oa_call_site_callback -- see oa_active_provenance's
-     own comment.  Only ever non-NULL here (never nested: this function
+     for this one function's walk -- see oa_active_provenance's own
+     comment.  Only ever non-NULL here (never nested: this function
      is the sole top-level driver, not itself reentrant), but save/
      restore defensively anyway, the same discipline used everywhere
      else in this file for this kind of cross-cutting optional state.  */
@@ -41993,102 +41673,6 @@ oa_resolve_object_address_in_function_1 (tree fndecl)
   oa_postcondition_result_ids = NULL;
 }
 
-/* Top-level entry point, called from finish_function alongside
-   check_conveyor_function_body, at the same pre-genericize timing.  */
-
-/* The plugins' walks of a function (oa_walk_function_calls): each
-   plugin's callbacks, registered from PLUGIN_PRE_GENERICIZE and called
-   from the one built-in walk of the function, in finish_function
-   (resolve_object_address_in_function) -- so that several plugins each
-   see the function (the walk is once per function), and see the body
-   the built-in walk sees.  */
-
-struct oa_plugin_walk
-{
-  tree fndecl;
-  void (*callback) (tree, tree, oa_analysis_env *, void *);
-  void *data;
-  void (*assert_callback) (tree, oa_analysis_env *, void *);
-  void *assert_data;
-  void (*post_callback) (tree, oa_analysis_env *, void *);
-  void *post_data;
-};
-static vec<oa_plugin_walk> oa_plugin_walks;
-
-/* The function whose plugin walks the callbacks below dispatch to.  */
-static tree oa_plugin_walk_fn;
-
-static void
-oa_plugin_call_mux (tree call, tree callee, oa_env *env, void *)
-{
-  for (const oa_plugin_walk &w : oa_plugin_walks)
-    if (w.fndecl == oa_plugin_walk_fn && w.callback)
-      w.callback (call, callee, reinterpret_cast<oa_analysis_env *> (env),
-		  w.data);
-}
-
-static void
-oa_plugin_assert_mux (tree stmt, oa_env *env, void *)
-{
-  for (const oa_plugin_walk &w : oa_plugin_walks)
-    if (w.fndecl == oa_plugin_walk_fn && w.assert_callback)
-      w.assert_callback (stmt, reinterpret_cast<oa_analysis_env *> (env),
-			 w.assert_data);
-}
-
-static void
-oa_plugin_post_mux (tree contract, oa_env *env, void *)
-{
-  for (const oa_plugin_walk &w : oa_plugin_walks)
-    if (w.fndecl == oa_plugin_walk_fn && w.post_callback)
-      w.post_callback (contract, reinterpret_cast<oa_analysis_env *> (env),
-		       w.post_data);
-}
-
-/* While one is live, the built-in walk of FNDECL also calls the plugins
-   registered for it; afterwards their registrations are dropped.  */
-
-class oa_plugin_walk_scope
-{
-  tree m_saved_fn;
-  void (*m_saved_call) (tree, tree, oa_env *, void *);
-  void (*m_saved_assert) (tree, oa_env *, void *);
-  void (*m_saved_post) (tree, oa_env *, void *);
-  tree m_fn;
-public:
-  oa_plugin_walk_scope (tree fndecl)
-    : m_saved_fn (oa_plugin_walk_fn),
-      m_saved_call (oa_call_site_callback),
-      m_saved_assert (oa_assert_site_callback),
-      m_saved_post (oa_post_site_callback), m_fn (fndecl)
-  {
-    bool call = false, assert_ = false, post = false;
-    for (const oa_plugin_walk &w : oa_plugin_walks)
-      if (w.fndecl == fndecl)
-	{
-	  call |= w.callback != NULL;
-	  assert_ |= w.assert_callback != NULL;
-	  post |= w.post_callback != NULL;
-	}
-    oa_plugin_walk_fn = fndecl;
-    oa_call_site_callback = call ? oa_plugin_call_mux : NULL;
-    oa_assert_site_callback = assert_ ? oa_plugin_assert_mux : NULL;
-    oa_post_site_callback = post ? oa_plugin_post_mux : NULL;
-  }
-  ~oa_plugin_walk_scope ()
-  {
-    oa_plugin_walk_fn = m_saved_fn;
-    oa_call_site_callback = m_saved_call;
-    oa_assert_site_callback = m_saved_assert;
-    oa_post_site_callback = m_saved_post;
-    unsigned ix;
-    oa_plugin_walk *w;
-    FOR_EACH_VEC_ELT_REVERSE (oa_plugin_walks, ix, w)
-      if (w->fndecl == m_fn)
-	oa_plugin_walks.ordered_remove (ix);
-  }
-};
-
 /* Put back the conditions as written (oa_condition_as_written_map) of the
    contract statements in FNDECL's body and of its own contracts, for its
    walk to start over.  */
@@ -42116,13 +41700,13 @@ oa_restore_conditions_as_written (tree fndecl)
       }, NULL);
 }
 
+/* Top-level entry point, called from finish_function alongside
+   check_conveyor_function_body, at the same pre-genericize timing.  */
+
 void
 resolve_object_address_in_function (tree fndecl)
 {
   contract_note_returned_reference_sources (fndecl);
-  /* The plugins registered for FNDECL (oa_walk_function_calls) are
-     called from this walk.  */
-  oa_plugin_walk_scope plugins (fndecl);
 
   /* A 'conveyor(auto)' specialization being deduced is walked as the
      conveyor function it is presumed to be -- trusting its own reference
@@ -42462,43 +42046,6 @@ validate_pending_contract_predicates ()
   return built;
 }
 
-/* A standalone plugin's own entry point (see
-   .claude/plans/stateless-jumping-shore.md): identical walk, but with
-   CALLBACK armed so it additionally observes every call site
-   oa_scan_calls_in_expr finds during that walk, in program order, with
-   the environment as it stands at that exact point -- including any
-   facts already established by an earlier call's postcondition in the
-   same straight-line sequence, since that chaining already happens
-   unconditionally as part of the walk (see the INIT_EXPR/MODIFY_EXPR
-   case in oa_walk_stmt).  Never invoked from anywhere in the compiler
-   itself; CALLBACK is always NULL when resolve_object_address_in_function
-   runs, so that mandatory pass is entirely unaffected.
-
-   ASSERT_CALLBACK (see .claude/plans/lazy-stirring-pearl.md, Tier 3b)
-   is CALLBACK's contract_assert analogue: fires once per ASSERTION_
-   STMT the walk finds, in program order, with the environment as it
-   stands *before* oa_handle_assertion_stmt processes that statement --
-   see oa_assert_site_callback's own comment for why a contract_assert's
-   own condition needs no positional substitution, unlike a call's.
-   Defaults to NULL (no plugin passing it is unaffected).
-
-   POST_CALLBACK likewise fires once per postcondition of FNDECL, with
-   the environment at its exit -- see oa_post_site_callback.  */
-
-void
-oa_walk_function_calls (tree fndecl,
-			 void (*callback) (tree, tree, oa_analysis_env *, void *),
-			 void *data,
-			 void (*assert_callback) (tree, oa_analysis_env *, void *),
-			 void *assert_data,
-			 void (*post_callback) (tree, oa_analysis_env *, void *),
-			 void *post_data)
-{
-  oa_plugin_walk w = { fndecl, callback, data, assert_callback, assert_data,
-		       post_callback, post_data };
-  oa_plugin_walks.safe_push (w);
-}
-
 /* Thin wrapper over oa_collect_conjuncts, for a plugin (see
    .claude/plans/stateless-jumping-shore.md).  */
 
@@ -42511,8 +42058,7 @@ oa_collect_conjuncts_public (tree *cond, vec<tree *> *out)
 /* Thin wrapper over oa_collect_disjuncts, for a plugin (see
    .claude/plans/lazy-stirring-pearl.md, Tier 3b) -- lets a plugin
    recognize a top-level '||'-shaped conjunct (e.g. from a
-   contract_assert's own condition, via the new ASSERT_CALLBACK
-   oa_walk_function_calls now supports) and check each disjunct
+   contract_assert's own condition) and check each disjunct
    independently through the same matcher/query functions it already
    uses for an ordinary conjunct: PROVEN_TRUE if any one disjunct is
    independently provable, PROVEN_FALSE only if every disjunct is
@@ -42655,7 +42201,7 @@ oa_match_general_comparison_public (tree conjunct, tree *expr_out,
    from that matcher only names the *shape*, not a specific call site's
    own value, and needs this recursive substitution (unlike a bare
    PARM_DECL, which oa_substitute_call_arg_public alone already
-   handles) before it can be hijacked to oa_env_check_comparison.  */
+   handles) before the plugin can check it.  */
 
 tree
 oa_substitute_call_expr_public (tree callee, tree call, tree expr)
@@ -43167,11 +42713,10 @@ oa_compose_call_result_range (tree lhs, tree rhs, oa_env &env)
    (ENV untouched) for anything else -- relational facts are never
    part of the mandatory, always-on substrate.  Gated on oa_fact_
    tracking_bookkeeping_active_p (see its own comment), not on either
-   built-in flag or OA_CALL_SITE_CALLBACK directly: a plugin driving
-   oa_walk_function_calls, or an analyzed_conveyor/proven_conveyor/
+   built-in flag directly: an analyzed_conveyor/proven_conveyor/
    analyzed_symbolic/proven_symbolic postcondition elsewhere in CALLEE
-   forcing analysis on without either global flag, both need this
-   bookkeeping done on their behalf the same way -fcontract-conveyor-
+   forcing analysis on without either global flag needs this
+   bookkeeping done on its behalf the same way -fcontract-conveyor-
    proofs/-fcontract-symbolic-proofs themselves already did.  */
 
 static void
@@ -43373,79 +42918,6 @@ oa_match_general_comparison (tree conjunct, tree *expr_out,
   return true;
 }
 
-/* The three-way answer a call-site precondition-obligation check
-   actually needs (see .claude/plans/stateless-jumping-shore.md): is
-   EXPR, under ENV's current facts, provably CMP CONST_VAL for every
-   value it could take (OA_PROVEN_TRUE), provably CMP CONST_VAL for no
-   value it could take (OA_PROVEN_FALSE), or is ENV's known range for
-   EXPR (if any) insufficient to conclude either (OA_UNKNOWN, which also
-   covers "no range fact known for EXPR at all")?  Built on oa_get_range's
-   [lo,hi] interval -- a genuinely new query direction: oa_refine_single_
-   comparison only ever *establishes* facts from an asserted-true
-   condition, never needing a proven-false direction before this.  A
-   range fact tied to a pointer's own array-base (BASE != NULL_TREE, see
-   oa_range_fact's own comment) isn't a plain numeric interval comparable
-   against CONST_VAL the same way, so that case is conservatively
-   OA_UNKNOWN too.
-
-   Shared between the public, plugin-facing oa_env_check_comparison below
-   and the compiler's own built-in oa_handle_call_conveyor_proof_obligation
-   (-fcontract-conveyor-proofs), so both go through one implementation.  */
-
-static oa_proof_result
-oa_env_check_comparison_1 (oa_env &env, tree expr, tree_code cmp,
-			    tree const_val)
-{
-  /* D4324: this function's own [lo,hi] interval machinery (oa_get_range,
-     widest_int) is integer-only -- a REAL_CST reaching here would hit
-     wi::to_widest's own INTEGER_CST_CHECK, an ICE in a checking build or
-     silent garbage bounds otherwise. The exported matcher this function
-     is fed from (oa_match_simple_comparison) deliberately admits REAL_CST
-     alongside INTEGER_CST for a plugin's own shape-recognition purposes
-     (see that function's own comment), but this query has no float
-     counterpart to hand off to (unlike the built-in's own conveyor-proof
-     obligation checking, which runs a completely separate float-tracking
-     loop alongside this integer one) -- decline rather than misbehave,
-     matching this whole API surface's existing "floats are silently out
-     of scope" boundary elsewhere (see .claude/plans/lazy-stirring-pearl.md).  */
-  if (TREE_CODE (const_val) != INTEGER_CST)
-    return OA_UNKNOWN;
-
-  oa_range_fact fact;
-  if (!oa_get_range (expr, env, &fact) || fact.base != NULL_TREE)
-    return OA_UNKNOWN;
-
-  widest_int val = wi::to_widest (const_val);
-
-  switch (cmp)
-    {
-    case GT_EXPR:
-      if (fact.has_lo && fact.lo > val) return OA_PROVEN_TRUE;
-      if (fact.has_hi && fact.hi <= val) return OA_PROVEN_FALSE;
-      return OA_UNKNOWN;
-    case GE_EXPR:
-      if (fact.has_lo && fact.lo >= val) return OA_PROVEN_TRUE;
-      if (fact.has_hi && fact.hi < val) return OA_PROVEN_FALSE;
-      return OA_UNKNOWN;
-    case LT_EXPR:
-      if (fact.has_hi && fact.hi < val) return OA_PROVEN_TRUE;
-      if (fact.has_lo && fact.lo >= val) return OA_PROVEN_FALSE;
-      return OA_UNKNOWN;
-    case LE_EXPR:
-      if (fact.has_hi && fact.hi <= val) return OA_PROVEN_TRUE;
-      if (fact.has_lo && fact.lo > val) return OA_PROVEN_FALSE;
-      return OA_UNKNOWN;
-    case EQ_EXPR:
-      if (fact.has_lo && fact.has_hi && fact.lo == val && fact.hi == val)
-	return OA_PROVEN_TRUE;
-      if ((fact.has_lo && fact.lo > val) || (fact.has_hi && fact.hi < val))
-	return OA_PROVEN_FALSE;
-      return OA_UNKNOWN;
-    default:
-      return OA_UNKNOWN;
-    }
-}
-
 /* -fcontract-conveyor-proofs: is ARG's established interval a *subset*
    of REQ (every value ARG could take also satisfies REQ ->
    OA_PROVEN_TRUE, the callee's combined range precondition is fully
@@ -43459,10 +42931,7 @@ oa_env_check_comparison_1 (oa_env &env, tree expr, tree_code cmp,
    two overlapping-but-not-nested intervals could claim more)?  REQ
    missing one side (has_lo or has_hi false) means that side is
    unconstrained -- e.g. a precondition of "x > 0" alone leaves REQ.hi
-   unset, matching oa_env_check_comparison_1's own single-sided
-   handling exactly (this function is a strict generalization of it: for
-   a REQ built from a single conjunct, the two are equivalent).  A
-   pointer/array-base fact (ARG.base != NULL_TREE) isn't a plain integer
+   unset.  A pointer/array-base fact (ARG.base != NULL_TREE) isn't a plain integer
    interval, so that case is conservatively OA_UNKNOWN too.  */
 
 static oa_proof_result
@@ -43487,8 +42956,7 @@ oa_range_subsumption_result (oa_range_fact &arg, oa_range_fact &req)
 }
 
 /* -fcontract-conveyor-proofs: EXPR's own version of the above -- looks
-   up EXPR's established range via oa_get_range first (mirroring
-   oa_env_check_comparison_1's own first step), then defers to
+   up EXPR's established range via oa_get_range first, then defers to
    oa_range_subsumption_result.  */
 
 static oa_proof_result
@@ -43571,11 +43039,8 @@ oa_env_check_float_range_subsumption (oa_env &env, tree expr,
    SUBSTITUTED_OTHER, filtered by REQUIRE_CONVEYOR the same one-way-
    trust way every other shared-substrate fact is. Shared by both
    oa_handle_call_conveyor_proof_obligation/oa_handle_call_symbolic_
-   precondition_obligation (which call this directly, keeping their own
-   diagnostic emission local) and, via the plugin-facing oa_env_check_
-   relational_fact below, any plugin driving oa_walk_function_calls --
-   the same DRY relationship oa_env_check_range_subsumption above has
-   with oa_env_check_comparison.  */
+   precondition_obligation, which call this directly, keeping their own
+   diagnostic emission local.  */
 
 /* D4324 Commit 2 (generalized from a single widest_int to an interval
    in Commit 4): is OFFSET compatible with (i.e., doesn't invalidate) an
@@ -43737,25 +43202,6 @@ oa_env_check_relational_fact_1 (oa_env &env, tree substituted_param,
   if (reason_out)
     *reason_out = reason;
   return OA_UNKNOWN;
-}
-
-/* Public, plugin-facing wrapper over oa_env_check_relational_fact_1,
-   the relational-fact analogue of oa_env_check_comparison immediately
-   below.  SUBSTITUTED_PARAM/SUBSTITUTED_OTHER are the plugin's own
-   already-positionally-substituted call arguments (the same
-   oa_substitute_call_arg-based substitution the plugin already does
-   for oa_env_check_comparison); REQUIRE_CONVEYOR is the same one-way-
-   trust parameter oa_env_check_predicate_fact's own plugin-facing
-   wrapper already exposes.  */
-
-oa_proof_result
-oa_env_check_relational_fact (oa_analysis_env *env, tree substituted_param,
-			       tree_code required_code, tree substituted_other,
-			       bool require_conveyor)
-{
-  return oa_env_check_relational_fact_1 (*reinterpret_cast<oa_env *> (env),
-					  substituted_param, required_code,
-					  substituted_other, require_conveyor);
 }
 
 /* Does an established call-relational fact of code ESTABLISHED_CODE and
@@ -44027,29 +43473,6 @@ oa_env_check_call_relational_fact_1 (oa_env &env, tree substituted_param,
   return OA_UNKNOWN;
 }
 
-/* Public, plugin-facing wrapper over oa_env_check_call_relational_
-   fact_1 immediately above, mirroring oa_env_check_relational_fact's
-   own identical role. REQUIRED_OFFSET defaults to 0 (the plain,
-   unshifted shape oa_match_comparison_against_call recognizes); pass
-   the OFFSET_OUT oa_match_shifted_comparison_against_call fills in
-   when checking that shape instead -- see oa_env_check_call_
-   relational_fact_1's own comment.  */
-
-oa_proof_result
-oa_env_check_call_relational_fact (oa_analysis_env *env, tree substituted_param,
-				     tree_code required_code,
-				     tree substituted_rhs_receiver,
-				     tree substituted_rhs_callee,
-				     bool require_conveyor,
-				     widest_int required_offset /* = 0 */)
-{
-  return oa_env_check_call_relational_fact_1 (*reinterpret_cast<oa_env *> (env),
-					       substituted_param, required_code,
-					       substituted_rhs_receiver,
-					       substituted_rhs_callee,
-					       require_conveyor, required_offset);
-}
-
 /* The call-vs-call analogue of oa_env_check_call_relational_fact_1
    immediately above, for a required relation between two calls
    (SUBSTITUTED_LHS_RECEIVER.SUBSTITUTED_LHS_CALLEE () REQUIRED_CODE
@@ -44149,105 +43572,6 @@ oa_env_check_call_call_relational_fact_1 (oa_env &env,
   return OA_UNKNOWN;
 }
 
-/* Public, plugin-facing wrapper over oa_env_check_call_call_relational_
-   fact_1 immediately above, mirroring oa_env_check_call_relational_
-   fact's own identical role.  */
-
-oa_proof_result
-oa_env_check_call_call_relational_fact (oa_analysis_env *env,
-					  tree substituted_lhs_receiver,
-					  tree substituted_lhs_callee,
-					  tree_code required_code,
-					  tree substituted_rhs_receiver,
-					  tree substituted_rhs_callee,
-					  bool require_conveyor)
-{
-  return oa_env_check_call_call_relational_fact_1
-    (*reinterpret_cast<oa_env *> (env), substituted_lhs_receiver,
-     substituted_lhs_callee, required_code, substituted_rhs_receiver,
-     substituted_rhs_callee, require_conveyor);
-}
-
-/* Public, plugin-facing wrapper over oa_env_check_comparison_1 -- see
-   .claude/plans/stateless-jumping-shore.md.  ENV's dynamic type is always
-   really oa_env (oa_analysis_env is an empty subclass with no added
-   layout, the same cast idiom oa_walk_function_calls already uses).  */
-
-oa_proof_result
-oa_env_check_comparison (oa_analysis_env *env, tree expr, tree_code cmp,
-			 tree const_val)
-{
-  return oa_env_check_comparison_1 (*reinterpret_cast<oa_env *> (env),
-				     expr, cmp, const_val);
-}
-
-/* The floating-point counterpart of oa_env_check_comparison, for a
-   plugin: is EXPR, under ENV's facts, provably CMP CONST_VAL (a
-   REAL_CST) for every value it could take, for none, or unknown?  The
-   built-in obligation checks (oa_handle_precondition_simple_range_
-   obligation) combine a parameter's float bounds into one range and
-   check it with oa_env_check_float_range_subsumption; one bound at a
-   time gives the same verdict (subsumed iff each bound holds, disjoint
-   iff some bound is violated by the whole range).  */
-
-oa_proof_result
-oa_env_check_float_comparison (oa_analysis_env *env, tree expr,
-			       tree_code cmp, tree const_val)
-{
-  if (TREE_CODE (const_val) != REAL_CST
-      || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (expr)))
-    return OA_UNKNOWN;
-  /* Only what oa_float_tighten_range_bound turns into a bound: another
-     code would leave REQ unbounded, which anything subsumes.  */
-  if (cmp != LT_EXPR && cmp != LE_EXPR && cmp != GT_EXPR && cmp != GE_EXPR
-      && cmp != EQ_EXPR)
-    return OA_UNKNOWN;
-  oa_float_range_fact req;
-  oa_float_tighten_range_bound (req, cmp, TREE_REAL_CST (const_val),
-				TREE_TYPE (expr));
-  return oa_env_check_float_range_subsumption
-    (*reinterpret_cast<oa_env *> (env), expr, req, NULL, NULL, 0);
-}
-
-/* For a plugin: is EXPR, under ENV's facts, provably an object address
-   (oa_provable_p, the check behind every is_object_address obligation)?
-   If not, *REASON_OUT (if non-null) says why.  */
-
-bool
-oa_env_check_object_address (oa_analysis_env *env, tree expr,
-			     oa_unprovable_reason *reason_out)
-{
-  return oa_provable_p (expr, *reinterpret_cast<oa_env *> (env), reason_out);
-}
-
-/* For a plugin: is EXPR (a value at a call site, e.g. a substituted
-   argument), under ENV's facts, provably nonzero, provably zero, or
-   unknown -- as the built-in engine checks a callee's 'x != 0'
-   precondition conjunct: through a conversion call (a class argument's
-   conversion operator), a literal decides it outright, then the nonzero
-   facts (oa_provably_nonzero_p), then its range (oa_check_ne_constant).
-   If unknown, *REASON_OUT (if non-null) says why.  */
-
-oa_proof_result
-oa_env_check_nonzero (oa_analysis_env *env, tree expr,
-		      oa_unprovable_reason *reason_out)
-{
-  oa_env &e = *reinterpret_cast<oa_env *> (env);
-  expr = oa_strip_conversion_call (expr);
-  tree stripped = STRIP_ANY_LOCATION_WRAPPER (expr);
-  if (TREE_CODE (stripped) == INTEGER_CST)
-    return integer_zerop (stripped) ? OA_PROVEN_FALSE : OA_PROVEN_TRUE;
-  if (oa_provably_nonzero_p (expr, e))
-    return OA_PROVEN_TRUE;
-  oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
-  oa_proof_result r
-    = oa_check_ne_constant (e, expr, build_zero_cst (TREE_TYPE (stripped)),
-			    &reason);
-  if (r == OA_UNKNOWN && reason_out)
-    *reason_out = reason;
-  return r;
-}
-
 /* Thin wrapper over oa_substitute_value_arg, for a plugin: PARAM's
    argument at CALL, as the value the callee's contract reads -- unlike
    oa_substitute_call_arg_public, a reference parameter's argument is
@@ -44280,78 +43604,10 @@ oa_cdtor_receiver_strict_public (tree call)
 /* Thin wrapper over oa_match_ne_constant, for a plugin: CONJUNCT is
    'E != C' (or 'C != E'), C an integer constant.  */
 
-/* For a plugin: the symbolic flavor's is_object_address and nonzero
-   verdicts for EXPR, a callee precondition's argument at a call -- as
-   the built-in -fcontract-symbolic-proofs checks a symbolic
-   precondition's 'std::is_object_address (q)' and 'n != 0' conjuncts,
-   consulting symbolic postconditions' facts as well as the conveyor
-   ones.  */
-
-bool
-oa_env_check_symbolic_object_address (oa_analysis_env *env, tree expr,
-				      oa_unprovable_reason *reason_out)
-{
-  oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-  bool r = oa_symbolic_object_address_verdict
-	     (expr, *reinterpret_cast<oa_env *> (env), &reason);
-  if (!r && reason_out)
-    *reason_out = reason;
-  return r;
-}
-
-/* For a plugin: the symbolic flavor's verdict for a callee precondition's
-   named predicate conjunct PRED_FN (ARG_DECL), possibly NEGATED, with
-   SUBSTITUTED the argument at the call -- as the built-in check: another
-   call's result has its postcondition's facts (guaranteed elision), a
-   by-value class parameter is a copy with none of the argument's.  */
-
-oa_proof_result
-oa_env_check_symbolic_predicate (oa_analysis_env *env, tree arg_decl,
-				 tree substituted, tree pred_fn, bool negated)
-{
-  oa_predicate_fact fact;
-  bool other_fact;
-  return oa_symbolic_predicate_verdict (arg_decl, substituted, pred_fn,
-					negated,
-					*reinterpret_cast<oa_env *> (env),
-					&fact, &other_fact);
-}
-
-oa_proof_result
-oa_env_check_symbolic_nonzero (oa_analysis_env *env, tree expr)
-{
-  return oa_symbolic_nonzero_verdict (expr, *reinterpret_cast<oa_env *> (env));
-}
-
 bool
 oa_match_ne_constant_public (tree conjunct, tree *expr_out, tree *cst_out)
 {
   return oa_match_ne_constant (conjunct, expr_out, cst_out);
-}
-
-/* For a plugin: is EXPR (a value at a call site), under ENV's facts,
-   provably different from CST, provably equal to it, or unknown -- the
-   built-in check of an 'E != C' precondition conjunct: through a
-   conversion call, a literal decides it outright, otherwise EXPR's range
-   and facts (oa_check_ne_constant).  If unknown, *REASON_OUT (if
-   non-null) says why.  */
-
-oa_proof_result
-oa_env_check_ne_constant (oa_analysis_env *env, tree expr, tree cst,
-			  oa_unprovable_reason *reason_out)
-{
-  expr = oa_strip_conversion_call (expr);
-  tree stripped = STRIP_ANY_LOCATION_WRAPPER (expr);
-  if (TREE_CODE (stripped) == INTEGER_CST)
-    return (wi::to_widest (stripped) == wi::to_widest (cst)
-	    ? OA_PROVEN_FALSE : OA_PROVEN_TRUE);
-  oa_unprovable_reason reason = OA_UNPROVABLE_NO_FACT;
-  oa_proof_result r
-    = oa_check_ne_constant (*reinterpret_cast<oa_env *> (env), expr, cst,
-			    &reason);
-  if (r == OA_UNKNOWN && reason_out)
-    *reason_out = reason;
-  return r;
 }
 
 /* Thin wrapper over oa_fold_conjunct_at_call, for a plugin: CONJUNCT, a
@@ -44364,29 +43620,6 @@ tree
 oa_fold_conjunct_at_call_public (tree callee, tree call, tree conjunct)
 {
   return oa_fold_conjunct_at_call (callee, call, conjunct);
-}
-
-/* oa_match_shifted_comparison_against_call, for a plugin, which holds an
-   oa_analysis_env: CONJUNCT is 'param OP receiver.accessor () +- K'
-   (ENV consulted as that function does).  */
-
-bool
-oa_match_shifted_comparison_against_call_public
-  (tree conjunct, oa_analysis_env *env, tree *param_out, tree_code *code_out,
-   tree *rhs_receiver_out, tree *rhs_callee_out, widest_int *offset_out,
-   bool allow_symbolic_accessor)
-{
-  return oa_match_shifted_comparison_against_call
-    (conjunct, *reinterpret_cast<oa_env *> (env), param_out, code_out,
-     rhs_receiver_out, rhs_callee_out, offset_out, allow_symbolic_accessor);
-}
-
-oa_proof_result
-oa_env_check_call_relation (oa_analysis_env *env, tree call, tree callee,
-			    tree pred_fn, const vec<tree> &args, bool negated)
-{
-  return oa_call_relation_verdict (call, callee, pred_fn, args, negated,
-				   *reinterpret_cast<oa_env *> (env));
 }
 
 /* -fcontract-symbolic-runtime-checks: recognize a ptr->field OP const
@@ -45891,28 +45124,6 @@ oa_check_assertion_conjunct_against_env (tree conjunct, oa_env &env,
   }
 
   return OA_UNKNOWN;
-}
-
-/* Public, plugin-facing wrapper over oa_check_assertion_conjunct_
-   against_env immediately above (see .claude/plans/lazy-stirring-
-   pearl.md, Tier 3b) -- the contract_assert analogue of oa_env_check_
-   comparison/oa_env_check_predicate_fact/etc. for a plugin observing
-   ASSERTION_STMT nodes via oa_walk_function_calls's new ASSERT_
-   CALLBACK parameter. CONJUNCT is one of CONTRACT_CONDITION (STMT)'s
-   own top-level '&&' conjuncts (oa_collect_conjuncts_public) -- or, for
-   a disjunctive conjunct, one of ITS OWN top-level '||' disjuncts
-   (oa_collect_disjuncts_public) -- consulted directly against ENV with
-   no positional substitution at all, unlike every other exported
-   consult function in this file: a contract_assert's own condition
-   already refers to the enclosing function's own live decls, not
-   another function's parameters.  */
-
-oa_proof_result
-oa_check_assertion_conjunct_public (oa_analysis_env *env, tree conjunct,
-				     bool require_conveyor)
-{
-  return oa_check_assertion_conjunct_against_env
-    (conjunct, *reinterpret_cast<oa_env *> (env), require_conveyor);
 }
 
 /* One recognized, codegen-ready action for -fcontract-symbolic-runtime-
