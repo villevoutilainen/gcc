@@ -51,6 +51,7 @@
 #include "gimple-range.h"
 #include "hash-traits.h"
 #include "tree-ssa-alias.h"
+#include "range-op.h"
 #include "tree-cfg.h"
 #include "dumpfile.h"
 #include "ssa-iterators.h"
@@ -912,6 +913,18 @@ collect_float_field_groups (tree cond, vec<float_field_group> *out,
 {
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts_public (&cond, &conjuncts);
+  auto_vec<tree> bounds;
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree lo, hi;
+      if (oa_isfinite_bounds_public (*conjuncts[i], &lo, &hi))
+	{
+	  bounds.safe_push (lo);
+	  bounds.safe_push (hi);
+	}
+    }
+  for (tree &b : bounds)
+    conjuncts.safe_push (&b);
   for (unsigned i = 0; i < conjuncts.length (); ++i)
     {
       tree field, ptr_expr, cst;
@@ -959,8 +972,14 @@ static hash_map<tree, frange> *established_frange;
 /* The range of floating-point value V at AT: a constant's, or the
    ranger's, narrowed by what V was trusted to be.  False if unknown.  */
 
+/* The ranges loads of floating-point members got from the walk's facts,
+   keyed by the SSA value loaded.  */
+
+static hash_map<tree, frange> *float_load_ranges;
+
 static bool
-float_range_at (tree v, gimple *at, gimple_ranger *ranger, frange &fr)
+float_range_at_1 (tree v, gimple *at, gimple_ranger *ranger, frange &fr,
+		  int depth)
 {
   if (TREE_CODE (v) == REAL_CST)
     {
@@ -976,7 +995,52 @@ float_range_at (tree v, gimple *at, gimple_ranger *ranger, frange &fr)
   if (established_frange)
     if (frange *t = established_frange->get (scalar_value_origin (v)))
       fr.intersect (*t);
+  if (float_load_ranges)
+    if (frange *t = float_load_ranges->get (v))
+      fr.intersect (*t);
+  /* Folded from its operands' ranges ('x * 0.0' with x finite), which
+     the ranger doesn't know from the facts.  */
+  gimple *def = SSA_NAME_DEF_STMT (v);
+  if (depth < 8 && def && is_gimple_assign (def))
+    {
+      tree_code code = gimple_assign_rhs_code (def);
+      tree type = TREE_TYPE (v);
+      frange a, b, r;
+      if (code == SSA_NAME || code == NOP_EXPR)
+	{
+	  if (float_range_at_1 (gimple_assign_rhs1 (def), at, ranger, a,
+				depth + 1)
+	      && SCALAR_FLOAT_TYPE_P (TREE_TYPE (gimple_assign_rhs1 (def))))
+	    fr.intersect (a);
+	}
+      else if ((code == PLUS_EXPR || code == MINUS_EXPR || code == MULT_EXPR
+		|| code == RDIV_EXPR)
+	       && float_range_at_1 (gimple_assign_rhs1 (def), def, ranger, a,
+				    depth + 1)
+	       && float_range_at_1 (gimple_assign_rhs2 (def), def, ranger, b,
+				    depth + 1))
+	{
+	  range_op_handler op (code);
+	  if (op && op.fold_range (r, type, a, b) && !r.undefined_p ())
+	    fr.intersect (r);
+	}
+      else if (code == NEGATE_EXPR
+	       && float_range_at_1 (gimple_assign_rhs1 (def), def, ranger, a,
+				    depth + 1))
+	{
+	  frange unused (type);
+	  range_op_handler op (code);
+	  if (op && op.fold_range (r, type, a, unused) && !r.undefined_p ())
+	    fr.intersect (r);
+	}
+    }
   return !fr.varying_p () && !fr.undefined_p ();
+}
+
+static bool
+float_range_at (tree v, gimple *at, gimple_ranger *ranger, frange &fr)
+{
+  return float_range_at_1 (v, at, ranger, fr, 0);
 }
 
 /* Whether floating-point value V satisfies 'V CODE CST' at AT, by the
@@ -1014,6 +1078,12 @@ struct call_rel_fact
   widest_int offset;
   bool conveyor;
 };
+
+/* An accessor's result related to another accessor's on another object:
+   'X.ACC () CODE RECEIVER.ACCESSOR ()', keyed (X's identity, ACC).  */
+
+struct call_call_fact { tree_code code; tree receiver; tree accessor;
+			bool conveyor; };
 
 /* A value V related to another value: 'V CODE OTHER'.  */
 
@@ -1080,6 +1150,8 @@ struct dom_fact_state
      later call that may end lifetimes may change what they reach -- not
      their value.  On any path, so a union at joins.  */
   hash_set<tree> reach_escaped;
+  /* Accessor results compared with each other ('v.size () < w.size ()').  */
+  hash_map<oa_field_key_hash, call_call_fact> ccall;
 };
 
 /* The object pointer VAL points to: a variable whose address it is, or
@@ -1601,6 +1673,25 @@ seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 		seed.call_rel.put (value_key (pv),
 				   { code, id, acc, 0, conveyor });
 	    }
+	  else if (tree acc2, recv2;
+		   oa_match_call_against_call (*conjuncts[i], &recv, &acc,
+					       &code, &recv2, &acc2, !conveyor))
+	    {
+	      auto id_of = [&] (tree r) -> tree
+		{
+		  tree b = oa_strip_symbolic_ptr_expr_public (r);
+		  tree v = (TREE_CODE (b) == PARM_DECL
+			    ? ssa_default_def (fun, b) : NULL_TREE);
+		  return v ? gimple_object_identity (v) : NULL_TREE;
+		};
+	      tree lid = id_of (recv), rid = id_of (recv2);
+	      if (lid && rid && code != EQ_EXPR)
+		{
+		  seed.ccall.put ({lid, acc}, { code, rid, acc2, conveyor });
+		  seed.ccall.put ({rid, acc2}, { swapped_code (code), lid, acc,
+						 conveyor });
+		}
+	    }
 	  else if (oa_match_call_range_comparison (*conjuncts[i], &recv, &acc,
 						   &code, &cst, !conveyor)
 		   && TREE_CODE (cst) == INTEGER_CST)
@@ -1916,6 +2007,108 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 			       "precondition of %qD", sub_param, callee);
 	}
 
+      /* An accessor's result compared with a constant ('v.size () > 3'),
+	 grouped per receiver and accessor: the accessor's known range.  */
+      {
+	struct cgroup { tree recv, acc; oa_range_lite need; };
+	auto_vec<cgroup, 4> groups;
+	for (unsigned i = 0; i < conjuncts.length (); ++i)
+	  {
+	    tree recv, acc, cst;
+	    tree_code code;
+	    if (!oa_match_call_range_comparison (*conjuncts[i], &recv, &acc,
+						 &code, &cst, !as_conveyor)
+		|| TREE_CODE (cst) != INTEGER_CST)
+	      continue;
+	    recv = oa_strip_symbolic_ptr_expr_public (recv);
+	    cgroup *g = NULL;
+	    for (auto &x : groups)
+	      if (x.recv == recv && x.acc == acc)
+		g = &x;
+	    if (!g)
+	      {
+		groups.safe_push ({ recv, acc, oa_range_lite () });
+		g = &groups.last ();
+	      }
+	    tighten_range_bound (g->need, code, wi::to_widest (cst));
+	  }
+	for (auto &g : groups)
+	  {
+	    unsigned rn;
+	    if (!find_param_position (callee, g.recv, &rn)
+		|| rn >= gimple_call_num_args (call))
+	      continue;
+	    tree sub = gimple_call_arg (call, rn);
+	    tree id = gimple_object_identity (sub);
+	    call_range_fact *f = id ? state.call.get ({id, g.acc}) : NULL;
+	    if (f && as_conveyor && !f->conveyor)
+	      f = NULL;
+	    const oa_range_lite &need = g.need;
+	    if (f && (!need.has_lo || (f->r.has_lo && f->r.lo >= need.lo))
+		&& (!need.has_hi || (f->r.has_hi && f->r.hi <= need.hi)))
+	      continue;
+	    if (f && ((need.has_lo && f->r.has_hi && f->r.hi < need.lo)
+		      || (need.has_hi && f->r.has_lo && f->r.lo > need.hi)))
+	      {
+		error_at (gimple_location (call), "argument %qE provably "
+			  "violates the precondition of %qD", sub, callee);
+		continue;
+	      }
+	    report_unproven (call, strict, strict
+			     ? "cannot prove that %qD called on %qE satisfies "
+			       "the precondition of %qD"
+			     : "cannot verify that %qD called on %qE satisfies "
+			       "the precondition of %qD", g.acc, sub, callee);
+	  }
+      }
+
+      /* Two accessor calls compared ('v.size () < w.size ()'): a fact
+	 relating them, or their ranges.  */
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree lr, la, rr, ra;
+	  tree_code code;
+	  if (!oa_match_call_against_call (*conjuncts[i], &lr, &la, &code, &rr,
+					   &ra, !as_conveyor))
+	    continue;
+	  lr = oa_strip_symbolic_ptr_expr_public (lr);
+	  rr = oa_strip_symbolic_ptr_expr_public (rr);
+	  unsigned ln, rn;
+	  if (!find_param_position (callee, lr, &ln)
+	      || !find_param_position (callee, rr, &rn)
+	      || ln >= gimple_call_num_args (call)
+	      || rn >= gimple_call_num_args (call))
+	    continue;
+	  tree lsub = gimple_call_arg (call, ln);
+	  tree lid = gimple_object_identity (lsub);
+	  tree rid = gimple_object_identity (gimple_call_arg (call, rn));
+	  verdict v = VERDICT_UNKNOWN;
+	  if (lid && rid)
+	    {
+	      call_call_fact *f = state.ccall.get ({lid, la});
+	      if (f && f->receiver == rid && f->accessor == ra
+		  && (!as_conveyor || f->conveyor)
+		  && oa_relational_code_implies (f->code, code))
+		v = VERDICT_TRUE;
+	      call_range_fact *a = state.call.get ({lid, la});
+	      call_range_fact *b = state.call.get ({rid, ra});
+	      if (v == VERDICT_UNKNOWN && a && b
+		  && (!as_conveyor || (a->conveyor && b->conveyor)))
+		v = range_pair_verdict (a->r, code, b->r);
+	    }
+	  if (v == VERDICT_TRUE)
+	    continue;
+	  if (v == VERDICT_FALSE)
+	    error_at (gimple_location (call), "argument %qE provably violates "
+		      "the precondition of %qD", lsub, callee);
+	  else
+	    report_unproven (call, strict, strict
+			     ? "cannot prove that %qD called on %qE satisfies "
+			       "the precondition of %qD"
+			     : "cannot verify that %qD called on %qE satisfies "
+			       "the precondition of %qD", la, lsub, callee);
+	}
+
       /* A parameter related to another ('x < q'): both literal, a
 	 self-trusted or branch-derived fact, or their ranges.  */
       for (unsigned i = 0; i < conjuncts.length (); ++i)
@@ -2176,6 +2369,12 @@ forget_object (dom_fact_state &state, tree identity, tree field = NULL_TREE)
       keys.safe_push (it.first);
   for (tree k : keys)
     state.call_rel.remove (k);
+  drop.truncate (0);
+  for (auto it : state.ccall)
+    if (it.first.first == identity || it.second.receiver == identity)
+      drop.safe_push (it.first);
+  for (auto &k : drop)
+    state.ccall.remove (k);
 }
 
 /* What STATE knows of every object ends.  */
@@ -2189,6 +2388,7 @@ forget_all (dom_fact_state &state)
   state.call.empty ();
   state.call_rel.empty ();
   state.ffield.empty ();
+  state.ccall.empty ();
 }
 
 /* OBJ (an identity) may have changed: so may the objects of FUN's
@@ -2580,6 +2780,67 @@ establish_persistent_facts_for_call (gcall *call, dom_fact_state &state)
 	  if (tree id = gimple_object_identity (gimple_call_arg (call, argno)))
 	    state.ffield.put ({id, g.field}, g.range);
 	}
+
+      /* What an accessor gives on an object the call is given: compared
+	 with a constant ('post (size () > 0)'), or with a parameter
+	 ('post (size () == m)') -- a range for a constant argument, a
+	 relation for a value.  */
+      bool conv = false;
+      postcondition_establishes_p (contract, callee, &conv);
+      auto receiver_id = [&] (tree recv) -> tree
+	{
+	  unsigned rn;
+	  recv = oa_strip_symbolic_ptr_expr_public (recv);
+	  if (!find_param_position (callee, recv, &rn)
+	      || rn >= gimple_call_num_args (call))
+	    return NULL_TREE;
+	  return gimple_object_identity (gimple_call_arg (call, rn));
+	};
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree recv, acc, cst, param;
+	  tree_code code;
+	  if (oa_match_call_range_comparison (*conjuncts[i], &recv, &acc, &code,
+					      &cst, !conv)
+	      && TREE_CODE (cst) == INTEGER_CST)
+	    {
+	      if (tree id = receiver_id (recv))
+		{
+		  call_range_fact *old = state.call.get ({id, acc});
+		  call_range_fact f = old ? *old : call_range_fact { {}, conv };
+		  tighten_range_bound (f.r, code, wi::to_widest (cst));
+		  f.conveyor &= conv || !old;
+		  state.call.put ({id, acc}, f);
+		}
+	      continue;
+	    }
+	  unsigned pn;
+	  if (!oa_match_comparison_against_call (*conjuncts[i], &param, &code,
+						 &recv, &acc, !conv, true))
+	    continue;
+	  tree a;
+	  /* About the result ('post (r: r < size ())').  */
+	  if (param == POSTCONDITION_IDENTIFIER (contract))
+	    a = gimple_call_lhs (call);
+	  else if (TREE_CODE (param) != PARM_DECL
+		   || !find_param_position (callee, param, &pn)
+		   || pn >= gimple_call_num_args (call))
+	    continue;
+	  else
+	    a = gimple_call_arg (call, pn);
+	  tree id = receiver_id (recv);
+	  if (!id || !a)
+	    continue;
+	  if (TREE_CODE (a) == INTEGER_CST)
+	    {
+	      /* 'm CODE call': 'call CODE' m'.  */
+	      call_range_fact f = { {}, conv };
+	      tighten_range_bound (f.r, swapped_code (code), wi::to_widest (a));
+	      state.call.put ({id, acc}, f);
+	    }
+	  else if (TREE_CODE (a) == SSA_NAME)
+	    state.call_rel.put (value_key (a), { code, id, acc, 0, conv });
+	}
     }
 }
 
@@ -2852,7 +3113,17 @@ refine_comparison (tree lhs, tree rhs, tree_code code, bool asserted_true,
   bool l_call = call_shape (lhs, &l_acc, &l_recv);
   bool r_call = call_shape (rhs, &r_acc, &r_recv);
   if (l_call && r_call)
-    return;
+    {
+      tree lid = gimple_object_identity (l_recv);
+      tree rid = gimple_object_identity (r_recv);
+      if (lid && rid && code != EQ_EXPR)
+	{
+	  state.ccall.put ({lid, l_acc}, { code, rid, r_acc, true });
+	  state.ccall.put ({rid, r_acc}, { swapped_code (code), lid, l_acc,
+					    true });
+	}
+      return;
+    }
   if (l_call || r_call)
     {
       tree value = l_call ? rhs : lhs;
@@ -3479,6 +3750,45 @@ state_value_range (tree val, oa_range_lite *out)
   narrow (current_state->vrange.get (key));
   if (!require_conveyor_facts)
     narrow (current_state->vrange_weak.get (key));
+  /* Related to an accessor call whose range is known ('y < s.size ()'
+     with 's.size () < 10'): a bound of its own.  */
+  if (call_rel_fact *f = current_state->call_rel.get (key))
+    if (call_range_fact *c = current_state->call.get ({f->receiver,
+						       f->accessor}))
+      if ((!require_conveyor_facts || (f->conveyor && c->conveyor)))
+	{
+	  oa_range_lite r;
+	  /* (V - OFFSET) CODE X: V CODE X + OFFSET.  */
+	  switch (f->code)
+	    {
+	    case LT_EXPR:
+	      if (c->r.has_hi)
+		r.has_hi = true, r.hi = c->r.hi - 1 + f->offset;
+	      break;
+	    case LE_EXPR:
+	      if (c->r.has_hi)
+		r.has_hi = true, r.hi = c->r.hi + f->offset;
+	      break;
+	    case GT_EXPR:
+	      if (c->r.has_lo)
+		r.has_lo = true, r.lo = c->r.lo + 1 + f->offset;
+	      break;
+	    case GE_EXPR:
+	      if (c->r.has_lo)
+		r.has_lo = true, r.lo = c->r.lo + f->offset;
+	      break;
+	    case EQ_EXPR:
+	      if (c->r.has_lo)
+		r.has_lo = true, r.lo = c->r.lo + f->offset;
+	      if (c->r.has_hi)
+		r.has_hi = true, r.hi = c->r.hi + f->offset;
+	      break;
+	    default:
+	      break;
+	    }
+	  if (r.has_lo || r.has_hi)
+	    narrow (&r);
+	}
   return any;
 }
 
@@ -3535,6 +3845,9 @@ copy_state (dom_fact_state &to, const dom_fact_state &from)
   to.reach_escaped.empty ();
   for (tree t : from.reach_escaped)
     to.reach_escaped.add (t);
+  to.ccall.empty ();
+  for (auto it : from.ccall)
+    to.ccall.put (it.first, it.second);
 }
 
 /* Meet B into A: what holds in both.  A field's ranges join to the
@@ -3742,6 +4055,22 @@ meet_state (dom_fact_state &a, const dom_fact_state &b)
   both (a.voa, b.voa);
   for (tree t : const_cast<hash_set<tree> &> (b.reach_escaped))
     a.reach_escaped.add (t);
+  {
+    auto_vec<std::pair<tree, tree>, 8> cdrop;
+    for (auto it : a.ccall)
+      {
+	const call_call_fact *o
+	  = const_cast<hash_map<oa_field_key_hash, call_call_fact> &>
+	      (b.ccall).get (it.first);
+	if (!o || o->code != it.second.code || o->receiver != it.second.receiver
+	    || o->accessor != it.second.accessor)
+	  cdrop.safe_push (it.first);
+	else
+	  it.second.conveyor &= o->conveyor;
+      }
+    for (auto &k : cdrop)
+      a.ccall.remove (k);
+  }
   for (auto it : const_cast<hash_map<tree, tree> &> (b.reach_src))
     {
       tree &l = a.reach_src.get_or_insert (it.first);
@@ -3834,6 +4163,18 @@ same_state (const dom_fact_state &a, const dom_fact_state &b)
 	}
       return true;
     };
+  if (a.ccall.elements () != b.ccall.elements ())
+    return false;
+  for (auto it : a.ccall)
+    {
+      const call_call_fact *o
+	= const_cast<hash_map<oa_field_key_hash, call_call_fact> &>
+	    (b.ccall).get (it.first);
+      if (!o || o->code != it.second.code || o->receiver != it.second.receiver
+	  || o->accessor != it.second.accessor
+	  || o->conveyor != it.second.conveyor)
+	return false;
+    }
   if (a.reach_escaped.elements () != b.reach_escaped.elements ())
     return false;
   for (tree t : a.reach_escaped)
@@ -4239,6 +4580,24 @@ transfer_block (basic_block bb, function *fun, dom_fact_state &state,
 	 are the fixed point's; the walk's order puts it before the uses.  */
       if (report && gimple_assign_load_p (stmt))
 	record_load_range (stmt, state);
+      /* A floating-point member's load: in every pass, the last one's
+	 facts being the fixed point's.  */
+      if (float_load_ranges && gimple_assign_load_p (stmt))
+	{
+	  tree lhs = gimple_assign_lhs (stmt);
+	  tree field, base;
+	  if (TREE_CODE (lhs) == SSA_NAME
+	      && SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs))
+	      && field_shape (lhs, &field, &base))
+	    {
+	      tree id = gimple_object_identity (base);
+	      frange *f = id ? state.ffield.get ({id, field}) : NULL;
+	      if (f)
+		float_load_ranges->put (lhs, *f);
+	      else
+		float_load_ranges->remove (lhs);
+	    }
+	}
       gcall *call = dyn_cast <gcall *> (stmt);
       if (!call)
 	continue;
@@ -4992,6 +5351,12 @@ conjunct_covered_p (tree conjunct)
     return true;
   /* Both flavors' shapes: the rule itself rejects a symbolic accessor in a
      conveyor obligation, reporting it.  */
+  tree e;
+  if (oa_match_call_against_call (conjunct, &a, &b, &code, &c, &e, true))
+    return true;
+  if (oa_match_call_range_comparison (conjunct, &a, &b, &code, &c, true)
+      && TREE_CODE (c) == INTEGER_CST)
+    return true;
   if (oa_match_comparison_against_call (conjunct, &a, &code, &b, &c, true)
       || oa_match_shifted_comparison_against_call_text (conjunct, &a, &code,
 							&b, &c, &offset, true))
@@ -5323,8 +5688,26 @@ check_call (gcall *call, hash_set<tree> &, hash_set<tree> &,
 						      call);
 
 	  oa_range_lite have;
-	  bool known = established_range_of (substituted, established_range,
-					     ranger, call, &have);
+	  bool known;
+	  /* A reference parameter's value is its referent's: what the walk
+	     knows of that scalar in memory.  */
+	  if (TYPE_REF_P (TREE_TYPE (params[p])) && !DECL_BY_REFERENCE (params[p]))
+	    {
+	      tree id = (TREE_CODE (substituted) == ADDR_EXPR
+			 ? get_base_address (TREE_OPERAND (substituted, 0))
+			 : gimple_object_identity (substituted));
+	      field_fact *f = (id && current_state
+			       ? current_state->field.get ({id, NULL_TREE})
+			       : NULL);
+	      if (f && as_conveyor && !f->conveyor)
+		f = NULL;
+	      known = f != NULL;
+	      if (f)
+		have = f->r;
+	    }
+	  else
+	    known = established_range_of (substituted, established_range,
+					  ranger, call, &have);
 	  if (known
 	      && (!required.has_lo || (have.has_lo && have.lo >= required.lo))
 	      && (!required.has_hi || (have.has_hi && have.hi <= required.hi)))
@@ -5420,6 +5803,19 @@ check_function (function *fun, void *)
 	continue;
       auto_vec<tree *> conjuncts;
       oa_collect_conjuncts_public (&cond, &conjuncts);
+      /* 'isfinite (x)': as 'x >= -max && x <= max'.  */
+      auto_vec<tree> bounds;
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree lo, hi;
+	  if (oa_isfinite_bounds_public (*conjuncts[i], &lo, &hi))
+	    {
+	      bounds.safe_push (lo);
+	      bounds.safe_push (hi);
+	    }
+	}
+      for (tree &b : bounds)
+	conjuncts.safe_push (&b);
       for (unsigned i = 0; i < conjuncts.length (); ++i)
 	{
 	  tree parm, cst;
@@ -5440,6 +5836,8 @@ check_function (function *fun, void *)
 	}
     }
   established_frange = &trusted_frange;
+  hash_map<tree, frange> load_ranges;
+  float_load_ranges = &load_ranges;
 
   gimple_ranger *ranger = enable_ranger (fun, false);
 
@@ -5458,6 +5856,7 @@ check_function (function *fun, void *)
   current_value_facts = NULL;
   conveyor_value_facts = NULL;
   established_frange = NULL;
+  float_load_ranges = NULL;
   disable_ranger (fun);
 }
 
