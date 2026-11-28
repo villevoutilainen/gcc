@@ -1065,6 +1065,10 @@ struct dom_fact_state
      (a copy of a handle), so what may change through one changes the
      other's facts.  On any path, so a union at joins.  */
   hash_map<tree, tree> reach_src;
+  /* The variables a copy of which (reaching memory) was handed out: any
+     later call that may end lifetimes may change what they reach -- not
+     their value.  On any path, so a union at joins.  */
+  hash_set<tree> reach_escaped;
 };
 
 /* The object pointer VAL points to: a variable whose address it is, or
@@ -1298,6 +1302,38 @@ relation_operand_identity (tree pred_fn, unsigned i, tree val)
   return gimple_object_identity (val);
 }
 
+/* VAL, an aggregate argument of CALL: if a compiler temporary the call's
+   block copied a variable into just before ('D.1 = f; g (D.1)'), that
+   variable, whose value it is; else VAL.  */
+
+static tree
+copied_temporary_source (tree val, gcall *call)
+{
+  if (!VAR_P (val) || !DECL_ARTIFICIAL (val) || DECL_NAME (val)
+      || !AGGREGATE_TYPE_P (TREE_TYPE (val)))
+    return val;
+  gimple_stmt_iterator gsi = gsi_for_stmt (call);
+  for (gsi_prev (&gsi); !gsi_end_p (gsi); gsi_prev (&gsi))
+    {
+      gimple *stmt = gsi_stmt (gsi);
+      if (gimple_assign_single_p (stmt) && gimple_assign_lhs (stmt) == val)
+	{
+	  tree rhs = gimple_assign_rhs1 (stmt);
+	  return VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL ? rhs : val;
+	}
+      /* The source may have changed since -- not through a store to
+	 another compiler temporary (the call's other copies).  */
+      if (gimple_vdef (stmt))
+	{
+	  tree lhs = gimple_get_lhs (stmt);
+	  if (!(lhs && VAR_P (lhs) && DECL_ARTIFICIAL (lhs) && !DECL_NAME (lhs)
+		&& is_gimple_assign (stmt)))
+	    return val;
+	}
+    }
+  return val;
+}
+
 /* The GIMPLE operand at CALL, to CALLEE, that ARG, an argument of a
    relation conjunct of CALLEE's contract, stands for: a constant; the
    argument CALL passes for a parameter, or for a value read through a
@@ -1361,7 +1397,7 @@ relation_call_operand (gcall *call, tree callee, tree arg, tree result_name)
       || !find_param_position (callee, base, &argno)
       || argno >= gimple_call_num_args (call))
     return NULL_TREE;
-  tree a = gimple_call_arg (call, argno);
+  tree a = copied_temporary_source (gimple_call_arg (call, argno), call);
   if (deref && TYPE_REF_P (TREE_TYPE (base)) && !POINTER_TYPE_P (TREE_TYPE (s)))
     {
       if (TREE_CODE (a) == ADDR_EXPR
@@ -2220,12 +2256,12 @@ forget_reach (dom_fact_state &state, function *, tree id)
 {
   forget_reached (state, id);
   if (DECL_P (id) && !is_global_var (id))
-    state.escaped.add (id);
+    state.reach_escaped.add (id);
   if (tree *src = state.reach_src.get (id))
     for (tree t = *src; t; t = TREE_CHAIN (t))
       {
 	forget_reached (state, TREE_PURPOSE (t));
-	state.escaped.add (TREE_PURPOSE (t));
+	state.reach_escaped.add (TREE_PURPOSE (t));
       }
 }
 
@@ -3108,6 +3144,9 @@ assertion_verdict (tree c, gcall *call, tree struct_var, tree decls,
 	  else
 	    {
 	      tree v = value_of (a);
+	      if (!v && (VAR_P (a) || TREE_CODE (a) == PARM_DECL)
+		  && AGGREGATE_TYPE_P (TREE_TYPE (a)))
+		v = a;
 	      ids[i] = v ? relation_operand_identity (pred_fn, i, v) : NULL_TREE;
 	    }
 	  if (!ids[i])
@@ -3354,6 +3393,10 @@ establish_assertion_facts (gcall *call, dom_fact_state &state)
 	    {
 	      tree ra = oa_relation_strip_arg (rargs[a]);
 	      tree v = TREE_CODE (ra) == INTEGER_CST ? ra : value_of (ra);
+	      /* A variable whose value is in memory: itself.  */
+	      if (!v && (VAR_P (ra) || TREE_CODE (ra) == PARM_DECL)
+		  && AGGREGATE_TYPE_P (TREE_TYPE (ra)))
+		v = ra;
 	      all = v && (ids[a] = relation_operand_identity (pred_fn, a, v));
 	    }
 	  if (all)
@@ -3468,6 +3511,9 @@ copy_state (dom_fact_state &to, const dom_fact_state &from)
   to.reach_src.empty ();
   for (auto it : from.reach_src)
     to.reach_src.put (it.first, it.second);
+  to.reach_escaped.empty ();
+  for (tree t : from.reach_escaped)
+    to.reach_escaped.add (t);
 }
 
 /* Meet B into A: what holds in both.  A field's ranges join to the
@@ -3673,6 +3719,8 @@ meet_state (dom_fact_state &a, const dom_fact_state &b)
     };
   both (a.vnz, b.vnz);
   both (a.voa, b.voa);
+  for (tree t : const_cast<hash_set<tree> &> (b.reach_escaped))
+    a.reach_escaped.add (t);
   for (auto it : const_cast<hash_map<tree, tree> &> (b.reach_src))
     {
       tree &l = a.reach_src.get_or_insert (it.first);
@@ -3765,6 +3813,11 @@ same_state (const dom_fact_state &a, const dom_fact_state &b)
 	}
       return true;
     };
+  if (a.reach_escaped.elements () != b.reach_escaped.elements ())
+    return false;
+  for (tree t : a.reach_escaped)
+    if (!const_cast<hash_set<tree> &> (b.reach_escaped).contains (t))
+      return false;
   if (a.reach_src.elements () != b.reach_src.elements ())
     return false;
   for (auto it : const_cast<hash_map<tree, tree> &> (a.reach_src))
@@ -3940,8 +3993,20 @@ process_lifetime_call (gcall *call, dom_fact_state &state)
       any_route = true;
       if (TREE_CODE (arg) == SSA_NAME)
 	routes.safe_push (arg);
-      if (tree id = gimple_object_identity (arg))
+      tree id = gimple_object_identity (arg);
+      if (id)
 	routes.safe_push (id);
+      /* And the parameters that may alias one it reaches.  */
+      tree parm = (id && TREE_CODE (id) == SSA_NAME
+		   && SSA_NAME_IS_DEFAULT_DEF (id) ? SSA_NAME_VAR (id)
+		   : NULL_TREE);
+      if (parm && TREE_CODE (parm) == PARM_DECL
+	  && DECL_CONTEXT (parm) == current_function_decl)
+	for (tree sib = DECL_ARGUMENTS (current_function_decl); sib;
+	     sib = DECL_CHAIN (sib))
+	  if (sib != parm && oa_could_alias_as_parameters_public (parm, sib))
+	    if (tree ssa = ssa_default_def (cfun, sib))
+	      routes.safe_push (ssa);
     }
 
   auto_vec<tree, 8> esc;
@@ -3949,6 +4014,11 @@ process_lifetime_call (gcall *call, dom_fact_state &state)
     esc.safe_push (t);
   for (tree t : esc)
     forget_object (state, t);
+  esc.truncate (0);
+  for (tree t : state.reach_escaped)
+    esc.safe_push (t);
+  for (tree t : esc)
+    forget_reached (state, t);
 
   auto_vec<tree, 8> ended;
   for (auto it : state.rel)
@@ -3964,7 +4034,11 @@ process_lifetime_call (gcall *call, dom_fact_state &state)
 
   for (unsigned i = 0; i < gimple_call_num_args (call); ++i)
     {
-      tree id = gimple_object_identity (gimple_call_arg (call, i));
+      /* An address handed out -- not a copy passed by value.  */
+      tree arg = gimple_call_arg (call, i);
+      if (!POINTER_TYPE_P (TREE_TYPE (arg)))
+	continue;
+      tree id = gimple_object_identity (arg);
       if (id && DECL_P (id) && !is_global_var (id))
 	state.escaped.add (id);
     }
@@ -4119,7 +4193,7 @@ transfer_block (basic_block bb, function *fun, dom_fact_state &state,
 		    else
 		      /* Stored where any function may reach it.  */
 		      for (tree t = list; t; t = TREE_CHAIN (t))
-			state.escaped.add (TREE_PURPOSE (t));
+			state.reach_escaped.add (TREE_PURPOSE (t));
 		  }
 		/* A copy has the value's by-value predicates.  */
 		if ((VAR_P (rhs) || TREE_CODE (rhs) == PARM_DECL)
