@@ -572,9 +572,39 @@ trusted_range_at (tree val, gimple *at, gimple_ranger *ranger,
    ESTABLISHED entirely inside REQUIRED" -- gaps inside the envelope
    only ever make the real value set a stricter subset.  */
 
+static bool established_range_of_1 (tree, hash_map<tree, oa_range_lite> &,
+				    gimple_ranger *, gimple *,
+				    oa_range_lite *);
+static bool state_value_range (tree, oa_range_lite *);
+
+/* VAL's range: established_range_of_1's, narrowed by what the walk's
+   state has for it (a condition on the way, a contract_assert).  */
+
 static bool
 established_range_of (tree val, hash_map<tree, oa_range_lite> &established_range,
-		       gimple_ranger *ranger, gimple *at, oa_range_lite *out)
+		      gimple_ranger *ranger, gimple *at, oa_range_lite *out)
+{
+  oa_range_lite sr;
+  bool from_state = state_value_range (val, &sr);
+  if (!established_range_of_1 (val, established_range, ranger, at, out))
+    {
+      if (from_state)
+	*out = sr;
+      return from_state;
+    }
+  if (from_state)
+    {
+      if (sr.has_lo && (!out->has_lo || sr.lo > out->lo))
+	out->has_lo = true, out->lo = sr.lo;
+      if (sr.has_hi && (!out->has_hi || sr.hi < out->hi))
+	out->has_hi = true, out->hi = sr.hi;
+    }
+  return true;
+}
+
+static bool
+established_range_of_1 (tree val, hash_map<tree, oa_range_lite> &established_range,
+			gimple_ranger *ranger, gimple *at, oa_range_lite *out)
 {
   if (val == NULL_TREE)
     return false;
@@ -904,6 +934,12 @@ static tree scalar_value_origin (tree);
    checked (check_call); NULL outside one.  */
 static hash_set<tree> *current_ended;
 
+/* The walk's state at the statement being processed, for the value
+   facts a contract_assert established there (state.vrange, vnz, voa);
+   NULL outside the walk.  */
+struct dom_fact_state;
+static dom_fact_state *current_state;
+
 /* The floating-point values parameters were trusted to have on entry
    (their own preconditions), keyed by the incoming SSA value.  */
 
@@ -1006,6 +1042,12 @@ struct dom_fact_state
      keyed by the value (value_key) -- the ranger can't see one through
      the PHI the gimplifier lowers '&&' to.  */
   hash_map<tree, oa_range_lite> vrange;
+  /* Ranges a symbolic-only contract_assert established: not for a
+     conveyor obligation.  */
+  hash_map<tree, oa_range_lite> vrange_weak;
+  /* Values a contract_assert established to be nonzero, resp. object
+     addresses; the flag: in the conveyor flavor.  */
+  hash_map<tree, bool> vnz, voa;
 };
 
 /* The object pointer VAL points to: a variable whose address it is, or
@@ -2983,23 +3025,24 @@ assertion_verdict (tree c, gcall *call, tree struct_var, tree decls,
    (an error if strict).  A symbolic postcondition's symbolic predicates
    and relations are its trusted axioms.  */
 
-static void
-check_assertion (gcall *call, dom_fact_state &state)
+static bool
+check_assertion (gcall *call, dom_fact_state &state, bool report)
 {
+  bool ok = true;
   tree struct_var, cond, decls;
   tree contract = cg_contract_check_call_public (call, &struct_var, &cond,
 						 &decls);
   if (!contract || cond == NULL_TREE || cond == error_mark_node)
-    return;
+    return ok;
   bool is_post = POSTCONDITION_P (contract);
   if (TREE_CODE (contract) != ASSERTION_STMT && !is_post)
-    return;
+    return ok;
   tree owner = DECL_ORIGIN (current_function_decl);
   bool conveyor_ok = oa_contract_conveyor_active_public (contract, owner);
   bool symbolic_ok = oa_contract_symbolic_active_public (contract, owner);
   if ((!conveyor_ok && !symbolic_ok)
       || oa_contract_never_proven_public (contract, owner))
-    return;
+    return ok;
 
   auto_vec<tree *> conjuncts;
   oa_collect_conjuncts_public (&cond, &conjuncts);
@@ -3042,6 +3085,10 @@ check_assertion (gcall *call, dom_fact_state &state)
 	  if (loc == UNKNOWN_LOCATION)
 	    loc = gimple_location (call);
 	  if (v == VERDICT_FALSE)
+	    ok = false;
+	  if (!report)
+	    continue;
+	  if (v == VERDICT_FALSE)
 	    {
 	      if (is_post)
 		error_at (loc, "postcondition condition %qE is provably false",
@@ -3069,6 +3116,141 @@ check_assertion (gcall *call, dom_fact_state &state)
 	    }
 	}
     }
+  return ok;
+}
+
+/* CALL, a terminating contract_assert's check in a checked flavor that
+   didn't fail: what its condition says holds after it, into STATE -- a
+   variable's object address, nonzero value or range, a member's range,
+   predicates and relations -- in the conveyor flavor if conveyor.  */
+
+static void
+establish_assertion_facts (gcall *call, dom_fact_state &state)
+{
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_public (call, &struct_var, &cond,
+						 &decls);
+  if (!contract || TREE_CODE (contract) != ASSERTION_STMT
+      || !cond || cond == error_mark_node)
+    return;
+  tree owner = DECL_ORIGIN (current_function_decl);
+  bool conveyor = oa_contract_conveyor_active_public (contract, owner);
+  if ((!conveyor && !oa_contract_symbolic_active_public (contract, owner))
+      || !contract_failure_terminates_p (contract, owner))
+    return;
+  auto value_of = [&] (tree decl) -> tree
+    {
+      decl = tree_strip_any_location_wrapper (decl);
+      if (!VAR_P (decl) && TREE_CODE (decl) != PARM_DECL)
+	return NULL_TREE;
+      return cg_contract_check_decl_value_public (call, struct_var, decls,
+						  decl);
+    };
+  auto scalar_decl_p = [] (tree decl)
+    {
+      decl = tree_strip_any_location_wrapper (decl);
+      return !TYPE_REF_P (TREE_TYPE (decl)) || DECL_BY_REFERENCE (decl);
+    };
+  hash_map<tree, oa_range_lite> &ranges
+    = conveyor ? state.vrange : state.vrange_weak;
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (unsigned i = 0; i < conjuncts.length (); ++i)
+    {
+      tree c = *conjuncts[i];
+      tree arg, decl, cst, field, ptr_expr, pred_fn, pred_arg;
+      tree_code code;
+      bool negated;
+      if (is_object_address_call_p (c, &arg))
+	{
+	  arg = tree_strip_any_location_wrapper (arg);
+	  while (TREE_CODE (arg) == NON_LVALUE_EXPR || CONVERT_EXPR_P (arg))
+	    arg = tree_strip_any_location_wrapper (TREE_OPERAND (arg, 0));
+	  if ((VAR_P (arg) || TREE_CODE (arg) == PARM_DECL)
+	      && (TYPE_REF_P (TREE_TYPE (arg))
+		  || POINTER_TYPE_P (TREE_TYPE (arg))))
+	    if (tree v = value_of (arg))
+	      if (TREE_CODE (v) == SSA_NAME)
+		state.voa.put (v, conveyor);
+	  continue;
+	}
+      if (oa_nonzero_conjunct_p (c, &decl))
+	{
+	  if (scalar_decl_p (decl))
+	    if (tree v = value_of (decl))
+	      if (TREE_CODE (v) == SSA_NAME)
+		state.vnz.put (value_key (v), conveyor);
+	  continue;
+	}
+      if (oa_match_simple_comparison_var_public (c, &decl, &code, &cst)
+	  && TREE_CODE (cst) == INTEGER_CST && scalar_decl_p (decl))
+	{
+	  if (tree v = value_of (decl))
+	    if (TREE_CODE (v) == SSA_NAME)
+	      {
+		tree key = value_key (v);
+		oa_range_lite *old = ranges.get (key);
+		oa_range_lite r = old ? *old : oa_range_lite ();
+		tighten_range_bound (r, code, wi::to_widest (cst));
+		ranges.put (key, r);
+	      }
+	  continue;
+	}
+      if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code, &cst)
+	  && (TREE_CODE (cst) == INTEGER_CST || TREE_CODE (cst) == REAL_CST))
+	{
+	  tree base = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+	  tree p = (VAR_P (base) || TREE_CODE (base) == PARM_DECL
+		    ? value_of (base) : NULL_TREE);
+	  tree id = p ? gimple_object_identity (p) : NULL_TREE;
+	  if (!id)
+	    continue;
+	  if (TREE_CODE (cst) == REAL_CST)
+	    {
+	      frange r;
+	      if (frange_for_comparison (TREE_TYPE (field), code, cst, &r))
+		{
+		  if (frange *old = state.ffield.get ({id, field}))
+		    old->intersect (r);
+		  else
+		    state.ffield.put ({id, field}, r);
+		}
+	      continue;
+	    }
+	  field_fact *old = state.field.get ({id, field});
+	  field_fact f = old ? *old : field_fact { oa_range_lite (), conveyor };
+	  tighten_range_bound (f.r, code, wi::to_widest (cst));
+	  f.conveyor &= conveyor || !old;
+	  state.field.put ({id, field}, f);
+	  continue;
+	}
+      auto_vec<tree> rargs;
+      if (oa_relation_conjunct_shape (c, &pred_fn, &rargs, &negated))
+	{
+	  tree ids[OA_RELATION_MAX_ARGS];
+	  bool all = true;
+	  for (unsigned a = 0; a < rargs.length () && all; ++a)
+	    {
+	      tree ra = oa_relation_strip_arg (rargs[a]);
+	      tree v = TREE_CODE (ra) == INTEGER_CST ? ra : value_of (ra);
+	      all = v && (ids[a] = relation_operand_identity (pred_fn, a, v));
+	    }
+	  if (all)
+	    relation_put (state, pred_fn, ids, rargs.length (), !negated,
+			  conveyor);
+	  continue;
+	}
+      if (oa_match_predicate_conjunct (c, &pred_fn, &pred_arg, &negated))
+	if (tree v = value_of (pred_arg))
+	  {
+	    tree id = gimple_object_identity (v);
+	    if (!id && TREE_CODE (v) == SSA_NAME)
+	      id = scalar_value_origin (v);
+	    if (id)
+	      state.pred.get_or_insert (id).put ({ pred_fn, !negated,
+						   conveyor });
+	  }
+    }
 }
 
 /* The persistent-memory facts are a forward must-analysis: what holds
@@ -3077,6 +3259,38 @@ check_assertion (gcall *call, dom_fact_state &state)
    establishes -- iterated in reverse postorder to a fixed point (a
    loop's facts start optimistic and only shrink).  Only the last pass,
    over the fixed entry facts, reports.  */
+
+/* What the walk's state has for VAL's range, into *OUT: a condition on
+   the way, a contract_assert (a symbolic-only one not for a conveyor
+   obligation).  */
+
+static bool
+state_value_range (tree val, oa_range_lite *out)
+{
+  if (!current_state || TREE_CODE (val) != SSA_NAME)
+    return false;
+  tree key = value_key (val);
+  bool any = false;
+  auto narrow = [&] (const oa_range_lite *r)
+    {
+      if (!r)
+	return;
+      if (!any)
+	*out = *r;
+      else
+	{
+	  if (r->has_lo && (!out->has_lo || r->lo > out->lo))
+	    out->has_lo = true, out->lo = r->lo;
+	  if (r->has_hi && (!out->has_hi || r->hi < out->hi))
+	    out->has_hi = true, out->hi = r->hi;
+	}
+      any = true;
+    };
+  narrow (current_state->vrange.get (key));
+  if (!require_conveyor_facts)
+    narrow (current_state->vrange_weak.get (key));
+  return any;
+}
 
 /* Copy FROM into TO.  */
 
@@ -3116,6 +3330,15 @@ copy_state (dom_fact_state &to, const dom_fact_state &from)
   to.vrange.empty ();
   for (auto it : from.vrange)
     to.vrange.put (it.first, it.second);
+  to.vrange_weak.empty ();
+  for (auto it : from.vrange_weak)
+    to.vrange_weak.put (it.first, it.second);
+  to.vnz.empty ();
+  for (auto it : from.vnz)
+    to.vnz.put (it.first, it.second);
+  to.voa.empty ();
+  for (auto it : from.voa)
+    to.voa.put (it.first, it.second);
 }
 
 /* Meet B into A: what holds in both.  A field's ranges join to the
@@ -3277,28 +3500,50 @@ meet_state (dom_fact_state &a, const dom_fact_state &b)
     a.ffield.remove (k);
   for (tree t : const_cast<hash_set<tree> &> (b.ended))
     a.ended.add (t);
-  drop.truncate (0);
-  for (auto it : a.vrange)
+  auto hull = [] (hash_map<tree, oa_range_lite> &am,
+		  const hash_map<tree, oa_range_lite> &bm)
     {
-      const oa_range_lite *o
-	= const_cast<hash_map<tree, oa_range_lite> &> (b.vrange).get (it.first);
-      oa_range_lite &r = it.second;
-      if (!o)
+      auto_vec<tree, 8> dropped;
+      for (auto it : am)
 	{
-	  drop.safe_push (it.first);
-	  continue;
+	  const oa_range_lite *o
+	    = const_cast<hash_map<tree, oa_range_lite> &> (bm).get (it.first);
+	  oa_range_lite &r = it.second;
+	  if (!o)
+	    {
+	      dropped.safe_push (it.first);
+	      continue;
+	    }
+	  r.has_lo = r.has_lo && o->has_lo;
+	  if (r.has_lo)
+	    r.lo = wi::smin (r.lo, o->lo);
+	  r.has_hi = r.has_hi && o->has_hi;
+	  if (r.has_hi)
+	    r.hi = wi::smax (r.hi, o->hi);
+	  if (!r.has_lo && !r.has_hi)
+	    dropped.safe_push (it.first);
 	}
-      r.has_lo = r.has_lo && o->has_lo;
-      if (r.has_lo)
-	r.lo = wi::smin (r.lo, o->lo);
-      r.has_hi = r.has_hi && o->has_hi;
-      if (r.has_hi)
-	r.hi = wi::smax (r.hi, o->hi);
-      if (!r.has_lo && !r.has_hi)
-	drop.safe_push (it.first);
-    }
-  for (tree k : drop)
-    a.vrange.remove (k);
+      for (tree k : dropped)
+	am.remove (k);
+    };
+  hull (a.vrange, b.vrange);
+  hull (a.vrange_weak, b.vrange_weak);
+  auto both = [] (hash_map<tree, bool> &am, const hash_map<tree, bool> &bm)
+    {
+      auto_vec<tree, 8> dropped;
+      for (auto it : am)
+	{
+	  const bool *o = const_cast<hash_map<tree, bool> &> (bm).get (it.first);
+	  if (!o)
+	    dropped.safe_push (it.first);
+	  else
+	    it.second &= *o;
+	}
+      for (tree k : dropped)
+	am.remove (k);
+    };
+  both (a.vnz, b.vnz);
+  both (a.voa, b.voa);
 }
 
 /* Whether A and B hold the same facts.  */
@@ -3354,17 +3599,40 @@ same_state (const dom_fact_state &a, const dom_fact_state &b)
 	       (b.call);
   auto &bcr = const_cast<hash_map<tree, call_rel_fact> &> (b.call_rel);
   auto &bvr = const_cast<hash_map<tree, value_rel_fact> &> (b.vrel);
-  auto &bvg = const_cast<hash_map<tree, oa_range_lite> &> (b.vrange);
-  if (a.vrange.elements () != b.vrange.elements ())
-    return false;
-  for (auto it : a.vrange)
+  auto same_ranges = [] (const hash_map<tree, oa_range_lite> &am,
+			 const hash_map<tree, oa_range_lite> &bm)
     {
-      oa_range_lite *o = bvg.get (it.first);
-      const oa_range_lite &r = it.second;
-      if (!o || o->has_lo != r.has_lo || o->has_hi != r.has_hi
-	  || (r.has_lo && o->lo != r.lo) || (r.has_hi && o->hi != r.hi))
+      auto &bmm = const_cast<hash_map<tree, oa_range_lite> &> (bm);
+      if (am.elements () != bm.elements ())
 	return false;
-    }
+      for (auto it : const_cast<hash_map<tree, oa_range_lite> &> (am))
+	{
+	  oa_range_lite *o = bmm.get (it.first);
+	  const oa_range_lite &r = it.second;
+	  if (!o || o->has_lo != r.has_lo || o->has_hi != r.has_hi
+	      || (r.has_lo && o->lo != r.lo) || (r.has_hi && o->hi != r.hi))
+	    return false;
+	}
+      return true;
+    };
+  auto same_flags = [] (const hash_map<tree, bool> &am,
+			const hash_map<tree, bool> &bm)
+    {
+      auto &bmm = const_cast<hash_map<tree, bool> &> (bm);
+      if (am.elements () != bm.elements ())
+	return false;
+      for (auto it : const_cast<hash_map<tree, bool> &> (am))
+	{
+	  bool *o = bmm.get (it.first);
+	  if (!o || *o != it.second)
+	    return false;
+	}
+      return true;
+    };
+  if (!same_ranges (a.vrange, b.vrange)
+      || !same_ranges (a.vrange_weak, b.vrange_weak)
+      || !same_flags (a.vnz, b.vnz) || !same_flags (a.voa, b.voa))
+    return false;
   auto &bend = const_cast<hash_set<tree> &> (b.ended);
   if (a.ended.elements () != b.ended.elements ())
     return false;
@@ -3678,6 +3946,7 @@ static void
 transfer_block (basic_block bb, function *fun, dom_fact_state &state,
 		bool report)
 {
+  auto state_scope = make_temp_override (current_state, &state);
   for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
        gsi_next (&gsi))
     {
@@ -3709,8 +3978,14 @@ transfer_block (basic_block bb, function *fun, dom_fact_state &state,
 	  check_call (call, *vf.established, *vf.established_nz,
 		      *vf.established_range, *vf.established_rel, vf.ranger);
 	  consult_persistent_facts (call, state);
-	  check_assertion (call, state);
 	}
+      /* An assertion's check: diagnosed in the reporting pass; what it
+	 establishes, in every pass.  */
+      {
+	auto ended = make_temp_override (current_ended, &state.ended);
+	if (check_assertion (call, state, report))
+	  establish_assertion_facts (call, state);
+      }
       if (call_may_end_lifetimes_p (call))
 	{
 	  process_lifetime_call (call, state);
@@ -3956,6 +4231,11 @@ provable_object_address_p (tree val, hash_set<tree> &established,
     if (tree id = gimple_object_identity (val))
       if (current_ended->contains (id))
 	return false;
+  /* A contract_assert on the way.  */
+  if (current_state && TREE_CODE (val) == SSA_NAME)
+    if (bool *c = current_state->voa.get (val))
+      if (*c || !require_conveyor_facts)
+	return true;
 
   if (TREE_CODE (val) != SSA_NAME)
     return false;
@@ -4039,6 +4319,11 @@ provable_nonzero_p (tree val, hash_set<tree> &established_nz,
 
   if (established_nz.contains (val))
     return true;
+  /* A contract_assert on the way.  */
+  if (current_state)
+    if (bool *c = current_state->vnz.get (value_key (val)))
+      if (*c || !require_conveyor_facts)
+	return true;
 
   if (in_progress.contains (val))
     return false;
