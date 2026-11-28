@@ -621,6 +621,16 @@ established_range_of_1 (tree val, hash_map<tree, oa_range_lite> &established_ran
       return true;
     }
 
+  /* A class variable whose facts are keyed by itself (self_trust_key).  */
+  if (VAR_P (val) || TREE_CODE (val) == PARM_DECL)
+    {
+      if (oa_range_lite *found = established_range.get (val))
+	{
+	  *out = *found;
+	  return true;
+	}
+      return false;
+    }
   if (TREE_CODE (val) != SSA_NAME)
     return false;
 
@@ -1214,6 +1224,19 @@ gimple_object_identity_1 (tree val, hash_set<tree> &visiting)
   if (slot_load_identity && TREE_CODE (val) == SSA_NAME)
     if (tree *id = slot_load_identity->get (val))
       return *id;
+  /* What a conversion operator gives designates through the object
+     converted ('file_ref::operator file* (&ref)'): its identity.  */
+  if (TREE_CODE (val) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (val)))
+    {
+      tree r = conversion_receiver (val);
+      if (r != val && !visiting.contains (r))
+	{
+	  if (VAR_P (r) || TREE_CODE (r) == PARM_DECL)
+	    return r;
+	  if (TREE_CODE (r) == SSA_NAME && POINTER_TYPE_P (TREE_TYPE (r)))
+	    return gimple_object_identity_1 (r, visiting);
+	}
+    }
   if (TREE_CODE (val) == ADDR_EXPR)
     {
       tree op = TREE_OPERAND (val, 0);
@@ -5718,6 +5741,17 @@ copy_constructed_source (tree arg, gcall *call)
 	  && TREE_CODE (gimple_call_arg (c, 0)) == ADDR_EXPR
 	  && TREE_OPERAND (gimple_call_arg (c, 0), 0) == tmp)
 	return gimple_call_arg (c, 1);
+      /* The call's other temporaries, initialized, then copy-constructed
+	 (from a const reference): they don't change the source.  */
+      if (gimple_call_internal_p (c, IFN_DEFERRED_INIT))
+	continue;
+      if (fn && DECL_COPY_CONSTRUCTOR_P (fn) && gimple_call_num_args (c) == 2
+	  && TREE_CODE (gimple_call_arg (c, 0)) == ADDR_EXPR)
+	{
+	  tree other = TREE_OPERAND (gimple_call_arg (c, 0), 0);
+	  if (VAR_P (other) && DECL_ARTIFICIAL (other) && !DECL_NAME (other))
+	    continue;
+	}
       /* Another call may have changed the source since.  */
       return arg;
     }
