@@ -585,6 +585,29 @@ established_range_of (tree val, hash_map<tree, oa_range_lite> &established_range
   if (oa_range_lite *found = established_range.get (val))
     {
       *out = *found;
+      /* Narrowed by what the code says at AT ('n != 10').  */
+      int_range_max vr;
+      if (found->has_lo && found->has_hi
+	  && trusted_range_at (val, at, ranger, vr))
+	{
+	  tree type = TREE_TYPE (val);
+	  signop sgn = TYPE_SIGN (type);
+	  if (wi::fits_to_tree_p (found->lo, type)
+	      && wi::fits_to_tree_p (found->hi, type))
+	    {
+	      int_range_max known (type,
+				   wide_int::from (found->lo,
+						   TYPE_PRECISION (type), sgn),
+				   wide_int::from (found->hi,
+						   TYPE_PRECISION (type), sgn));
+	      known.intersect (vr);
+	      if (!known.undefined_p ())
+		{
+		  out->lo = widest_int::from (known.lower_bound (), sgn);
+		  out->hi = widest_int::from (known.upper_bound (), sgn);
+		}
+	    }
+	}
       return true;
     }
 
@@ -610,6 +633,30 @@ established_range_of (tree val, hash_map<tree, oa_range_lite> &established_range
 	  && established_range_of (gimple_assign_rhs1 (def), established_range,
 				    ranger, at, out))
 	return true;
+      /* An operand's range plus or minus a constant, where every result
+	 stays in the type (no overflow, no wrapping).  */
+      oa_range_lite r;
+      if ((code == PLUS_EXPR || code == MINUS_EXPR)
+	  && TREE_CODE (gimple_assign_rhs2 (def)) == INTEGER_CST
+	  && INTEGRAL_TYPE_P (TREE_TYPE (val))
+	  && established_range_of (gimple_assign_rhs1 (def), established_range,
+				   ranger, at, &r)
+	  && r.has_lo && r.has_hi)
+	{
+	  widest_int k = wi::to_widest (gimple_assign_rhs2 (def));
+	  if (code == MINUS_EXPR)
+	    k = -k;
+	  widest_int lo = r.lo + k, hi = r.hi + k;
+	  tree type = TREE_TYPE (val);
+	  if (lo >= wi::to_widest (TYPE_MIN_VALUE (type))
+	      && hi <= wi::to_widest (TYPE_MAX_VALUE (type)))
+	    {
+	      out->has_lo = out->has_hi = true;
+	      out->lo = lo;
+	      out->hi = hi;
+	      return true;
+	    }
+	}
     }
 
   int_range_max vr;
@@ -1430,6 +1477,28 @@ seed_predicate_self_trust (function *fun, dom_fact_state &seed)
 	    }
 	}
 
+      /* A reference parameter compared with a constant ('pre (r > 0)'
+	 for 'int &r'): a fact about the object it is bound to.  */
+      auto_vec<tree> ref_params;
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree param, cst;
+	  tree_code code;
+	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code, &cst)
+	      && TREE_CODE (param) == PARM_DECL && TYPE_REF_P (TREE_TYPE (param))
+	      && TREE_CODE (cst) == INTEGER_CST
+	      && !ref_params.contains (param))
+	    ref_params.safe_push (param);
+	}
+      for (tree param : ref_params)
+	{
+	  oa_range_lite r;
+	  tree ssa = ssa_default_def (fun, param);
+	  tree id = ssa ? gimple_object_identity (ssa) : NULL_TREE;
+	  if (id && extract_conjunct_range (conjuncts, param, &r))
+	    seed.field.put ({id, NULL_TREE}, r);
+	}
+
       auto_vec<float_field_group> float_groups;
       collect_float_field_groups (cond, &float_groups);
       for (auto &g : float_groups)
@@ -1440,9 +1509,12 @@ seed_predicate_self_trust (function *fun, dom_fact_state &seed)
       collect_field_range_groups (cond, &field_groups);
       for (unsigned g = 0; g < field_groups.length (); ++g)
 	{
-	  tree ssa = ssa_default_def (fun, field_groups[g].ptr_expr);
-	  if (ssa)
-	    seed.field.put ({ssa, field_groups[g].field}, field_groups[g].range);
+	  tree pe = field_groups[g].ptr_expr;
+	  /* An aggregate passed by value is the parameter itself.  */
+	  tree id = (POINTER_TYPE_P (TREE_TYPE (pe)) || TYPE_REF_P (TREE_TYPE (pe))
+		     ? ssa_default_def (fun, pe) : pe);
+	  if (id)
+	    seed.field.put ({id, field_groups[g].field}, field_groups[g].range);
 	}
     }
 }
@@ -2076,12 +2148,57 @@ invalidate_for_store (tree lhs, function *fun, dom_fact_state &state)
   forget_object_and_aliases (state, fun, id);
 }
 
+/* The object a scalar in memory, REF, is -- '*p' (P's object) or an
+   address-taken variable -- for its facts, keyed (identity, NULL_TREE);
+   NULL_TREE if REF isn't one.  */
+
+static tree
+scalar_memory_identity (tree ref)
+{
+  if (!INTEGRAL_TYPE_P (TREE_TYPE (ref)))
+    return NULL_TREE;
+  if (TREE_CODE (ref) == MEM_REF && integer_zerop (TREE_OPERAND (ref, 1)))
+    return gimple_object_identity (TREE_OPERAND (ref, 0));
+  if ((VAR_P (ref) || TREE_CODE (ref) == PARM_DECL) && !is_global_var (ref))
+    return ref;
+  return NULL_TREE;
+}
+
+/* STMT loads a scalar from memory: if its facts give it a range, the SSA
+   value loaded has it.  */
+
+static void
+record_load_range (gimple *stmt, dom_fact_state &state)
+{
+  tree lhs = gimple_assign_lhs (stmt);
+  if (TREE_CODE (lhs) != SSA_NAME || !current_value_facts)
+    return;
+  tree rhs = gimple_assign_rhs1 (stmt);
+  tree id = scalar_memory_identity (rhs);
+  tree field = NULL_TREE;
+  tree base;
+  if (!id && field_shape (lhs, &field, &base) && INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+    id = gimple_object_identity (base);
+  if (oa_range_lite *r = id ? state.field.get ({id, field}) : NULL)
+    current_value_facts->established_range->put (lhs, *r);
+}
+
 /* After a store of RHS to LHS at STMT: a member's range is the stored
    value's.  */
 
 static void
 record_field_store (tree lhs, tree rhs, gimple *stmt, dom_fact_state &state)
 {
+  /* A scalar in memory: its range is the stored value's.  */
+  if (tree sid = (current_value_facts ? scalar_memory_identity (lhs)
+		  : NULL_TREE))
+    {
+      oa_range_lite r;
+      if (established_range_of (rhs, *current_value_facts->established_range,
+				current_value_facts->ranger, stmt, &r))
+	state.field.put ({sid, NULL_TREE}, r);
+      return;
+    }
   if (TREE_CODE (lhs) != COMPONENT_REF || !current_value_facts
       || !(INTEGRAL_TYPE_P (TREE_TYPE (lhs))
 	   || SCALAR_FLOAT_TYPE_P (TREE_TYPE (lhs))))
@@ -2342,9 +2459,43 @@ refine_comparison (tree lhs, tree rhs, tree_code code, bool asserted_true,
 		   dom_fact_state &state)
 {
   if (code != LT_EXPR && code != LE_EXPR && code != GT_EXPR
-      && code != GE_EXPR && code != EQ_EXPR)
+      && code != GE_EXPR && code != EQ_EXPR && code != NE_EXPR)
     return;
-  if (!asserted_true && (code = negated_code (code)) == ERROR_MARK)
+  /* 'x != C' for a member or an accessor's result: an endpoint of its
+     known range excluded.  */
+  if ((code == NE_EXPR) == asserted_true)
+    {
+      tree e = lhs, k = rhs;
+      if (TREE_CODE (e) == INTEGER_CST)
+	std::swap (e, k);
+      tree acc, recv, fld, bas;
+      oa_range_lite *r = NULL;
+      if (TREE_CODE (k) != INTEGER_CST)
+	return;
+      if (field_shape (e, &fld, &bas))
+	{
+	  tree id = gimple_object_identity (bas);
+	  r = id ? state.field.get ({id, fld}) : NULL;
+	}
+      else if (call_shape (e, &acc, &recv))
+	{
+	  tree id = gimple_object_identity (recv);
+	  call_range_fact *f = id ? state.call.get ({id, acc}) : NULL;
+	  r = f ? &f->r : NULL;
+	}
+      if (r)
+	{
+	  widest_int c = wi::to_widest (k);
+	  if (r->has_hi && r->hi == c)
+	    r->hi -= 1;
+	  else if (r->has_lo && r->lo == c)
+	    r->lo += 1;
+	}
+      return;
+    }
+  if (code == NE_EXPR)
+    code = EQ_EXPR;
+  else if (!asserted_true && (code = negated_code (code)) == ERROR_MARK)
     return;
   if (TREE_CODE (lhs) == INTEGER_CST && TREE_CODE (rhs) != INTEGER_CST)
     {
@@ -2479,6 +2630,9 @@ refine_edge (edge e, dom_fact_state &state)
 	  && TREE_CODE_CLASS (gimple_assign_rhs_code (def)) == tcc_comparison)
 	refine_comparison (gimple_assign_rhs1 (def), gimple_assign_rhs2 (def),
 			   gimple_assign_rhs_code (def), truth, state);
+      else
+	/* A value compared with zero ('if (x.f == 0)').  */
+	refine_comparison (lhs, rhs, code, edge_true, state);
       return;
     }
   tree callee = gimple_call_fndecl (call);
@@ -3298,6 +3452,10 @@ process_lifetime_call (gcall *call, dom_fact_state &state)
     }
 }
 
+static void check_call (gcall *, hash_set<tree> &, hash_set<tree> &,
+			hash_map<tree, oa_range_lite> &,
+			hash_map<tree, rel_fact_lite> &, gimple_ranger *);
+
 /* BB's statements, from the facts on entry in STATE to those on exit:
    stores end the relations of what they write, a copy of a value takes
    its relations; at a call, its callee's preconditions are checked
@@ -3324,11 +3482,19 @@ transfer_block (basic_block bb, function *fun, dom_fact_state &state,
 				    state);
 	      }
 	  }
+      /* A load of a scalar from memory with a known range: the value
+	 loaded has it.  Recorded in the reporting pass only, whose facts
+	 are the fixed point's; the walk's order puts it before the uses.  */
+      if (report && gimple_assign_load_p (stmt))
+	record_load_range (stmt, state);
       gcall *call = dyn_cast <gcall *> (stmt);
       if (!call)
 	continue;
       if (report)
 	{
+	  value_facts &vf = *current_value_facts;
+	  check_call (call, *vf.established, *vf.established_nz,
+		      *vf.established_range, *vf.established_rel, vf.ranger);
 	  consult_persistent_facts (call, state);
 	  check_assertion (call, state);
 	}
@@ -3409,6 +3575,18 @@ persistent_facts_walk (function *fun, const dom_fact_state &seed)
 	copy_state (state, none);
       transfer_block (bb, fun, state, true);
     }
+  /* Blocks the entry doesn't reach: checked too, with no facts.  */
+  auto_sbitmap reached (last_basic_block_for_fn (fun));
+  bitmap_clear (reached);
+  for (int i = 0; i < n; ++i)
+    bitmap_set_bit (reached, rpo[i]);
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    if (!bitmap_bit_p (reached, bb->index))
+      {
+	dom_fact_state state;
+	transfer_block (bb, fun, state, true);
+      }
   for (auto it : out)
     delete it.second;
   XDELETEVEC (rpo);
@@ -3729,7 +3907,8 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 	  tree param, const_val;
 	  tree_code code;
 	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code, &const_val)
-	      && TREE_CODE (param) == PARM_DECL && !params.contains (param))
+	      && TREE_CODE (param) == PARM_DECL
+	      && !TYPE_REF_P (TREE_TYPE (param)) && !params.contains (param))
 	    params.safe_push (param);
 	}
       for (unsigned p = 0; p < params.length (); ++p)
@@ -4117,13 +4296,6 @@ check_function (function *fun, void *)
   established_frange = &trusted_frange;
 
   gimple_ranger *ranger = enable_ranger (fun, false);
-  basic_block bb;
-  FOR_EACH_BB_FN (bb, fun)
-    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
-	 gsi_next (&gsi))
-      if (gcall *call = dyn_cast <gcall *> (gsi_stmt (gsi)))
-	check_call (call, established, established_nz, established_range,
-		    established_rel, ranger);
 
   /* Facts about persistent memory (named predicates, field ranges) are
      per program point: a forward analysis of their own.  */
