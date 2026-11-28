@@ -265,6 +265,10 @@ extern void contract_register_analysis_plugin ();
    symbolic one are a plugin's: -fcontract-analysis-proofs=plugin, and
    the proof flags ask for them.  */
 extern bool contract_analysis_plugin_proofs_p (bool conveyor);
+/* The same for the checks of contract_asserts and postconditions, which
+   only -fcontract-conveyor-proofs / -fcontract-symbolic-proofs ask for,
+   never the older -fcontract-*-proofs-gimple flags.  */
+extern bool contract_analysis_plugin_assertion_proofs_p (bool conveyor);
 typedef void (*cg_plugin_function_check) (function *fun, void *data);
 extern void cg_register_function_check (cg_plugin_function_check, void *);
 /* Lowering readers for such plugins: whether CALL is a contract check

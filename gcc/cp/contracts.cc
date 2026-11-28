@@ -42609,6 +42609,16 @@ contract_analysis_plugin_proofs_p (bool conveyor)
 		       : flag_contract_plugin_symbolic_proofs));
 }
 
+/* See contracts.h.  */
+
+bool
+contract_analysis_plugin_assertion_proofs_p (bool conveyor)
+{
+  return (flag_contract_analysis_proofs
+	  && ((conveyor ? flag_contract_plugin_conveyor_proofs
+			: flag_contract_plugin_symbolic_proofs) & 1));
+}
+
 bool
 oa_contract_never_proven_public (tree contract, tree owner_fn)
 {

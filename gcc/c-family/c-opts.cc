@@ -1338,13 +1338,13 @@ c_common_post_options (const char **pfilename)
   if (flag_contract_analysis_proofs == 1)
     {
       flag_contract_plugin_conveyor_proofs
-	= (flag_contract_conveyor_proofs
-	   || (OPTION_SET_P (flag_contract_conveyor_proofs_gimple)
-	       && flag_contract_conveyor_proofs_gimple));
+	= ((flag_contract_conveyor_proofs ? 1 : 0)
+	   | (OPTION_SET_P (flag_contract_conveyor_proofs_gimple)
+	      && flag_contract_conveyor_proofs_gimple ? 2 : 0));
       flag_contract_plugin_symbolic_proofs
-	= (flag_contract_symbolic_proofs
-	   || (OPTION_SET_P (flag_contract_symbolic_proofs_gimple)
-	       && flag_contract_symbolic_proofs_gimple));
+	= ((flag_contract_symbolic_proofs ? 1 : 0)
+	   | (OPTION_SET_P (flag_contract_symbolic_proofs_gimple)
+	      && flag_contract_symbolic_proofs_gimple ? 2 : 0));
       flag_contract_conveyor_proofs = 0;
       flag_contract_symbolic_proofs = 0;
     }

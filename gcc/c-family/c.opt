@@ -1979,7 +1979,10 @@ fcontract-analysis-proofs=
 C++ ObjC++ Joined RejectNegative Enum(contract_analysis_proofs) Var(flag_contract_analysis_proofs) Init(0)
 -fcontract-analysis-proofs=[builtin|plugin]	Select who makes the contract analysis proof checks (defaults to builtin).  With plugin, the analysis engines make none, for contracts whose control object forces analysis too, and leave them to a contract analysis plugin; -fcontract-conveyor-proofs and -fcontract-symbolic-proofs then select the flavors the plugin checks.  The engines still make the mandatory checks.
 
-; The proof flavors -fcontract-analysis-proofs=plugin leaves to a plugin.
+; The proof flavors -fcontract-analysis-proofs=plugin leaves to a plugin:
+; bit 1 for -fcontract-X-proofs, bit 2 for an explicit
+; -fcontract-X-proofs-gimple (which never included contract_assert and
+; postcondition checks).
 Variable
 int flag_contract_plugin_conveyor_proofs
 
