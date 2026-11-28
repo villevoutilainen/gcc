@@ -62,6 +62,9 @@ int plugin_is_GPL_compatible;
    (vfacts) and a callee's conveyor postconditions (item 6).  */
 static bool require_conveyor_facts;
 
+static tree conversion_receiver (tree);
+static tree copy_constructed_source (tree, gcall *);
+
 /* A conjunct holds, fails, or neither is known.  */
 enum verdict { VERDICT_UNKNOWN, VERDICT_TRUE, VERDICT_FALSE };
 
@@ -620,6 +623,14 @@ established_range_of_1 (tree val, hash_map<tree, oa_range_lite> &established_ran
   if (TREE_CODE (val) != SSA_NAME)
     return false;
 
+  /* A conversion of an object with a range.  */
+  tree conv = conversion_receiver (val);
+  if (conv != val)
+    if (oa_range_lite *found = established_range.get (conv))
+      {
+	*out = *found;
+	return true;
+      }
   if (oa_range_lite *found = established_range.get (val))
     {
       *out = *found;
@@ -1920,7 +1931,8 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 	      || pn >= gimple_call_num_args (call)
 	      || on >= gimple_call_num_args (call))
 	    continue;
-	  tree a = gimple_call_arg (call, pn), b = gimple_call_arg (call, on);
+	  tree a = copy_constructed_source (gimple_call_arg (call, pn), call);
+	  tree b = copy_constructed_source (gimple_call_arg (call, on), call);
 	  verdict v = VERDICT_UNKNOWN;
 	  if (TREE_CODE (a) == INTEGER_CST && TREE_CODE (b) == INTEGER_CST)
 	    v = (oa_relational_literal_holds (rel_code, a, b)
@@ -1939,7 +1951,8 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
 		  && get_relational (side ? b : a,
 				     *vfacts ().established_rel,
 				     &fc, &frhs)
-		  && frhs == (side ? a : b)
+		  && (frhs == (side ? a : b)
+		      || frhs == conversion_receiver (side ? a : b))
 		  && oa_relational_code_implies (fc, need))
 		v = VERDICT_TRUE;
 	    }
@@ -4569,6 +4582,10 @@ provable_nonzero_p (tree val, hash_set<tree> &established_nz,
 
   if (established_nz.contains (val))
     return true;
+  /* A conversion of an object with the fact ('m != 0' of a class M).  */
+  tree conv = conversion_receiver (val);
+  if (conv != val && established_nz.contains (conv))
+    return true;
   /* A contract_assert on the way.  */
   if (current_state)
     if (bool *c = current_state->vnz.get (value_key (val)))
@@ -4678,7 +4695,18 @@ static bool
 get_relational (tree val, hash_map<tree, rel_fact_lite> &established_rel,
 		 tree_code *code_out, tree *rhs_out)
 {
-  if (val == NULL_TREE || TREE_CODE (val) != SSA_NAME)
+  if (val == NULL_TREE)
+    return false;
+  /* A conversion of an object with the fact.  */
+  tree conv = conversion_receiver (val);
+  if (conv != val)
+    if (rel_fact_lite *found = established_rel.get (conv))
+      {
+	*code_out = found->code;
+	*rhs_out = found->rhs;
+	return true;
+      }
+  if (TREE_CODE (val) != SSA_NAME)
     return false;
 
   if (rel_fact_lite *found = established_rel.get (val))
@@ -4707,6 +4735,109 @@ get_relational (tree val, hash_map<tree, rel_fact_lite> &established_rel,
     }
 
   return false;
+}
+
+/* If VAL is, through copies and conversions, the result of a call to a
+   conversion operator ('wrap::operator int (&q)'), the object converted
+   (Q); else VAL.  */
+
+static tree
+conversion_receiver (tree val)
+{
+  tree cur = val;
+  bool converted = false;
+  for (int i = 0; i < 16 && cur && TREE_CODE (cur) == SSA_NAME; ++i)
+    {
+      gimple *def = SSA_NAME_DEF_STMT (cur);
+      if (!def)
+	break;
+      if (is_gimple_assign (def))
+	{
+	  tree_code code = gimple_assign_rhs_code (def);
+	  if (!CONVERT_EXPR_CODE_P (code) && code != SSA_NAME)
+	    break;
+	  cur = gimple_assign_rhs1 (def);
+	  continue;
+	}
+      gcall *call = dyn_cast <gcall *> (def);
+      tree fn = call ? gimple_call_fndecl (call) : NULL_TREE;
+      if (!fn || !DECL_CONV_FN_P (fn) || gimple_call_num_args (call) != 1)
+	break;
+      cur = gimple_call_arg (call, 0);
+      if (TREE_CODE (cur) == ADDR_EXPR)
+	cur = TREE_OPERAND (cur, 0);
+      converted = true;
+    }
+  return converted ? cur : val;
+}
+
+/* Whether facts about parameter DECL, address-taken, may be keyed by DECL
+   itself: it is never stored to, and its address goes only to calls
+   taking a pointer or reference to const, or into a contract check's
+   capture structure.  */
+
+static bool
+decl_safe_for_facts_p (function *fun, tree decl)
+{
+  auto base_is = [&] (tree t)
+    {
+      return t && get_base_address (t) == decl;
+    };
+  basic_block bb;
+  FOR_EACH_BB_FN (bb, fun)
+    for (gimple_stmt_iterator gsi = gsi_start_bb (bb); !gsi_end_p (gsi);
+	 gsi_next (&gsi))
+      {
+	gimple *stmt = gsi_stmt (gsi);
+	if (gimple_clobber_p (stmt))
+	  continue;
+	if (tree lhs = gimple_get_lhs (stmt))
+	  if (base_is (lhs))
+	    return false;
+	if (gimple_assign_single_p (stmt))
+	  {
+	    tree rhs = gimple_assign_rhs1 (stmt);
+	    tree lhs = gimple_assign_lhs (stmt);
+	    if (TREE_CODE (rhs) == ADDR_EXPR && base_is (TREE_OPERAND (rhs, 0)))
+	      {
+		tree b = get_base_address (lhs);
+		if (!(TREE_CODE (lhs) == COMPONENT_REF && b && VAR_P (b)
+		      && DECL_ARTIFICIAL (b)))
+		  return false;
+	      }
+	  }
+	else if (gcall *call = dyn_cast <gcall *> (stmt))
+	  {
+	    tree parm_types = (gimple_call_fntype (call)
+			       ? TYPE_ARG_TYPES (gimple_call_fntype (call))
+			       : NULL_TREE);
+	    for (unsigned i = 0; i < gimple_call_num_args (call);
+		 ++i, parm_types = parm_types ? TREE_CHAIN (parm_types)
+					      : NULL_TREE)
+	      {
+		tree a = gimple_call_arg (call, i);
+		if (TREE_CODE (a) == ADDR_EXPR && base_is (TREE_OPERAND (a, 0))
+		    && !(parm_types && INDIRECT_TYPE_P (TREE_VALUE (parm_types))
+			 && TYPE_READONLY (TREE_TYPE (TREE_VALUE (parm_types)))))
+		  return false;
+	      }
+	  }
+      }
+  return true;
+}
+
+/* The key of FUN's parameter PARM in the value fact maps: its incoming
+   SSA value, or, address-taken but safe (decl_safe_for_facts_p), PARM
+   itself; NULL_TREE if neither.  */
+
+static tree
+self_trust_key (function *fun, tree parm)
+{
+  if (tree ssa = ssa_default_def (fun, parm))
+    return ssa;
+  if (TREE_ADDRESSABLE (parm) && decl_safe_for_facts_p (fun, parm))
+    return parm;
+  return NULL_TREE;
 }
 
 /* Seed ESTABLISHED/ESTABLISHED_NZ from FNDECL's own declared
@@ -4775,9 +4906,8 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 
 	  if (TREE_CODE (arg) != PARM_DECL)
 	    continue;
-	  tree ssa = ssa_default_def (fun, arg);
-	  if (ssa)
-	    target->add (ssa);
+	  if (tree key = self_trust_key (fun, arg))
+	    target->add (key);
 	}
 
       /* A relational conjunct against another of the SAME function's
@@ -4790,8 +4920,8 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 	  if (!oa_match_comparison_against_param (*conjuncts[i], &rel_param,
 						   &rel_code, &rel_other))
 	    continue;
-	  tree ssa_param = ssa_default_def (fun, rel_param);
-	  tree ssa_other = ssa_default_def (fun, rel_other);
+	  tree ssa_param = self_trust_key (fun, rel_param);
+	  tree ssa_other = self_trust_key (fun, rel_other);
 	  if (ssa_param && ssa_other)
 	    established_rel.put (ssa_param, { rel_code, ssa_other });
 	}
@@ -4807,7 +4937,10 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 	  tree_code code;
 	  if (oa_match_simple_comparison (*conjuncts[i], &param, &code, &const_val)
 	      && TREE_CODE (param) == PARM_DECL
-	      && !TYPE_REF_P (TREE_TYPE (param)) && !params.contains (param))
+	      /* A reference's range is its referent's (a memory fact); a
+		 class passed by invisible reference is the object.  */
+	      && (!TYPE_REF_P (TREE_TYPE (param)) || DECL_BY_REFERENCE (param))
+	      && !params.contains (param))
 	    params.safe_push (param);
 	}
       for (unsigned p = 0; p < params.length (); ++p)
@@ -4815,9 +4948,8 @@ seed_self_trust (function *fun, hash_set<tree> &established,
 	  oa_range_lite range;
 	  if (!extract_conjunct_range (conjuncts, params[p], &range))
 	    continue;
-	  tree ssa = ssa_default_def (fun, params[p]);
-	  if (ssa)
-	    established_range.put (ssa, range);
+	  if (tree key = self_trust_key (fun, params[p]))
+	    established_range.put (key, range);
 	}
     }
 }
@@ -4927,6 +5059,36 @@ report_uncovered (tree conjunct, gcall *call, tree callee, bool strict)
 		     "%qD", conjunct, callee);
 }
 
+/* ARG, an argument of CALL: if the address of a compiler temporary a copy
+   constructor built just before from another object ('wrap::wrap (&D.1,
+   x); f (&D.1)'), that object's (a pointer value or an address), for the
+   facts about the value it copies; else ARG.  */
+
+static tree
+copy_constructed_source (tree arg, gcall *call)
+{
+  if (TREE_CODE (arg) != ADDR_EXPR)
+    return arg;
+  tree tmp = TREE_OPERAND (arg, 0);
+  if (!VAR_P (tmp) || !DECL_ARTIFICIAL (tmp) || DECL_NAME (tmp))
+    return arg;
+  gimple_stmt_iterator gsi = gsi_for_stmt (call);
+  for (gsi_prev (&gsi); !gsi_end_p (gsi); gsi_prev (&gsi))
+    {
+      gcall *c = dyn_cast <gcall *> (gsi_stmt (gsi));
+      if (!c)
+	continue;
+      tree fn = gimple_call_fndecl (c);
+      if (fn && DECL_COPY_CONSTRUCTOR_P (fn) && gimple_call_num_args (c) == 2
+	  && TREE_CODE (gimple_call_arg (c, 0)) == ADDR_EXPR
+	  && TREE_OPERAND (gimple_call_arg (c, 0), 0) == tmp)
+	return gimple_call_arg (c, 1);
+      /* Another call may have changed the source since.  */
+      return arg;
+    }
+  return arg;
+}
+
 /* CALL's callee's preconditions this plugin checks (call_obligation_p),
    against the facts: each is_object_address (param), 'param != 0',
    'param OP other-param' and 'param OP constant' conjunct, with CALL's
@@ -5008,6 +5170,8 @@ check_call (gcall *call, hash_set<tree> &, hash_set<tree> &,
 	    continue;
 
 	  tree substituted = gimple_call_arg (call, argno);
+	  if (!is_oa)
+	    substituted = copy_constructed_source (substituted, call);
 	  hash_set<tree> in_progress;
 	  if (is_oa)
 	    {
@@ -5137,7 +5301,8 @@ check_call (gcall *call, hash_set<tree> &, hash_set<tree> &,
 	  if (!find_param_position (callee, params[p], &argno)
 	      || argno >= gimple_call_num_args (call))
 	    continue;
-	  tree substituted = gimple_call_arg (call, argno);
+	  tree substituted = copy_constructed_source (gimple_call_arg (call, argno),
+						      call);
 
 	  oa_range_lite have;
 	  bool known = established_range_of (substituted, established_range,
