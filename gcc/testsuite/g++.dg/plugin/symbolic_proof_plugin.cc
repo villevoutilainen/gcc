@@ -1,55 +1,29 @@
-/* symbolic-proof: a standalone GCC plugin demonstrating static fact-
-   tracing for ordinary calling code that calls functions carrying
-   symbolic (axiom) contracts -- the symbolic-side counterpart of
-   conveyor_proof_plugin.cc, see /home/claude-dude/.claude/plans/well-
-   we-last-discussed-ethereal-duckling.md for the full design and
-   rationale.
+/* symbolic-proof: the AST engine's symbolic-flavor proof checks, as a
+   plugin.
 
-   Reuses the existing D4324 "oa_*" object-address analysis engine
-   (gcc/cp/contracts.cc) via its small, deliberately-designed public API
-   (oa_walk_function_calls / oa_match_predicate_conjunct /
-   oa_env_check_predicate_fact / oa_env_check_scalar_range_fact /
-   oa_env_check_field_range_fact / etc., contracts.h), the same way the
-   conveyor plugin does, rather than reimplementing fact tracking from
-   scratch.
+   An alternative to the built-in AST engine's proof checks, with facts
+   of its own: the plugin walks each function's body itself
+   (ast_proof_facts.h, shared with the conveyor plugin) at
+   PLUGIN_PRE_GENERICIZE, keeping what the code, the function's own
+   preconditions (self-trust), contract_asserts and callees'
+   postconditions establish, and checks against those facts, conjunct
+   by conjunct, each call's callee preconditions, each contract_assert
+   and the function's own postconditions.  Diagnostics are the engine's,
+   word for word.
 
-   Covers the same three shapes -fcontract-symbolic-proofs itself
-   verifies (the static prover reached parity with Mechanism A/B's own
-   runtime-checked shapes in the commit immediately preceding this
-   plugin's addition):
+   Only the contract-text shape recognizers (oa_match_*,
+   is_object_address_call_p, oa_nonzero_conjunct_p, ...), the
+   contract-property queries (which flavors a contract is active in,
+   strictness, forcing) and the argument substitution helpers are
+   shared with the engine.
 
-   - Named-predicate identity ("is_opened (this)"-style): a
-     postcondition establishes a named predicate for an object's own
-     identity; a later precondition on that same object consults it.
-   - Bare-scalar range ("post (r: r >= 40 && r < 100)"-style): a
-     postcondition establishes a range for its own by-value return
-     result; a later precondition on the value it was assigned to
-     consults it.
-   - ptr->field range ("post (this->count >= 40 && this->count < 100)"-
-     style): a postcondition establishes a range for a persistent
-     object's own field; a later precondition on that same object's
-     field consults it.
+   Under -fcontract-analysis-proofs=plugin the engines make no proof
+   checks: the plugin checks the flavors the proof flags ask for and
+   every contract whose control object forces analysis.  Otherwise it
+   checks what the built-in engine doesn't (active, not forced).  */
 
-   Unlike -fcontract-symbolic-proofs itself, this plugin needs no
-   -fcontract-symbolic-proofs flag: oa_walk_function_calls arms the
-   shared fact-tracking substrate (m_predicate_fact_map/m_contract_
-   scalar_range_map/m_contract_field_range_map) independent of that
-   flag whenever a plugin is driving the walk (see
-   oa_contract_fact_tracking_active_p's own comment in contracts.cc),
-   so the plugin gets full, real, cross-statement-tracked fact tracking
-   -- the same engine the built-in checker uses -- purely through
-   -fcontract-control-objects.
-
-   A fourth check covers a relational precondition against another of
-   the same callee's own parameters ("pre<ctrl>(x < q)"-style, q not a
-   literal), via oa_match_comparison_against_param/oa_env_check_
-   relational_fact (REQUIRE_CONVEYOR false, the allowed direction: a
-   conveyor-established relational fact is trustworthy enough for this
-   symbolic obligation too) -- the same relational-fact tracking
-   -fcontract-symbolic-proofs itself gained (see .claude/plans/well-we-
-   last-discussed-ethereal-duckling.md), closing what used to be a
-   silent gap shared with the conveyor plugin.  */
-
+#define INCLUDE_VECTOR
+#define INCLUDE_ALGORITHM
 #include "gcc-plugin.h"
 #include "config.h"
 #include "system.h"
@@ -60,6 +34,7 @@
 #include "cp/contracts.h"
 #include "diagnostic.h"
 #include "stringpool.h"
+#include "g++.dg/plugin/ast_proof_facts.h"
 
 int plugin_is_GPL_compatible;
 
@@ -102,7 +77,7 @@ struct range_ctx
 {
   tree call;
   tree callee;
-  oa_analysis_env *env;
+  apf::state *env;
 };
 
 /* oa_precondition_scalar_range_obligations's own callback: one
@@ -118,7 +93,7 @@ scalar_range_callback (tree /*contract*/, tree param, bool has_lo, tree lo,
   if (!substituted)
     return;
 
-  oa_proof_result r = oa_env_check_scalar_range_fact (ctx->env, substituted,
+  oa_proof_result r = apf::check_scalar_range (ctx->env, false, substituted,
 						       has_lo, lo, has_hi, hi);
   switch (r)
     {
@@ -161,10 +136,9 @@ field_range_callback (tree contract, tree field, tree base_parm,
   if (!substituted)
     return;
 
-  oa_proof_result r = oa_env_check_field_range_fact (ctx->env, substituted,
+  oa_proof_result r = apf::check_field_range (ctx->env, false, substituted,
 						      field, has_lo, lo,
-						      has_hi, hi,
-						      /*require_conveyor=*/false);
+						      has_hi, hi);
   switch (r)
     {
     case OA_PROVEN_TRUE:
@@ -205,10 +179,9 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
   if (!substituted)
     return;
 
-  oa_proof_result r = oa_env_check_call_range_fact (ctx->env, substituted,
+  oa_proof_result r = apf::check_call_range (ctx->env, false, substituted,
 						      callee_fn, has_lo, lo,
-						      has_hi, hi,
-						      /*require_conveyor=*/false);
+						      has_hi, hi);
   switch (r)
     {
     case OA_PROVEN_TRUE:
@@ -243,7 +216,7 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
    shapes this plugin (as the built-in engine) has a proof rule for.  */
 
 static bool
-conjunct_covered_p (tree conjunct, oa_analysis_env *env)
+conjunct_covered_p (tree conjunct, apf::state *env)
 {
   tree a, b, c, d;
   tree_code code;
@@ -257,8 +230,8 @@ conjunct_covered_p (tree conjunct, oa_analysis_env *env)
 	  || oa_match_comparison_against_param (conjunct, &a, &code, &b)
 	  || oa_match_comparison_against_call (conjunct, &a, &code, &b, &c,
 					       /*allow_symbolic_accessor=*/true)
-	  || oa_match_shifted_comparison_against_call_public
-	       (conjunct, env, &a, &code, &b, &c, &offset,
+	  || oa_match_shifted_comparison_against_call_text
+	       (conjunct, &a, &code, &b, &c, &offset,
 		/*allow_symbolic_accessor=*/true)
 	  || oa_match_call_against_call (conjunct, &a, &b, &code, &c, &d,
 					 /*allow_symbolic_accessor=*/true)
@@ -295,7 +268,7 @@ report_uncovered_conjunct (tree call, tree callee, tree conjunct, bool strict)
 }
 
 static void
-check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
+check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 {
   for (tree contract : fn_contracts (callee))
     {
@@ -330,7 +303,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		  = oa_substitute_call_arg_public (callee, call, arg);
 		oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
 		if (substituted
-		    && !oa_env_check_symbolic_object_address (env, substituted,
+		    && !apf::check_object_address (env, false, substituted,
 							      &reason))
 		  {
 		    if (strict)
@@ -354,7 +327,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		  = oa_substitute_call_arg_public (callee, call, arg);
 		if (!substituted)
 		  continue;
-		switch (oa_env_check_symbolic_nonzero (env, substituted))
+		switch (apf::check_nonzero (env, false, substituted, NULL))
 		  {
 		  case OA_PROVEN_TRUE:
 		    break;
@@ -385,7 +358,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	  if (oa_relation_conjunct_shape (*conjuncts[i], &pred_fn, &rel_args,
 					  &negated))
 	    {
-	      switch (oa_env_check_call_relation (env, call, callee, pred_fn,
+	      switch (apf::check_call_relation (env, call, callee, pred_fn,
 						  rel_args, negated))
 		{
 		case OA_PROVEN_TRUE:
@@ -445,8 +418,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	     postcondition's facts; a by-value class parameter is a copy,
 	     with none of the argument's.  */
 	  oa_proof_result pr
-	    = oa_env_check_symbolic_predicate (env, arg_decl, substituted,
-					       pred_fn, negated);
+	    = apf::check_predicate (env, false, substituted, pred_fn, !negated);
 	  switch (pr)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -490,8 +462,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	  tree sub_param = oa_substitute_call_arg_public (callee, call, rel_param);
 	  tree sub_other = oa_substitute_call_arg_public (callee, call, rel_other);
 	  oa_proof_result r
-	    = oa_env_check_relational_fact (env, sub_param, rel_code,
-					     sub_other, /*require_conveyor=*/false);
+	    = apf::check_relational (env, false, sub_param, rel_code,
+					     sub_other);
 	  switch (r)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -529,9 +501,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	  tree sub_param = oa_substitute_call_arg_public (callee, call, rel_param);
 	  tree sub_receiver = oa_substitute_call_arg_public (callee, call, rhs_receiver);
 	  oa_proof_result r
-	    = oa_env_check_call_relational_fact (env, sub_param, rel_code,
-						  sub_receiver, rhs_callee,
-						  /*require_conveyor=*/false);
+	    = apf::check_call_relational (env, false, sub_param, rel_code,
+						  sub_receiver, rhs_callee);
 	  switch (r)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -569,9 +540,9 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	  tree sub_lhs_receiver = oa_substitute_call_arg_public (callee, call, lhs_receiver);
 	  tree sub_rhs_receiver = oa_substitute_call_arg_public (callee, call, rhs_receiver);
 	  oa_proof_result r
-	    = oa_env_check_call_call_relational_fact
-		(env, sub_lhs_receiver, lhs_callee, call_code,
-		 sub_rhs_receiver, rhs_callee, /*require_conveyor=*/false);
+	    = apf::check_call_call_relational
+		(env, false, sub_lhs_receiver, lhs_callee, call_code,
+		 sub_rhs_receiver, rhs_callee);
 	  switch (r)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -609,7 +580,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
    axiom: there is no body to check it against.  */
 
 static void
-check_symbolic_conjuncts (tree contract, oa_analysis_env *env, tree fndecl,
+check_symbolic_conjuncts (tree contract, apf::state *env, tree fndecl,
 			  bool post)
 {
   if (!plugin_checks_assertion_p (contract, fndecl)
@@ -638,8 +609,7 @@ check_symbolic_conjuncts (tree contract, oa_analysis_env *env, tree fndecl,
 					     &negated))
 	    continue;
 	}
-      switch (oa_check_assertion_conjunct_public (env, conjunct,
-						   /*require_conveyor=*/false))
+      switch (apf::check_conjunct (env, false, conjunct))
 	{
 	case OA_PROVEN_TRUE:
 	  break;
@@ -672,13 +642,13 @@ check_symbolic_conjuncts (tree contract, oa_analysis_env *env, tree fndecl,
 }
 
 static void
-check_assert (tree stmt, oa_analysis_env *env, void *data)
+check_assert (tree stmt, apf::state *env, void *data)
 {
   check_symbolic_conjuncts (stmt, env, (tree) data, /*post=*/false);
 }
 
 static void
-check_post (tree contract, oa_analysis_env *env, void *data)
+check_post (tree contract, apf::state *env, void *data)
 {
   check_symbolic_conjuncts (contract, env, (tree) data, /*post=*/true);
 }
@@ -693,8 +663,14 @@ symbolic_proof_pre_genericize (void *event_data, void * /*data*/)
   tree fndecl = (tree) event_data;
   if (TREE_CODE (fndecl) != FUNCTION_DECL)
     return;
-  oa_walk_function_calls (fndecl, check_call, NULL, check_assert, fndecl,
-			  check_post, fndecl);
+  apf::hooks h;
+  h.check_call = [] (tree call, tree callee, apf::state *s)
+    { check_call (call, callee, s, NULL); };
+  h.check_assert = [] (tree stmt, apf::state *s)
+    { check_assert (stmt, s, current_function_decl); };
+  h.check_post = [] (tree contract, apf::state *s)
+    { check_post (contract, s, current_function_decl); };
+  apf::walk_function (fndecl, h);
 }
 
 int

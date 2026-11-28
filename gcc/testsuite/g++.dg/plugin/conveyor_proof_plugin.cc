@@ -1,97 +1,29 @@
-/* conveyor-proof: a standalone GCC plugin demonstrating static
-   fact-tracing for ordinary, non-conveyor calling code that calls
-   functions carrying conveyor contracts -- see
-   /home/claude-dude/.claude/plans/well-we-last-discussed-ethereal-
-   duckling.md for the full design and rationale.
+/* conveyor-proof: the AST engine's conveyor-flavor proof checks, as a
+   plugin.
 
-   Reuses the existing D4324 "oa_*" object-address analysis engine
-   (gcc/cp/contracts.cc) via its small, deliberately-designed public API
-   (oa_walk_function_calls / oa_env_check_comparison / etc., contracts.h)
-   rather than reimplementing fact tracking from scratch.  The engine
-   itself is unmodified in what it does mandatorily; this plugin only
-   asks it a question (via a callback invoked at every call site) that
-   the compiler's own mandatory pass never asks: whether a callee's
-   plain comparison-shaped precondition conjunct ("param > 0", and so
-   on -- not just std::is_object_address(param), which the compiler
-   already checks unconditionally) is proven, proven false, or unknown,
-   given the caller's own established facts (including, where
-   applicable, facts chained in from an earlier call's postcondition).
+   An alternative to the built-in AST engine's proof checks, with facts
+   of its own: the plugin walks each function's body itself
+   (ast_proof_facts.h, shared with the symbolic plugin) at
+   PLUGIN_PRE_GENERICIZE, keeping what the code, the function's own
+   preconditions (self-trust), contract_asserts and callees'
+   postconditions establish, and checks against those facts, conjunct
+   by conjunct, each call's callee preconditions, each contract_assert
+   and the function's own postconditions.  Diagnostics are the engine's,
+   word for word.
 
-   Contracts remain a runtime-check language feature regardless of this
-   plugin; what changes is purely this additional, opt-in (only active
-   when the plugin is loaded) static check -- which, like any real
-   static checker, does reject the program outright when it *proves* a
-   violation (not merely when it fails to prove correctness).
+   Only the contract-text shape recognizers (oa_match_*,
+   is_object_address_call_p, oa_nonzero_conjunct_p, ...), the
+   contract-property queries (which flavors a contract is active in,
+   strictness, forcing) and the argument substitution helpers are
+   shared with the engine.
 
-   A second, sibling check connects a postcondition and a precondition
-   that both call the *same* named predicate function ("check_it (r)" /
-   "check_it (x)"), purely by name and argument identity.  This used to
-   be a purely syntactic, single-hop check (recognizing only the case
-   where the precondition's own argument was itself a direct call, e.g.
-   "consume (produce ())"), reimplemented locally in this file because no
-   persistent per-function fact map existed yet for named predicates.
-   Named-predicate facts are now tracked by the same real, cross-
-   statement engine -fcontract-symbolic-proofs uses for its own
-   obligations (m_predicate_fact_map is a shared substrate, not
-   symbolic-exclusive -- see oa_contract_fact_tracking_active_p in
-   contracts.cc), so this plugin now queries that engine directly via
-   the exported oa_match_predicate_conjunct/oa_env_check_predicate_fact,
-   the same way the numeric check above already did.  This is a strict
-   capability upgrade: an object whose identity persists across
-   statements (e.g. "f.open (); f.read ();") is now provable too, not
-   just the direct-nested-call shape.
+   Under -fcontract-analysis-proofs=plugin the engines make no proof
+   checks: the plugin checks the flavors the proof flags ask for and
+   every contract whose control object forces analysis.  Otherwise it
+   checks what the built-in engine doesn't (active, not forced).  */
 
-   This works even when the predicate function is declared `conveyor`
-   with its definition never visible in this translation unit: the
-   whole premise of a conveyor function is that it's trusted to be
-   well-defined by construction, so this connection never needs to
-   evaluate or inspect what the predicate actually computes.
-
-   Unlike a numeric comparison, an opaque predicate call has no
-   "provenly false" verdict from its *value* -- but it does have one
-   from its *polarity*: if an earlier call's postcondition establishes
-   "!check_it (r)" while a later call's precondition requires
-   "check_it (x)" for that same value, that is exactly as provable a
-   contradiction as a numeric range check ever finds, still without
-   ever evaluating check_it itself.
-
-   A third check covers the ptr->field shape ("this->count >= 40 &&
-   this->count < 100"-style), via oa_precondition_field_range_
-   obligations/oa_env_check_field_range_fact -- the same shared
-   substrate and exported API symbolic_proof_plugin.cc uses for its own
-   field-range obligations (m_contract_field_range_map is genuinely
-   shared, not symbolic-exclusive: CALLEE could carry preconditions of
-   either flavor, so this plugin filters matches to its own conveyor-
-   active ones, exactly as the symbolic plugin filters to its own
-   symbolic-active ones).
-
-   A fourth check covers a relational precondition against another of
-   the same callee's own parameters ("pre<ctrl>(x < q)"-style, q not a
-   literal), via oa_match_comparison_against_param/oa_env_check_
-   relational_fact -- the same relational-fact tracking -fcontract-
-   conveyor-proofs itself gained (see .claude/plans/well-we-last-
-   discussed-ethereal-duckling.md), closing what used to be a silent
-   gap: neither the plain-comparison check above (which requires an
-   already-literal bound) nor any other check here recognized this
-   shape at all.
-
-   A fifth check (see .claude/plans/lazy-stirring-pearl.md, Tier 3b)
-   covers a plain contract_assert statement's own condition -- entirely
-   invisible to this plugin before, since oa_walk_function_calls only
-   ever fired CHECK_CALL at a CALL_EXPR/AGGR_INIT_EXPR, never at a
-   contract_assert (ASSERTION_STMT). Uses oa_walk_function_calls's new
-   ASSERT_CALLBACK parameter plus the new oa_check_assertion_conjunct_
-   public/oa_collect_disjuncts_public exports: unlike every check above,
-   a contract_assert's own condition needs no positional-argument
-   substitution at all (it already refers directly to the enclosing
-   function's own live decls), so oa_check_assertion_conjunct_public
-   consults ENV with the conjunct's own operands unchanged. Also the
-   first check here to recognize a top-level '||' at all: a disjunctive
-   conjunct ('x > 0 || x < -10') is split via oa_collect_disjuncts_
-   public and each disjunct checked independently -- PROVEN_TRUE if any
-   one disjunct alone is provable, PROVEN_FALSE only if every disjunct
-   is independently provable false, else UNKNOWN.  */
-
+#define INCLUDE_VECTOR
+#define INCLUDE_ALGORITHM
 #include "gcc-plugin.h"
 #include "config.h"
 #include "system.h"
@@ -102,6 +34,7 @@
 #include "cp/contracts.h"
 #include "diagnostic.h"
 #include "stringpool.h"
+#include "g++.dg/plugin/ast_proof_facts.h"
 
 int plugin_is_GPL_compatible;
 
@@ -145,7 +78,7 @@ struct range_ctx
 {
   tree call;
   tree callee;
-  oa_analysis_env *env;
+  apf::state *env;
 };
 
 /* oa_precondition_field_range_obligations's own callback: one
@@ -167,10 +100,9 @@ field_range_callback (tree contract, tree field, tree base_parm,
   if (!substituted)
     return;
 
-  oa_proof_result r = oa_env_check_field_range_fact (ctx->env, substituted,
+  oa_proof_result r = apf::check_field_range (ctx->env, true, substituted,
 						      field, has_lo, lo,
-						      has_hi, hi,
-						      /*require_conveyor=*/true);
+						      has_hi, hi);
   switch (r)
     {
     case OA_PROVEN_TRUE:
@@ -213,10 +145,9 @@ float_field_range_callback (tree contract, tree field, tree base_parm,
   if (!substituted)
     return;
 
-  oa_proof_result r = oa_env_check_float_field_range_fact (ctx->env, substituted,
+  oa_proof_result r = apf::check_field_range (ctx->env, true, substituted,
 							     field, has_lo, lo,
-							     has_hi, hi,
-							     /*require_conveyor=*/true);
+							     has_hi, hi);
   switch (r)
     {
     case OA_PROVEN_TRUE:
@@ -256,10 +187,9 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
   if (!substituted)
     return;
 
-  oa_proof_result r = oa_env_check_call_range_fact (ctx->env, substituted,
+  oa_proof_result r = apf::check_call_range (ctx->env, true, substituted,
 						      callee_fn, has_lo, lo,
-						      has_hi, hi,
-						      /*require_conveyor=*/true);
+						      has_hi, hi);
   switch (r)
     {
     case OA_PROVEN_TRUE:
@@ -295,7 +225,7 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
    call site.)  */
 
 static void
-check_cdtor_receiver (tree call, tree callee, oa_analysis_env *env)
+check_cdtor_receiver (tree call, tree callee, apf::state *env)
 {
   if (TREE_CODE (call) != CALL_EXPR || call_expr_nargs (call) < 1
       || !(DECL_CONSTRUCTOR_P (callee) || DECL_DESTRUCTOR_P (callee)))
@@ -329,7 +259,7 @@ check_cdtor_receiver (tree call, tree callee, oa_analysis_env *env)
   if (!strict && in_system_header_at (EXPR_LOCATION (call)))
     return;
   oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-  if (oa_env_check_object_address (env, receiver, &reason))
+  if (apf::check_object_address (env, true, receiver, &reason))
     return;
   if (strict)
     error_at (EXPR_LOCATION (call), "cannot prove %<is_object_address%> for "
@@ -349,7 +279,7 @@ check_cdtor_receiver (tree call, tree callee, oa_analysis_env *env)
 
 static bool
 check_nonzero_conjunct (tree conjunct, tree call, tree callee,
-			oa_analysis_env *env, bool strict)
+			apf::state *env, bool strict)
 {
   tree nz_arg;
   if (!oa_nonzero_conjunct_p (conjunct, &nz_arg))
@@ -366,7 +296,7 @@ check_nonzero_conjunct (tree conjunct, tree call, tree callee,
   if (!substituted)
     return false;
   oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-  switch (oa_env_check_nonzero (env, substituted, &reason))
+  switch (apf::check_nonzero (env, true, substituted, &reason))
     {
     case OA_PROVEN_TRUE:
       break;
@@ -423,7 +353,7 @@ report_uncovered_conjunct (tree call, tree callee, tree conjunct, bool strict)
    shapes this plugin (as the built-in engine) has a proof rule for.  */
 
 static bool
-conjunct_covered_p (tree conjunct, oa_analysis_env *env)
+conjunct_covered_p (tree conjunct, apf::state *env)
 {
   tree a, b, c, d;
   tree_code code;
@@ -436,8 +366,8 @@ conjunct_covered_p (tree conjunct, oa_analysis_env *env)
 						/*allow_symbolic_accessor=*/
 						  false)
 	      && TREE_CODE (b) == PARM_DECL)
-	  || oa_match_shifted_comparison_against_call_public
-	       (conjunct, env, &a, &code, &b, &c, &offset,
+	  || oa_match_shifted_comparison_against_call_text
+	       (conjunct, &a, &code, &b, &c, &offset,
 		/*allow_symbolic_accessor=*/false)
 	  || oa_match_call_against_call (conjunct, &a, &b, &code, &c, &d,
 					 /*allow_symbolic_accessor=*/false)
@@ -453,7 +383,7 @@ conjunct_covered_p (tree conjunct, oa_analysis_env *env)
 
 static bool
 check_ne_conjunct (tree conjunct, tree call, tree callee,
-		   oa_analysis_env *env, bool strict)
+		   apf::state *env, bool strict)
 {
   tree ne_expr, ne_cst;
   if (!oa_match_ne_constant_public (conjunct, &ne_expr, &ne_cst))
@@ -468,7 +398,7 @@ check_ne_conjunct (tree conjunct, tree call, tree callee,
       return true;
     }
   oa_unprovable_reason reason = OA_UNPROVABLE_NONE;
-  switch (oa_env_check_ne_constant (env, substituted, ne_cst, &reason))
+  switch (apf::check_ne_constant (env, true, substituted, ne_cst, &reason))
     {
     case OA_PROVEN_TRUE:
       break;
@@ -492,7 +422,7 @@ check_ne_conjunct (tree conjunct, tree call, tree callee,
 }
 
 static void
-check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
+check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 {
   check_cdtor_receiver (call, callee, env);
   for (tree contract : fn_contracts (callee))
@@ -540,8 +470,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	  tree rel_param, rhs_receiver, rhs_callee;
 	  tree_code rel_code;
 	  widest_int offset = 0;
-	  if (!oa_match_shifted_comparison_against_call_public
-		(*conjuncts[i], env, &rel_param, &rel_code, &rhs_receiver,
+	  if (!oa_match_shifted_comparison_against_call_text
+		(*conjuncts[i], &rel_param, &rel_code, &rhs_receiver,
 		 &rhs_callee, &offset, /*allow_symbolic_accessor=*/false)
 	      || TREE_CODE (rhs_receiver) != PARM_DECL)
 	    continue;
@@ -549,9 +479,9 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	    = oa_substitute_value_arg_public (callee, call, rel_param);
 	  tree sub_receiver
 	    = oa_substitute_call_arg_public (callee, call, rhs_receiver);
-	  switch (oa_env_check_call_relational_fact
-		    (env, sub_param, rel_code, sub_receiver, rhs_callee,
-		     /*require_conveyor=*/true, offset))
+	  switch (apf::check_call_relational
+		    (env, true, sub_param, rel_code, sub_receiver, rhs_callee,
+		     offset))
 	    {
 	    case OA_PROVEN_TRUE:
 	      break;
@@ -592,9 +522,9 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		 tracks integer ranges only.  */
 	      oa_proof_result r
 		= (TREE_CODE (const_val) == REAL_CST
-		   ? oa_env_check_float_comparison (env, substituted, code,
+		   ? apf::check_comparison (env, true, substituted, code,
 						    const_val)
-		   : oa_env_check_comparison (env, substituted, code,
+		   : apf::check_comparison (env, true, substituted, code,
 					      const_val));
 
 	      unsigned idx;
@@ -636,20 +566,10 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	    if (oa_match_general_comparison_public (*conjuncts[i], &gen_expr,
 						     &gen_code, &gen_const_val))
 	      {
-		/* A REAL_CST bound here is the dedicated float-field-range
-		   mechanism's own obligation (oa_precondition_float_field_
-		   range_obligations/float_field_range_callback above,
-		   consulted separately after this loop) -- oa_env_check_
-		   comparison's own [lo,hi] machinery is integer-only, so
-		   deliberately skip (not warn) here rather than double-
-		   diagnose the same conjunct the dedicated path already
-		   handles correctly.  */
-		if (TREE_CODE (gen_const_val) == REAL_CST)
-		  continue;
-		/* Likewise a 'ptr->field OP const' conjunct: the field-range
-		   mechanism (oa_precondition_field_range_obligations/
-		   field_range_callback) combines a field's bounds and
-		   diagnoses them once, as the built-in engine does.  */
+		/* A 'ptr->field OP const' conjunct (integer or floating
+		   bound): the field-range mechanisms (field_range_callback,
+		   float_field_range_callback) combine a field's bounds and
+		   diagnose them once, as the built-in engine does.  */
 		{
 		  tree f, pe, cv;
 		  tree_code fc;
@@ -664,7 +584,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		  continue;
 
 		oa_proof_result r
-		  = oa_env_check_comparison (env, substituted, gen_code,
+		  = apf::check_comparison (env, true, substituted, gen_code,
 					     gen_const_val);
 		switch (r)
 		  {
@@ -678,9 +598,14 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
-		    warning_at (EXPR_LOCATION (call), 0,
-				"cannot verify that %qE satisfies the "
+		    if (strict)
+		      error_at (EXPR_LOCATION (call),
+				"cannot prove that %qE satisfies the "
 				"precondition of %qD", substituted, callee);
+		    else
+		      warning_at (EXPR_LOCATION (call), 0,
+				  "cannot verify that %qE satisfies the "
+				  "precondition of %qD", substituted, callee);
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
@@ -705,8 +630,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	      tree sub_param = oa_substitute_call_arg_public (callee, call, rel_param);
 	      tree sub_other = oa_substitute_call_arg_public (callee, call, rel_other);
 	      oa_proof_result r
-		= oa_env_check_relational_fact (env, sub_param, rel_code,
-						 sub_other, /*require_conveyor=*/true);
+		= apf::check_relational (env, true, sub_param, rel_code,
+						 sub_other);
 	      switch (r)
 		{
 		case OA_PROVEN_TRUE:
@@ -743,9 +668,8 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		tree sub_param = oa_substitute_call_arg_public (callee, call, rel_param2);
 		tree sub_receiver = oa_substitute_call_arg_public (callee, call, rhs_receiver);
 		oa_proof_result r
-		  = oa_env_check_call_relational_fact (env, sub_param, rel_code2,
-							sub_receiver, rhs_callee,
-							/*require_conveyor=*/true);
+		  = apf::check_call_relational (env, true, sub_param, rel_code2,
+							sub_receiver, rhs_callee);
 		switch (r)
 		  {
 		  case OA_PROVEN_TRUE:
@@ -784,9 +708,9 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 		tree sub_rhs_receiver
 		  = oa_substitute_call_arg_public (callee, call, rhs_receiver);
 		oa_proof_result r
-		  = oa_env_check_call_call_relational_fact
-		      (env, sub_lhs_receiver, lhs_callee, call_code,
-		       sub_rhs_receiver, rhs_callee, /*require_conveyor=*/true);
+		  = apf::check_call_call_relational
+		      (env, true, sub_lhs_receiver, lhs_callee, call_code,
+		       sub_rhs_receiver, rhs_callee);
 		switch (r)
 		  {
 		  case OA_PROVEN_TRUE:
@@ -830,8 +754,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
 	    continue;
 
 	  oa_proof_result pr
-	    = oa_env_check_predicate_fact (env, substituted, pred_fn, !negated,
-					    /*require_conveyor=*/true);
+	    = apf::check_predicate (env, true, substituted, pred_fn, !negated);
 	  switch (pr)
 	    {
 	    case OA_PROVEN_TRUE:
@@ -895,7 +818,7 @@ check_call (tree call, tree callee, oa_analysis_env *env, void * /*data*/)
    exactly as check_call filters to conveyor-active preconditions.  */
 
 static void
-check_assert (tree stmt, oa_analysis_env *env, void *data)
+check_assert (tree stmt, apf::state *env, void *data)
 {
   tree fndecl = (tree) data;
   /* As the built-in engine: a never_proven assertion is trusted as
@@ -930,8 +853,7 @@ check_assert (tree stmt, oa_analysis_env *env, void *data)
 	     (mirroring oa_collect_conjuncts_public's identical treatment
 	     of a nested '&&'), so this is just an ordinary conjunct.  */
 	  diag_expr = *conjuncts[i];
-	  verdict = oa_check_assertion_conjunct_public (env, diag_expr,
-							 /*require_conveyor=*/true);
+	  verdict = apf::check_conjunct (env, true, diag_expr);
 	}
       else
 	{
@@ -940,8 +862,7 @@ check_assert (tree stmt, oa_analysis_env *env, void *data)
 	  for (unsigned d = 0; d < disjuncts.length (); ++d)
 	    {
 	      oa_proof_result r
-		= oa_check_assertion_conjunct_public (env, *disjuncts[d],
-						       /*require_conveyor=*/true);
+		= apf::check_conjunct (env, true, *disjuncts[d]);
 	      if (r == OA_PROVEN_TRUE)
 		{
 		  verdict = OA_PROVEN_TRUE;
@@ -985,7 +906,7 @@ check_assert (tree stmt, oa_analysis_env *env, void *data)
    (proven_conveyor) postcondition.  */
 
 static void
-check_post (tree contract, oa_analysis_env *env, void *data)
+check_post (tree contract, apf::state *env, void *data)
 {
   tree fndecl = (tree) data;
   if (!plugin_checks_assertion_p (contract, fndecl)
@@ -1004,8 +925,7 @@ check_post (tree contract, oa_analysis_env *env, void *data)
       tree oa_arg;
       if (is_object_address_call_p (conjunct, &oa_arg))
 	continue;
-      switch (oa_check_assertion_conjunct_public (env, conjunct,
-						   /*require_conveyor=*/true))
+      switch (apf::check_conjunct (env, true, conjunct))
 	{
 	case OA_PROVEN_TRUE:
 	  break;
@@ -1035,8 +955,14 @@ conveyor_proof_pre_genericize (void *event_data, void * /*data*/)
   tree fndecl = (tree) event_data;
   if (TREE_CODE (fndecl) != FUNCTION_DECL)
     return;
-  oa_walk_function_calls (fndecl, check_call, NULL, check_assert, fndecl,
-			  check_post, fndecl);
+  apf::hooks h;
+  h.check_call = [] (tree call, tree callee, apf::state *s)
+    { check_call (call, callee, s, NULL); };
+  h.check_assert = [] (tree stmt, apf::state *s)
+    { check_assert (stmt, s, current_function_decl); };
+  h.check_post = [] (tree contract, apf::state *s)
+    { check_post (contract, s, current_function_decl); };
+  apf::walk_function (fndecl, h);
 }
 
 int
