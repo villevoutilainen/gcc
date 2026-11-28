@@ -38,6 +38,22 @@
 
 int plugin_is_GPL_compatible;
 
+/* Report an unproven obligation at LOC: an error worded PROVE if STRICT,
+   else a warning worded VERIFY (the same arguments).  */
+
+static void
+unproven (location_t loc, bool strict, const char *prove, const char *verify,
+	  ...)
+{
+  auto_diagnostic_group d;
+  va_list ap;
+  va_start (ap, verify);
+  emit_diagnostic_valist (strict ? diagnostics::kind::error
+				 : diagnostics::kind::warning,
+			  loc, 0, strict ? prove : verify, &ap);
+  va_end (ap);
+}
+
 /* Whether this plugin checks CONTRACT (of OWNER) in its flavor.  Under
    -fcontract-analysis-proofs=plugin: when the proof flags ask for the
    flavor, or the control object forces analysis.  Otherwise (the
@@ -92,6 +108,8 @@ field_range_callback (tree contract, tree field, tree base_parm,
 		       bool has_lo, tree lo, bool has_hi, tree hi, void *data)
 {
   range_ctx *ctx = (range_ctx *) data;
+  bool strict
+    = oa_contract_conveyor_strict_public (contract, ctx->callee);
   /* An analyzed_/proven_ precondition is the built-in engine's to check
      (oa_contract_conveyor_analysis_forced_public).  */
   if (!plugin_checks_p (contract, ctx->callee))
@@ -116,9 +134,12 @@ field_range_callback (tree contract, tree field, tree base_parm,
       inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
       break;
     case OA_UNKNOWN:
-      warning_at (EXPR_LOCATION (ctx->call), 0,
-		  "cannot verify that field %qD of %qE satisfies the "
-		  "precondition of %qD", field, substituted, ctx->callee);
+      unproven (EXPR_LOCATION (ctx->call), strict,
+		"cannot prove that field %qD of %qE satisfies the "
+		"precondition of %qD",
+		"cannot verify that field %qD of %qE satisfies the "
+		"precondition of %qD",
+		field, substituted, ctx->callee);
       inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
       break;
     }
@@ -137,6 +158,8 @@ float_field_range_callback (tree contract, tree field, tree base_parm,
 			     void *data)
 {
   range_ctx *ctx = (range_ctx *) data;
+  bool strict
+    = oa_contract_conveyor_strict_public (contract, ctx->callee);
   /* An analyzed_/proven_ precondition is the built-in engine's to check
      (oa_contract_conveyor_analysis_forced_public).  */
   if (!plugin_checks_p (contract, ctx->callee))
@@ -161,9 +184,12 @@ float_field_range_callback (tree contract, tree field, tree base_parm,
       inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
       break;
     case OA_UNKNOWN:
-      warning_at (EXPR_LOCATION (ctx->call), 0,
-		  "cannot verify that field %qD of %qE satisfies the "
-		  "precondition of %qD", field, substituted, ctx->callee);
+      unproven (EXPR_LOCATION (ctx->call), strict,
+		"cannot prove that field %qD of %qE satisfies the "
+		"precondition of %qD",
+		"cannot verify that field %qD of %qE satisfies the "
+		"precondition of %qD",
+		field, substituted, ctx->callee);
       inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
       break;
     }
@@ -179,6 +205,8 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
 		      bool has_lo, tree lo, bool has_hi, tree hi, void *data)
 {
   range_ctx *ctx = (range_ctx *) data;
+  bool strict
+    = oa_contract_conveyor_strict_public (contract, ctx->callee);
   /* An analyzed_/proven_ precondition is the built-in engine's to check
      (oa_contract_conveyor_analysis_forced_public).  */
   if (!plugin_checks_p (contract, ctx->callee))
@@ -203,16 +231,16 @@ call_range_callback (tree contract, tree callee_fn, tree receiver_parm,
       inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
       break;
     case OA_UNKNOWN:
-      warning_at (EXPR_LOCATION (ctx->call), 0,
-		  "cannot verify that %qD called on %qE satisfies the "
-		  "precondition of %qD", callee_fn, substituted, ctx->callee);
+      unproven (EXPR_LOCATION (ctx->call), strict,
+		"cannot prove that %qD called on %qE satisfies the "
+		"precondition of %qD",
+		"cannot verify that %qD called on %qE satisfies the "
+		"precondition of %qD",
+		callee_fn, apf::strip (substituted), ctx->callee);
       inform (DECL_SOURCE_LOCATION (ctx->callee), "declared here");
       break;
     }
 }
-
-/* One call site's precondition-obligation check, invoked by
-   oa_walk_function_calls at every call in program order.  */
 
 /* A constructor's or destructor's receiver -- the object passed as its
    'this' -- must be provably an object address, whether or not the
@@ -274,7 +302,7 @@ check_cdtor_receiver (tree call, tree callee, apf::state *env)
 
 /* A callee's 'x != 0' precondition conjunct (oa_nonzero_conjunct_p, or
    a reference parameter's 'x != 0'): checked for X's argument, read as
-   a value, with oa_env_check_nonzero.  Returns false if CONJUNCT isn't
+   a value, with apf::check_nonzero.  Returns false if CONJUNCT isn't
    that shape.  */
 
 static bool
@@ -449,7 +477,7 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 	 two-conjunct bound like 'percentage >= 0 && percentage <= 100'
 	 could get two separate diagnostics where the built-in engine
 	 emits (at most) one. Each direction is still checked exactly as
-	 before (oa_env_check_comparison already consults the substituted
+	 before (apf::check_comparison already consults the substituted
 	 expression's own full established range per call, the same data
 	 a combined check would use); only the DIAGNOSIS is deferred and
 	 merged, not the proof itself. FALSE dominates (a single
@@ -518,14 +546,9 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 	      if (!substituted)
 		continue;
 
-	      /* A float bound has its own query: oa_env_check_comparison
-		 tracks integer ranges only.  */
 	      oa_proof_result r
-		= (TREE_CODE (const_val) == REAL_CST
-		   ? apf::check_comparison (env, true, substituted, code,
-						    const_val)
-		   : apf::check_comparison (env, true, substituted, code,
-					      const_val));
+		= apf::check_comparison (env, true, substituted, code,
+					 const_val);
 
 	      unsigned idx;
 	      for (idx = 0; idx < range_params.length (); ++idx)
@@ -615,8 +638,8 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 
 	  /* Not a comparison against a literal -- try "param OP another of
 	     CALLEE's own parameters" instead (e.g. 'pre<ctrl>(x < q)'),
-	     via the engine's own oa_match_comparison_against_param/
-	     oa_env_check_relational_fact -- the same relational-fact
+	     via oa_match_comparison_against_param/
+	     apf::check_relational -- the same relational-fact
 	     tracking -fcontract-conveyor-proofs itself gained (see
 	     .claude/plans/well-we-last-discussed-ethereal-duckling.md):
 	     neither PARAM's own value nor OTHER's is ever resolved except
@@ -643,10 +666,12 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		case OA_UNKNOWN:
-		  warning_at (EXPR_LOCATION (call), 0,
-			      "cannot verify that %qE satisfies the "
-			      "precondition of %qD",
-			      sub_param ? sub_param : rel_param, callee);
+		  unproven (EXPR_LOCATION (call), strict,
+			    "cannot prove that %qE satisfies the "
+			    "precondition of %qD",
+			    "cannot verify that %qE satisfies the "
+			    "precondition of %qD",
+			    sub_param ? sub_param : rel_param, callee);
 		  inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		  break;
 		}
@@ -655,7 +680,7 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 
 	  /* The call analogue of the relational check just above (e.g.
 	     'pre<ctrl>(i < v.size ())'), via oa_match_comparison_against_
-	     call/oa_env_check_call_relational_fact.  */
+	     call/apf::check_call_relational.  */
 	  {
 	    tree rel_param2, rhs_receiver, rhs_callee;
 	    tree_code rel_code2;
@@ -681,10 +706,12 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
-		    warning_at (EXPR_LOCATION (call), 0,
-				"cannot verify that %qE satisfies the "
-				"precondition of %qD",
-				sub_param ? sub_param : rel_param2, callee);
+		    unproven (EXPR_LOCATION (call), strict,
+			      "cannot prove that %qE satisfies the "
+			      "precondition of %qD",
+			      "cannot verify that %qE satisfies the "
+			      "precondition of %qD",
+			      sub_param ? sub_param : rel_param2, callee);
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
@@ -694,7 +721,7 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 
 	  /* The call-vs-call analogue of the check just above (e.g.
 	     'pre<ctrl>(v.size () < w.size ())'), via oa_match_call_against_
-	     call/oa_env_check_call_call_relational_fact.  */
+	     call/apf::check_call_call_relational.  */
 	  {
 	    tree lhs_receiver, lhs_callee, rhs_receiver, rhs_callee;
 	    tree_code call_code;
@@ -722,11 +749,14 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  case OA_UNKNOWN:
-		    warning_at (EXPR_LOCATION (call), 0,
-				"cannot verify that %qD called on %qE satisfies "
-				"the precondition of %qD", lhs_callee,
-				sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver,
-				callee);
+		    unproven (EXPR_LOCATION (call), strict,
+			      "cannot prove that %qD called on %qE satisfies "
+			      "the precondition of %qD",
+			      "cannot verify that %qD called on %qE "
+			      "satisfies the precondition of %qD",
+			      lhs_callee,
+			      apf::strip (sub_lhs_receiver ? sub_lhs_receiver : lhs_receiver),
+			      callee);
 		    inform (DECL_SOURCE_LOCATION (callee), "declared here");
 		    break;
 		  }
@@ -772,9 +802,12 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qD (%qE) holds, as required by "
-			  "the precondition of %qD", pred_fn, substituted, callee);
+	      unproven (EXPR_LOCATION (call), strict,
+			"cannot prove that %qD (%qE) holds, as required by "
+			"the precondition of %qD",
+			"cannot verify that %qD (%qE) holds, as required by "
+			"the precondition of %qD",
+			pred_fn, substituted, callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -795,9 +828,12 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    case OA_UNKNOWN:
-	      warning_at (EXPR_LOCATION (call), 0,
-			  "cannot verify that %qE satisfies the "
-			  "precondition of %qD", range_diag_exprs[p], callee);
+	      unproven (EXPR_LOCATION (call), strict,
+			"cannot prove that %qE satisfies the precondition of "
+			"%qD",
+			"cannot verify that %qE satisfies the precondition "
+			"of %qD",
+			range_diag_exprs[p], callee);
 	      inform (DECL_SOURCE_LOCATION (callee), "declared here");
 	      break;
 	    }
@@ -811,11 +847,10 @@ check_call (tree call, tree callee, apf::state *env, void * /*data*/)
   oa_precondition_call_range_obligations (callee, call_range_callback, &ctx);
 }
 
-/* One contract_assert statement's own condition, invoked by
-   oa_walk_function_calls's new ASSERT_CALLBACK parameter at every
-   ASSERTION_STMT in program order (see this file's own top comment,
-   fifth check). Filtered to this plugin's own conveyor-active asserts,
-   exactly as check_call filters to conveyor-active preconditions.  */
+/* One contract_assert statement's own condition, checked by the walk at
+   every ASSERTION_STMT in program order.  Filtered to this plugin's own
+   conveyor-active asserts, exactly as check_call filters to
+   conveyor-active preconditions.  */
 
 static void
 check_assert (tree stmt, apf::state *env, void *data)
@@ -897,7 +932,7 @@ check_assert (tree stmt, apf::state *env, void *data)
     }
 }
 
-/* POST_CALLBACK for oa_walk_function_calls: a function's own conveyor
+/* A function's own conveyor
    postcondition, checked against ENV, the environment at the function's
    exit (merged across every return), conjunct by conjunct, the same way
    the built-in engine does it: a never_proven postcondition is trusted
@@ -946,8 +981,8 @@ check_post (tree contract, apf::state *env, void *data)
 }
 
 /* PLUGIN_PRE_GENERICIZE: fires once per non-template function, body
-   still in its pre-genericize GENERIC form -- exactly when
-   oa_walk_function_calls needs it (see contracts.h).  */
+   still in its pre-genericize GENERIC form, which the walk
+   (ast_proof_facts.h) reads.  */
 
 static void
 conveyor_proof_pre_genericize (void *event_data, void * /*data*/)

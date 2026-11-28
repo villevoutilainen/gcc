@@ -130,7 +130,8 @@ set plugin_test_list [list \
 	  conveyor-proof-nonzero.C \
 	  conveyor-proof-reference-trust.C \
 	  conveyor-proof-ne-uncovered.C \
-	  conveyor-proof-shifted-call.C } \
+	  conveyor-proof-shifted-call.C \
+	  conveyor-proof-plugin-mode.C } \
     { symbolic_proof_plugin.cc \
 	  symbolic-proof-predicate-ok.C \
 	  symbolic-proof-predicate-bad.C \
@@ -151,7 +152,8 @@ set plugin_test_list [list \
 	  symbolic-proof-assert-postcondition.C \
 	  symbolic-proof-nonzero-address.C \
 	  symbolic-proof-scalar-self-trust.C \
-	  symbolic-proof-elided-copy.C } \
+	  symbolic-proof-elided-copy.C \
+	  symbolic-proof-plugin-mode.C } \
     { gimple_object_address_plugin.cc \
 	  gimple-forced-to-plugin.C \
 	  gimple-persistent-facts.C \
