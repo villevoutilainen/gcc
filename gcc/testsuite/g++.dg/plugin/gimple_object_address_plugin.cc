@@ -50,6 +50,10 @@
 #include "dominance.h"
 #include "gimple-range.h"
 #include "hash-traits.h"
+#include "tree-ssa-alias.h"
+#include "tree-cfg.h"
+#include "dumpfile.h"
+#include "ssa-iterators.h"
 
 int plugin_is_GPL_compatible;
 
@@ -1245,6 +1249,23 @@ consult_persistent_facts (gcall *call, dom_fact_state &state)
     }
 }
 
+struct rel_fact_lite { tree_code code; tree rhs; };
+static bool provable_nonzero_p (tree, hash_set<tree> &, hash_set<tree> &);
+static bool get_relational (tree, hash_map<tree, rel_fact_lite> &,
+			    tree_code *, tree *);
+
+/* The value facts of the function being checked, for the checks made
+   during the persistent-fact walk (check_assertion).  */
+
+struct value_facts
+{
+  hash_set<tree> *established, *established_nz;
+  hash_map<tree, oa_range_lite> *established_range;
+  hash_map<tree, rel_fact_lite> *established_rel;
+  gimple_ranger *ranger;
+};
+static value_facts *current_value_facts;
+
 /* Whether CALL may end the lifetime of an object it is given a route to
    ('delete p', 'free (p)'): not an internal, const or pure function, a
    builtin other than free and realloc, a contract check, or a conveyor,
@@ -1445,6 +1466,31 @@ invalidate_for_store (tree lhs, function *fun, dom_fact_state &state)
   relation_drop (state, id);
   forget_object (state, id, field ? field : NULL_TREE);
   forget_object_and_aliases (state, fun, id);
+}
+
+/* After a store of RHS to LHS at STMT: a member's range is the stored
+   value's.  */
+
+static void
+record_field_store (tree lhs, tree rhs, gimple *stmt, dom_fact_state &state)
+{
+  if (TREE_CODE (lhs) != COMPONENT_REF || !current_value_facts
+      || !INTEGRAL_TYPE_P (TREE_TYPE (lhs)))
+    return;
+  tree field = TREE_OPERAND (lhs, 1);
+  tree obj = TREE_OPERAND (lhs, 0);
+  tree id;
+  if (TREE_CODE (obj) == MEM_REF && integer_zerop (TREE_OPERAND (obj, 1)))
+    id = gimple_object_identity (TREE_OPERAND (obj, 0));
+  else if (VAR_P (obj) || TREE_CODE (obj) == PARM_DECL)
+    id = obj;
+  else
+    return;
+  oa_range_lite r;
+  if (id
+      && established_range_of (rhs, *current_value_facts->established_range,
+			       current_value_facts->ranger, stmt, &r))
+    state.field.put ({id, field}, r);
 }
 
 /* CALL's own callee's declared postcondition establishing a fact about
@@ -1690,6 +1736,392 @@ refine_edge (edge e, dom_fact_state &state)
     identity = arg;
   if (identity)
     state.pred.get_or_insert (identity).put ({ callee, truth, true });
+}
+
+
+
+enum verdict { VERDICT_UNKNOWN, VERDICT_TRUE, VERDICT_FALSE };
+
+/* Whether every value of R satisfies 'v CODE C' (true), none does
+   (false), or neither is known.  */
+
+static verdict
+range_verdict (const oa_range_lite &r, tree_code code, const widest_int &c)
+{
+  bool all = false, none = false;
+  switch (code)
+    {
+    case LT_EXPR:
+      all = r.has_hi && r.hi < c;
+      none = r.has_lo && r.lo >= c;
+      break;
+    case LE_EXPR:
+      all = r.has_hi && r.hi <= c;
+      none = r.has_lo && r.lo > c;
+      break;
+    case GT_EXPR:
+      all = r.has_lo && r.lo > c;
+      none = r.has_hi && r.hi <= c;
+      break;
+    case GE_EXPR:
+      all = r.has_lo && r.lo >= c;
+      none = r.has_hi && r.hi < c;
+      break;
+    case EQ_EXPR:
+      all = r.has_lo && r.has_hi && r.lo == c && r.hi == c;
+      none = (r.has_hi && r.hi < c) || (r.has_lo && r.lo > c);
+      break;
+    case NE_EXPR:
+      all = (r.has_hi && r.hi < c) || (r.has_lo && r.lo > c);
+      none = r.has_lo && r.has_hi && r.lo == c && r.hi == c;
+      break;
+    default:
+      break;
+    }
+  return all ? VERDICT_TRUE : none ? VERDICT_FALSE : VERDICT_UNKNOWN;
+}
+
+/* The value field FIELD of the object pointer PTR designates holds just
+   before statement AT: the value the latest store to it stored, found
+   walking back through the statements that can't modify it; NULL_TREE if
+   unknown.  */
+
+static tree
+field_value_at (tree ptr, tree field, gimple *at)
+{
+  if (TREE_CODE (ptr) != SSA_NAME || !POINTER_TYPE_P (TREE_TYPE (ptr))
+      || !(INTEGRAL_TYPE_P (TREE_TYPE (field))
+	   || POINTER_TYPE_P (TREE_TYPE (field))))
+    return NULL_TREE;
+  tree vuse = gimple_vuse (at);
+  if (!vuse)
+    return NULL_TREE;
+  tree obj = build_simple_mem_ref (ptr);
+  if (!types_compatible_p (TYPE_MAIN_VARIANT (TREE_TYPE (obj)),
+			   TYPE_MAIN_VARIANT (DECL_CONTEXT (field))))
+    return NULL_TREE;
+  tree ref_tree = build3 (COMPONENT_REF, TREE_TYPE (field), obj, field,
+			  NULL_TREE);
+  ao_ref ref;
+  ao_ref_init (&ref, ref_tree);
+  for (int steps = 0; steps < 64 && vuse; ++steps)
+    {
+      gimple *d = SSA_NAME_DEF_STMT (vuse);
+      if (!d || gimple_nop_p (d) || is_a <gphi *> (d))
+	return NULL_TREE;
+      if (gimple_assign_single_p (d))
+	{
+	  tree lhs = gimple_assign_lhs (d);
+	  if (TREE_CODE (lhs) == COMPONENT_REF
+	      && TREE_OPERAND (lhs, 1) == field
+	      && TREE_CODE (TREE_OPERAND (lhs, 0)) == MEM_REF
+	      && TREE_OPERAND (TREE_OPERAND (lhs, 0), 0) == ptr
+	      && integer_zerop (TREE_OPERAND (TREE_OPERAND (lhs, 0), 1)))
+	    {
+	      if (gimple_clobber_p (d))
+		return NULL_TREE;
+	      tree rhs = gimple_assign_rhs1 (d);
+	      return (TREE_CODE (rhs) == SSA_NAME || CONSTANT_CLASS_P (rhs)
+		      ? rhs : NULL_TREE);
+	    }
+	}
+      if (stmt_may_clobber_ref_p_1 (d, &ref, false))
+	return NULL_TREE;
+      vuse = gimple_vuse (d);
+    }
+  return NULL_TREE;
+}
+
+/* The verdict on conjunct C of a contract_assert or postcondition at its
+   check CALL (STRUCT_VAR and DECLS from cg_contract_check_call_public),
+   from the facts: value facts and the ranger for the values its
+   variables had, STATE for the predicates and relations of the objects
+   they designate.  A conveyor check (REQUIRE_CONVEYOR) uses only
+   conveyor facts.  */
+
+static verdict
+assertion_verdict (tree c, gcall *call, tree struct_var, tree decls,
+		   bool require_conveyor, dom_fact_state &state)
+{
+  value_facts &vf = *current_value_facts;
+  auto value_of = [&] (tree decl) -> tree
+    {
+      decl = tree_strip_any_location_wrapper (decl);
+      if (!VAR_P (decl) && TREE_CODE (decl) != PARM_DECL)
+	return NULL_TREE;
+      return cg_contract_check_decl_value_public (call, struct_var, decls,
+						  decl);
+    };
+  auto scalar_value_of = [&] (tree decl) -> tree
+    {
+      decl = tree_strip_any_location_wrapper (decl);
+      if (TYPE_REF_P (TREE_TYPE (decl)) && !DECL_BY_REFERENCE (decl))
+	return NULL_TREE;
+      tree v = value_of (decl);
+      return v && INTEGRAL_TYPE_P (TREE_TYPE (v)) ? v : NULL_TREE;
+    };
+  auto range_of = [&] (tree v, oa_range_lite *r)
+    {
+      return established_range_of (v, *vf.established_range, vf.ranger, call,
+				   r);
+    };
+
+  tree decl, cst, other;
+  tree_code code;
+  if (oa_nonzero_conjunct_p (c, &decl))
+    {
+      tree v = scalar_value_of (decl);
+      if (!v)
+	return VERDICT_UNKNOWN;
+      hash_set<tree> in_progress;
+      int_range_max vr;
+      if (provable_nonzero_p (v, *vf.established_nz, in_progress)
+	  || (trusted_range_at (v, call, vf.ranger, vr)
+	      && !vr.contains_p (wi::zero (TYPE_PRECISION (TREE_TYPE (v))))))
+	return VERDICT_TRUE;
+      oa_range_lite r;
+      if (range_of (v, &r))
+	return range_verdict (r, NE_EXPR, 0);
+      return VERDICT_UNKNOWN;
+    }
+  if (oa_match_simple_comparison_var_public (c, &decl, &code, &cst)
+      && TREE_CODE (cst) == INTEGER_CST)
+    {
+      tree v = scalar_value_of (decl);
+      oa_range_lite r;
+      if (v && range_of (v, &r))
+	return range_verdict (r, code, wi::to_widest (cst));
+      return VERDICT_UNKNOWN;
+    }
+  /* A floating-point variable compared with a constant: the ranger's
+     range at the check.  A NaN makes the comparison false, so it holds
+     for all values only if none can be a NaN.  */
+  if (oa_match_simple_comparison_var_public (c, &decl, &code, &cst)
+      && TREE_CODE (cst) == REAL_CST)
+    {
+      decl = tree_strip_any_location_wrapper (decl);
+      tree v = (TYPE_REF_P (TREE_TYPE (decl)) && !DECL_BY_REFERENCE (decl)
+		? NULL_TREE : value_of (decl));
+      frange fr;
+      if (!v || TREE_CODE (v) != SSA_NAME
+	  || !SCALAR_FLOAT_TYPE_P (TREE_TYPE (v))
+	  || !vf.ranger->range_of_expr (fr, v, call) || fr.undefined_p ()
+	  || fr.varying_p ())
+	return VERDICT_UNKNOWN;
+      if (fr.known_isnan ())
+	return code == NE_EXPR ? VERDICT_TRUE : VERDICT_FALSE;
+      const REAL_VALUE_TYPE &lb = fr.lower_bound (), &ub = fr.upper_bound ();
+      const REAL_VALUE_TYPE *k = TREE_REAL_CST_PTR (cst);
+      bool all = false, none = false;
+      switch (code)
+	{
+	case LT_EXPR:
+	  all = real_less (&ub, k);
+	  none = !real_less (&lb, k);
+	  break;
+	case LE_EXPR:
+	  all = !real_less (k, &ub);
+	  none = real_less (k, &lb);
+	  break;
+	case GT_EXPR:
+	  all = real_less (k, &lb);
+	  none = !real_less (k, &ub);
+	  break;
+	case GE_EXPR:
+	  all = !real_less (&lb, k);
+	  none = real_less (&ub, k);
+	  break;
+	case EQ_EXPR:
+	  all = real_equal (&lb, k) && real_equal (&ub, k);
+	  none = real_less (&ub, k) || real_less (k, &lb);
+	  break;
+	default:
+	  return VERDICT_UNKNOWN;
+	}
+      if (all && !fr.maybe_isnan ())
+	return VERDICT_TRUE;
+      return none ? VERDICT_FALSE : VERDICT_UNKNOWN;
+    }
+  if (oa_match_comparison_against_param (c, &decl, &code, &other, true))
+    {
+      tree va = scalar_value_of (decl), vb = scalar_value_of (other);
+      if (!va || !vb)
+	return VERDICT_UNKNOWN;
+      for (int side = 0; side < 2; ++side)
+	{
+	  tree from = side ? vb : va, to = side ? va : vb;
+	  tree_code need = side ? swap_tree_comparison (code) : code;
+	  tree_code fact_code;
+	  tree fact_rhs;
+	  if (get_relational (from, *vf.established_rel, &fact_code, &fact_rhs)
+	      && fact_rhs == to && oa_relational_code_implies (fact_code, need))
+	    return VERDICT_TRUE;
+	}
+      oa_range_lite ra, rb;
+      if (range_of (va, &ra) && range_of (vb, &rb)
+	  && ra.has_lo && ra.has_hi && rb.has_lo && rb.has_hi)
+	{
+	  /* Every pair of values, from the ranges' corners.  */
+	  verdict lo = range_verdict (ra, code, rb.lo);
+	  verdict hi = range_verdict (ra, code, rb.hi);
+	  if (lo == hi && lo != VERDICT_UNKNOWN)
+	    return lo;
+	}
+      return VERDICT_UNKNOWN;
+    }
+  /* A member compared with a constant ('v > 0'): the value last stored
+     to it, else what the facts say of the object's field.  */
+  tree field, ptr_expr;
+  if (oa_match_field_range_comparison (c, &field, &ptr_expr, &code, &cst)
+      && TREE_CODE (cst) == INTEGER_CST)
+    {
+      tree base = oa_strip_symbolic_ptr_expr_public (ptr_expr);
+      tree p = (VAR_P (base) || TREE_CODE (base) == PARM_DECL
+		? value_of (base) : NULL_TREE);
+
+      if (!p)
+	return VERDICT_UNKNOWN;
+      oa_range_lite r;
+      if (tree v = field_value_at (p, field, call))
+	if (range_of (v, &r))
+	  return range_verdict (r, code, wi::to_widest (cst));
+      if (tree id = gimple_object_identity (p))
+	if (oa_range_lite *f = state.field.get ({id, field}))
+	  return range_verdict (*f, code, wi::to_widest (cst));
+      return VERDICT_UNKNOWN;
+    }
+  tree pred_fn, pred_arg;
+  bool negated;
+  auto_vec<tree> args;
+  if (oa_relation_conjunct_shape (c, &pred_fn, &args, &negated))
+    {
+      tree ids[OA_RELATION_MAX_ARGS];
+      for (unsigned i = 0; i < args.length (); ++i)
+	{
+	  tree a = oa_relation_strip_arg (args[i]);
+	  if (TREE_CODE (a) == INTEGER_CST)
+	    ids[i] = a;
+	  else
+	    {
+	      tree v = value_of (a);
+	      ids[i] = v ? relation_operand_identity (pred_fn, i, v) : NULL_TREE;
+	    }
+	  if (!ids[i])
+	    return VERDICT_UNKNOWN;
+	}
+      relation_fact_lite *f
+	= state.rel.get (relation_key (pred_fn, ids, args.length ()));
+      if (!f || (require_conveyor && !f->conveyor))
+	return VERDICT_UNKNOWN;
+      return f->polarity == !negated ? VERDICT_TRUE : VERDICT_FALSE;
+    }
+  if (oa_match_predicate_conjunct (c, &pred_fn, &pred_arg, &negated))
+    {
+      tree v = value_of (pred_arg);
+      tree id = v ? gimple_object_identity (v) : NULL_TREE;
+      if (!id && v && TREE_CODE (v) == SSA_NAME)
+	id = scalar_value_origin (v);
+      pred_facts *facts = id ? state.pred.get (id) : NULL;
+      pred_fact *f = facts ? facts->find (pred_fn) : NULL;
+      if (!f || (require_conveyor && !f->conveyor))
+	return VERDICT_UNKNOWN;
+      return f->polarity == !negated ? VERDICT_TRUE : VERDICT_FALSE;
+    }
+  return VERDICT_UNKNOWN;
+}
+
+/* CALL, if a conveyor or symbolic contract_assert's or postcondition's
+   check this plugin makes (the flavors the proof flags ask for, or a
+   control object forcing analysis; not a never-proven one): each
+   conjunct but is_object_address (mandatory, the engine's) is checked
+   against the facts -- provably false is an error, unverified a warning
+   (an error if strict).  A symbolic postcondition's symbolic predicates
+   and relations are its trusted axioms.  */
+
+static void
+check_assertion (gcall *call, dom_fact_state &state)
+{
+  tree struct_var, cond, decls;
+  tree contract = cg_contract_check_call_public (call, &struct_var, &cond,
+						 &decls);
+  if (!contract || cond == NULL_TREE || cond == error_mark_node)
+    return;
+  bool is_post = POSTCONDITION_P (contract);
+  if (TREE_CODE (contract) != ASSERTION_STMT && !is_post)
+    return;
+  tree owner = DECL_ORIGIN (current_function_decl);
+  bool conveyor_ok = oa_contract_conveyor_active_public (contract, owner);
+  bool symbolic_ok = oa_contract_symbolic_active_public (contract, owner);
+  if ((!conveyor_ok && !symbolic_ok)
+      || oa_contract_never_proven_public (contract, owner))
+    return;
+
+  auto_vec<tree *> conjuncts;
+  oa_collect_conjuncts_public (&cond, &conjuncts);
+  for (int flavor = 0; flavor < 2; ++flavor)
+    {
+      bool conveyor = flavor == 0;
+      bool analysis
+	= (conveyor
+	   ? conveyor_ok
+	     && (contract_analysis_plugin_proofs_p (true)
+		 || oa_contract_conveyor_analysis_forced_public (contract, owner))
+	   : symbolic_ok
+	     && (contract_analysis_plugin_proofs_p (false)
+		 || oa_contract_symbolic_analysis_forced_public (contract,
+								 owner)));
+      if (!analysis)
+	continue;
+      bool strict = (conveyor
+		     ? oa_contract_conveyor_strict_public (contract, owner)
+		     : oa_contract_symbolic_strict_public (contract, owner));
+      for (unsigned i = 0; i < conjuncts.length (); ++i)
+	{
+	  tree c = *conjuncts[i];
+	  tree t;
+	  if (is_object_address_call_p (c, &t))
+	    continue;
+	  tree pred_fn, pred_arg;
+	  bool negated;
+	  if (is_post && !conveyor
+	      && ((oa_match_predicate_conjunct (c, &pred_fn, &pred_arg,
+						&negated)
+		   && DECL_DECLARED_SYMBOLIC_P (pred_fn))
+		  || relation_conjunct_p (c)))
+	    continue;
+	  verdict v = assertion_verdict (c, call, struct_var, decls, conveyor,
+					 state);
+	  location_t loc = EXPR_LOCATION (c);
+	  if (loc == UNKNOWN_LOCATION)
+	    loc = gimple_location (call);
+	  if (v == VERDICT_FALSE)
+	    {
+	      if (is_post)
+		error_at (loc, "postcondition condition %qE is provably false",
+			  c);
+	      else
+		error_at (loc, "%<contract_assert%> condition %qE is provably "
+			  "false", c);
+	    }
+	  else if (v == VERDICT_UNKNOWN)
+	    {
+	      if (is_post)
+		emit_diagnostic (strict ? diagnostics::kind::error
+					: diagnostics::kind::warning,
+				 loc, 0, strict
+				 ? "cannot prove postcondition condition %qE"
+				 : "cannot verify postcondition condition %qE",
+				 c);
+	      else
+		emit_diagnostic (strict ? diagnostics::kind::error
+					: diagnostics::kind::warning,
+				 loc, 0, strict
+				 ? "cannot prove %<contract_assert%> condition %qE"
+				 : "cannot verify %<contract_assert%> condition "
+				   "%qE", c);
+	    }
+	}
+    }
 }
 
 /* The persistent-memory facts are a forward must-analysis: what holds
@@ -2040,13 +2472,20 @@ transfer_block (basic_block bb, function *fun, dom_fact_state &state,
 	    invalidate_for_store (lhs, fun, state);
 	    relation_store (lhs, state);
 	    if (gimple_assign_single_p (stmt))
-	      relation_copy (lhs, gimple_assign_rhs1 (stmt), state);
+	      {
+		relation_copy (lhs, gimple_assign_rhs1 (stmt), state);
+		record_field_store (lhs, gimple_assign_rhs1 (stmt), stmt,
+				    state);
+	      }
 	  }
       gcall *call = dyn_cast <gcall *> (stmt);
       if (!call)
 	continue;
       if (report)
-	consult_persistent_facts (call, state);
+	{
+	  consult_persistent_facts (call, state);
+	  check_assertion (call, state);
+	}
       if (call_may_end_lifetimes_p (call))
 	process_lifetime_call (call, state);
       invalidate_persistent_facts_for_call_args (call, fun, state);
@@ -2280,7 +2719,6 @@ provable_nonzero_p (tree val, hash_set<tree> &established_nz,
    all), so no provenance tag is needed here, unlike contracts.cc's own
    oa_relational_fact or contracts-gimple.cc's own cg_rel_fact.  */
 
-struct rel_fact_lite { tree_code code; tree rhs; };
 
 /* Item 6 for relational facts: does CALLEE's own declared postcondition
    guarantee a relation between its own return value and one of its
@@ -2794,6 +3232,9 @@ check_function (function *fun, void *)
   /* The engine's own proof checks run otherwise.  */
   if (!flag_contract_analysis_proofs)
     return;
+  /* For debugging: the function as checked, with its virtual operands.  */
+  if (getenv ("GIMPLE_OA_PLUGIN_DUMP"))
+    dump_function_to_file (fun->decl, stderr, TDF_VOPS);
 
   hash_set<tree> established;
   hash_set<tree> established_nz;
@@ -2810,13 +3251,17 @@ check_function (function *fun, void *)
       if (gcall *call = dyn_cast <gcall *> (gsi_stmt (gsi)))
 	check_call (call, established, established_nz, established_range,
 		    established_rel, ranger);
-  disable_ranger (fun);
 
   /* Facts about persistent memory (named predicates, field ranges) are
      per program point: a forward analysis of their own.  */
+  value_facts vf = { &established, &established_nz, &established_range,
+		     &established_rel, ranger };
+  current_value_facts = &vf;
   dom_fact_state predicate_seed;
   seed_predicate_self_trust (fun, predicate_seed);
   persistent_facts_walk (fun, predicate_seed);
+  current_value_facts = NULL;
+  disable_ranger (fun);
 }
 
 int
